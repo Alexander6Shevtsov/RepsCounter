@@ -32,13 +32,23 @@ The A01 fix was merged through [PR #1](https://github.com/Alexander6Shevtsov/Rep
 
 ## Workout persistence — A03, A04, A09
 
-The `fix/workout-persistence` branch separates finishing a workout from saving its result. A failed save keeps the frozen summary available for retry; success is shown only after the storage confirms it. Stable UUIDs, isolated transactional contexts and a committed-only history prevent duplicate retries and unsaved history entries.
+The persistence changes merged through [PR #2](https://github.com/Alexander6Shevtsov/RepsCounter/pull/2) into `main` (`6c9474b`) separate finishing a workout from saving its result. A failed save keeps the frozen summary available for retry; success is shown only after the storage confirms it. Stable UUIDs, isolated transactional contexts and a committed-only history prevent duplicate retries and unsaved history entries.
 
 The small MainActor-isolated `WorkoutStoring` contract allows controlled failure tests. The original SQLite schema migrates to an optional UUID attribute and stable identifiers are assigned to old rows. Existing workout fields and the default store path are preserved. See [the persistence design, migration and limits](Docs/PERSISTENCE.md).
 
 Validation with Xcode 27.1 / SDK 27.1 on the PR source: Debug with complete strict concurrency and unsigned Release builds succeeded; **29 XCTest passed on both iOS Simulator 27.0 and 18.6**. The suite includes legacy SQLite migration, failure/retry, idempotency and the existing scene regressions. Remaining concurrency diagnostics concern the existing camera implementation. A separate manual iOS 27 check confirmed the success message after saving and the corresponding history entry.
 
-An unsaved result is retained for the current process lifetime; recovery of an unsaved draft after force quitting is not implemented. Multi-process writers are not supported. Camera, counting, rest timing, screen layout and Swift language mode remain unchanged. This branch requires review before merge.
+An unsaved result is retained for the current process lifetime; recovery of an unsaved draft after force quitting is not implemented. Multi-process writers are not supported. Stage 3 preserved camera, counting, rest timing, screen layout and Swift language mode.
+
+## Workout timing and pause — A05, A10 — 25 October 2026
+
+The `fix/workout-timing` branch starts from `main` (`6c9474b`). Workout duration includes rest and excludes explicit pauses. A `ContinuousClock` source measures elapsed time independently of changes to the system date; `Date` supplies the workout's start timestamp. Rest uses the same active-time scale, so both elapsed time and remaining rest freeze during a pause.
+
+Pausing resets the unfinished movement and pose smoothing while preserving completed repetitions. After resuming, standing must be confirmed again before a new squat can count. A cancellable task replaces the repeating timer and is cancelled on pause, finish and model release. The finished summary retains the stable UUID and unchanged fields across save retries. The set count includes completed sets plus a current partial set containing at least one repetition.
+
+Validation with Xcode 27.1 / SDK 27.1: Debug with complete strict concurrency and unsigned Release builds succeeded; **54 XCTest passed on both iOS Simulator 27.0 and 18.6**. The additions are 19 deterministic timing tests and 6 movement-reset tests. They cover fractional time, 60-second rest, pause/resume, fresh standing confirmation, rapid Pause → Resume → Finish, frozen retry summaries and set counts without real waits. Existing storage, UUID and scene regressions pass. Remaining diagnostics concern the existing camera implementation and deprecated button API.
+
+Core Data, its schema, camera handling and the interface are unchanged by this stage. The branch has not been merged. Automatic pausing on backgrounding and physical-device validation remain open; an iOS 17 runtime is unavailable. See [architecture and timing semantics](Docs/ARCHITECTURE.md).
 
 ![RepsCounter interface — design concept, not a working application screenshot](Docs/Concept.png)
 
@@ -113,7 +123,7 @@ Docs/                  Design concept, architecture, roadmap, CV text
 
 - The camera stream is processed on the device, with no network integration.
 - No recorded video is uploaded or retained.
-- Core Data stores only workout summary metadata (timestamp, duration, repetitions, completed sets).
+- Core Data stores only workout summary metadata (UUID, start timestamp, duration, repetitions and sets, including a nonempty partial set).
 - Permission can be revoked in iOS Settings.
 
 ## Roadmap

@@ -51,6 +51,10 @@ struct SquatCounter {
 
     mutating func reset() {
         repetitions = 0
+        resetMovement()
+    }
+
+    mutating func resetMovement() {
         phase = .seekingStanding
         stableFrames = 0
         missingFrames = 0

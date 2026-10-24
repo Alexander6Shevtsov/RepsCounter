@@ -28,13 +28,14 @@ final class WorkoutViewModel {
     private(set) var finishedSummary: WorkoutSummary?
 
     private let persistence: any WorkoutStoring
+    private let timeSource: any WorkoutTimeSource
     private let analyzer = PoseAnalyzer()
     private var counter = SquatCounter()
-    private var timer: Timer?
-    private let startedAt = Date()
-    private var pausedAt: Date?
-    private var totalPausedTime: TimeInterval = 0
-    private var restDeadline: Date?
+    private var updateTask: Task<Void, Never>?
+    private let startedAt: Date
+    private var activeStartedAt: TimeInterval?
+    private var accumulatedActiveTime: TimeInterval = 0
+    private var restDeadline: TimeInterval?
     private var completedSets = 0
     private var totalRepetitions = 0
     private var currentSet = 1
@@ -47,15 +48,24 @@ final class WorkoutViewModel {
     let targetSets = 4
     let restDuration = 60
 
-    init(persistence: any WorkoutStoring) {
+    init(persistence: any WorkoutStoring, timeSource: (any WorkoutTimeSource)? = nil) {
+        let source = timeSource ?? SystemWorkoutTimeSource()
         self.persistence = persistence
-        timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.tick() }
-        }
+        self.timeSource = source
+        startedAt = source.date
+        activeStartedAt = source.currentTime
+        startUpdates()
+    }
+
+    deinit {
+        updateTask?.cancel()
     }
 
     func process(_ pose: BodyPose?) {
-        guard !isPaused, !isFinished, restDeadline == nil else { return }
+        guard !isPaused, !isFinished else { return }
+        let activeTime = activeDuration(at: timeSource.currentTime)
+        advanceRest(at: activeTime)
+        guard restDeadline == nil else { return }
         let measuredAngle = pose.flatMap { analyzer.kneeAngle(from: $0) }
         hasPose = measuredAngle != nil
         if pose == nil { analyzer.reset() }
@@ -68,39 +78,49 @@ final class WorkoutViewModel {
                     finish()
                     return
                 }
-                restDeadline = Date().addingTimeInterval(TimeInterval(restDuration))
+                restDeadline = activeTime + TimeInterval(restDuration)
                 counter.reset()
                 analyzer.reset()
             }
         }
-        publish()
+        publish(activeTime: activeTime)
     }
 
     func togglePause() {
         guard !isFinished else { return }
-        isPaused.toggle()
+        let currentTime = timeSource.currentTime
+        let activeTime = activeDuration(at: currentTime)
         if isPaused {
-            pausedAt = Date()
-        } else if let pausedAt {
-            let pausedTime = Date().timeIntervalSince(pausedAt)
-            totalPausedTime += pausedTime
-            if let restDeadline { self.restDeadline = restDeadline.addingTimeInterval(pausedTime) }
-            self.pausedAt = nil
+            activeStartedAt = currentTime
+            isPaused = false
+            startUpdates()
+        } else {
+            advanceRest(at: activeTime)
+            accumulatedActiveTime = activeTime
+            activeStartedAt = nil
+            isPaused = true
+            counter.resetMovement()
+            analyzer.reset()
+            hasPose = false
+            stopUpdates()
         }
-        publish()
+        publish(activeTime: activeTime)
     }
 
     func finish() {
         guard !isFinished else { return }
+        let activeTime = activeDuration(at: timeSource.currentTime)
+        advanceRest(at: activeTime)
+        accumulatedActiveTime = activeTime
+        activeStartedAt = nil
         finishedSummary = WorkoutSummary(
             date: startedAt,
-            duration: elapsedSeconds,
+            duration: max(0, Int(activeTime)),
             repetitions: totalRepetitions,
             sets: min(targetSets, completedSets + (counter.repetitions > 0 ? 1 : 0))
         )
         isFinished = true
-        timer?.invalidate()
-        timer = nil
+        stopUpdates()
         retrySave()
     }
 
@@ -126,28 +146,58 @@ final class WorkoutViewModel {
 
     var elapsedSeconds: Int {
         if let finishedSummary { return finishedSummary.duration }
-        let effectiveNow = pausedAt ?? Date()
-        return max(0, Int(effectiveNow.timeIntervalSince(startedAt) - totalPausedTime))
+        return max(0, Int(activeDuration(at: timeSource.currentTime)))
     }
 
-    private func tick() {
-        guard !isFinished else { return }
-        if !isPaused, let restDeadline, Date() >= restDeadline {
+    func refreshTime() {
+        guard !isPaused, !isFinished else { return }
+        let activeTime = activeDuration(at: timeSource.currentTime)
+        advanceRest(at: activeTime)
+        publish(activeTime: activeTime)
+    }
+
+    private func activeDuration(at currentTime: TimeInterval) -> TimeInterval {
+        guard let activeStartedAt else { return accumulatedActiveTime }
+        return accumulatedActiveTime + max(0, currentTime - activeStartedAt)
+    }
+
+    private func advanceRest(at activeTime: TimeInterval) {
+        if !isPaused, !isFinished, let restDeadline, activeTime >= restDeadline {
             self.restDeadline = nil
             currentSet += 1
         }
-        publish()
     }
 
-    private func publish() {
-        let remainingRest = restDeadline.map { max(0, Int(ceil($0.timeIntervalSince(Date())))) } ?? 0
+    private func startUpdates() {
+        guard updateTask == nil, !isPaused, !isFinished else { return }
+        updateTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: .milliseconds(500))
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled else { return }
+                self?.refreshTime()
+            }
+        }
+    }
+
+    private func stopUpdates() {
+        updateTask?.cancel()
+        updateTask = nil
+    }
+
+    private func publish(activeTime: TimeInterval? = nil) {
+        let currentDuration = activeTime ?? activeDuration(at: timeSource.currentTime)
+        let remainingRest = restDeadline.map { max(0, Int(ceil($0 - currentDuration))) } ?? 0
         onChange?(WorkoutViewState(
             repetitions: counter.repetitions,
             totalRepetitions: totalRepetitions,
             currentSet: currentSet,
             targetSets: targetSets,
             targetRepetitions: targetRepetitions,
-            elapsedSeconds: elapsedSeconds,
+            elapsedSeconds: finishedSummary?.duration ?? max(0, Int(currentDuration)),
             remainingRestSeconds: remainingRest,
             isResting: restDeadline != nil,
             isPaused: isPaused,
