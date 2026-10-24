@@ -14,12 +14,12 @@ SceneDelegate (composition root for the window scene)
   │     └── WorkoutViewModel (session state and UI state)
   │            ├── PoseAnalyzer (knee-angle extraction, smoothing)
   │            ├── SquatCounter (pure finite-state machine)
-  │            └── WorkoutPersistence (Core Data)
+  │            └── WorkoutStoring (Domain contract)
   └── CameraService (AVFoundation)
         └── PoseDetector (Vision)
 ```
 
-Current prototype uses constructor injection for services, not yet fully abstracted protocols. Protocol boundaries and test doubles are a planned refactor.
+`WorkoutPersistence` implements the MainActor-isolated `WorkoutStoring` contract and is injected through the existing composition root. ViewModel and controllers receive the contract; camera and pose-analysis dependencies remain concrete. `WorkoutSummary` is a value type in Domain with a stable UUID. Mock storage and a controlled Core Data commit operation cover persistence failures without introducing a generic repository framework.
 
 `AppDelegate` remains the process entry point. The static `UIApplicationSceneManifest` in `RepsCounter/App/Info.plist` registers `UIWindowScene` and `SceneDelegate` for the application role; multiple simultaneous scenes are disabled. UIKit creates the scene and calls `scene(_:willConnectTo:options:)`. The scene delegate creates and retains `UIWindow(windowScene:)`, assembles the existing dependencies and presents `WorkoutViewController` with the existing dark appearance.
 
@@ -34,7 +34,7 @@ There are no storyboard keys. Portrait orientation is declared in the same plist
 - Vision inference runs on that queue and is throttled to ~12 frames per second; frames arriving sooner are skipped.
 - `WorkoutViewModel` is MainActor-isolated; updates and drawing are dispatched to the main thread.
 - Permission handling and camera startup use `async/await`.
-- Core Data access currently occurs on the main context; optimize persistence if storage becomes more complex.
+- Core Data operations are synchronous on MainActor, using a fresh main-queue context for each save/read. Failed writes roll back and discard that context; history reads committed data only. No managed objects cross the service boundary.
 
 ## 4. Squat detection
 
@@ -58,9 +58,11 @@ The detector uses `.right` orientation to interpret the rear camera's sensor str
 
 ## 6. Data schema
 
-Workout: `date: Date`, `duration: Int64`, `repetitions: Int64`, `sets: Int64`.
+Workout: `id: UUID?`, `date: Date`, `duration: Int64`, `repetitions: Int64`, `sets: Int64`. New summaries always have a UUID. The stored attribute is optional to allow migration from the initial schema, then a transaction assigns stable UUIDs to legacy rows.
 
-A single Core Data store contains small session summaries. No video files, pose time series, usernames or cloud data are persisted. Schema versioning and migrations will be needed as exercise types and historical set data are added.
+A single Core Data store contains small session summaries. No video files, pose time series, usernames or cloud data are persisted. The exact legacy model is retained; compatible old SQLite stores migrate through an inferred mapping into a temporary store and are replaced using Core Data APIs. Unknown models and damaged stores produce errors without deleting user data.
+
+The finished workout snapshot is retained separately from `.notSaved`, `.saving`, `.saved` and `.failed` persistence states. All retries reuse the snapshot UUID and fields. The storage checks that identifier before inserting, making retries idempotent within the current single-process app, including after reopening SQLite. See [persistence guarantees and limits](PERSISTENCE.md).
 
 ## 7. Known MVP limitations
 

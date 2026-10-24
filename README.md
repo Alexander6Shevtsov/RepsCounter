@@ -28,7 +28,17 @@ Validation with Xcode 27.1 / SDK 27.1:
 - Debug and Release built plists were checked for scene registration, no storyboard keys, portrait, iOS 17.0, camera permission text and dark appearance.
 - An iOS 17 runtime is unavailable, so runtime compatibility with iOS 17 remains unverified. Existing camera concurrency and accessibility audit findings remain open.
 
-The fix is proposed for review; merging requires separate approval. Status remains **In Development**.
+The A01 fix was merged through [PR #1](https://github.com/Alexander6Shevtsov/RepsCounter/pull/1). Status remains **In Development**.
+
+## Workout persistence — A03, A04, A09
+
+The `fix/workout-persistence` branch separates finishing a workout from saving its result. A failed save keeps the frozen summary available for retry; success is shown only after the storage confirms it. Stable UUIDs, isolated transactional contexts and a committed-only history prevent duplicate retries and unsaved history entries.
+
+The small MainActor-isolated `WorkoutStoring` contract allows controlled failure tests. The original SQLite schema migrates to an optional UUID attribute and stable identifiers are assigned to old rows. Existing workout fields and the default store path are preserved. See [the persistence design, migration and limits](Docs/PERSISTENCE.md).
+
+Validation with Xcode 27.1 / SDK 27.1 on the PR source: Debug with complete strict concurrency and unsigned Release builds succeeded; **29 XCTest passed on both iOS Simulator 27.0 and 18.6**. The suite includes legacy SQLite migration, failure/retry, idempotency and the existing scene regressions. Remaining concurrency diagnostics concern the existing camera implementation. A separate manual iOS 27 check confirmed the success message after saving and the corresponding history entry.
+
+An unsaved result is retained for the current process lifetime; recovery of an unsaved draft after force quitting is not implemented. Multi-process writers are not supported. Camera, counting, rest timing, screen layout and Swift language mode remain unchanged. This branch requires review before merge.
 
 ![RepsCounter interface — design concept, not a working application screenshot](Docs/Concept.png)
 

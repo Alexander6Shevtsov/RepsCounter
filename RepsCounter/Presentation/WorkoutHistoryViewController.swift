@@ -1,10 +1,12 @@
 import UIKit
 
 final class WorkoutHistoryViewController: UITableViewController {
-    private let persistence: WorkoutPersistence
+    var onDismiss: (() -> Void)?
+
+    private let persistence: any WorkoutStoring
     private var workouts: [WorkoutSummary] = []
 
-    init(persistence: WorkoutPersistence) {
+    init(persistence: any WorkoutStoring) {
         self.persistence = persistence
         super.init(style: .insetGrouped)
     }
@@ -46,5 +48,5 @@ final class WorkoutHistoryViewController: UITableViewController {
         return cell
     }
 
-    @objc private func close() { dismiss(animated: true) }
+    @objc private func close() { dismiss(animated: true, completion: onDismiss) }
 }

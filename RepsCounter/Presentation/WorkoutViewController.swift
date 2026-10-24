@@ -1,10 +1,10 @@
 import AVFoundation
 import UIKit
 
-final class WorkoutViewController: UIViewController {
+final class WorkoutViewController: UIViewController, UIAdaptivePresentationControllerDelegate {
     private let viewModel: WorkoutViewModel
     private let camera: CameraService
-    private let persistence: WorkoutPersistence
+    private let persistence: any WorkoutStoring
     private let cameraView = CameraPreviewView()
     private let overlayView = PoseOverlayView()
     private let countLabel = UILabel()
@@ -16,9 +16,12 @@ final class WorkoutViewController: UIViewController {
     private let pauseButton = UIButton(type: .system)
     private let finishButton = UIButton(type: .system)
     private var lastPose: BodyPose?
+    private var lastState: WorkoutViewState?
+    private var pendingSaveState: WorkoutSaveState?
     private var cameraStarted = false
+    private var isMessageDismissalInProgress = false
 
-    init(viewModel: WorkoutViewModel, camera: CameraService, persistence: WorkoutPersistence) {
+    init(viewModel: WorkoutViewModel, camera: CameraService, persistence: any WorkoutStoring) {
         self.viewModel = viewModel
         self.camera = camera
         self.persistence = persistence
@@ -46,6 +49,7 @@ final class WorkoutViewController: UIViewController {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        presentPendingSaveMessage()
         guard !cameraStarted else { return }
         cameraStarted = true
         Task { [weak self] in
@@ -66,6 +70,10 @@ final class WorkoutViewController: UIViewController {
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         overlayView.render(lastPose, previewLayer: cameraView.previewLayer)
+    }
+
+    func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
+        presentPendingSaveMessage()
     }
 
     private func configureLayout() {
@@ -186,6 +194,8 @@ final class WorkoutViewController: UIViewController {
     private func bindState() {
         viewModel.onChange = { [weak self] state in
             guard let self else { return }
+            let previousSaveState = lastState?.saveState
+            lastState = state
             countLabel.text = "\(state.repetitions)"
             setLabel.text = "Подход \(state.currentSet) из \(state.targetSets)"
             timeLabel.text = String(format: "Время %02d:%02d", state.elapsedSeconds / 60, state.elapsedSeconds % 60)
@@ -195,28 +205,101 @@ final class WorkoutViewController: UIViewController {
             guidanceLabel.isHidden = state.poseDetected
             pauseButton.isEnabled = !state.isFinished
             finishButton.isEnabled = !state.isFinished
+            switch state.saveState {
+            case .notSaved:
+                finishButton.setTitle("Завершить", for: .normal)
+            case .saving:
+                finishButton.setTitle("Сохранение…", for: .normal)
+            case .saved:
+                finishButton.setTitle("Завершено", for: .normal)
+            case .failed:
+                finishButton.setTitle("Повторить", for: .normal)
+                finishButton.isEnabled = true
+            }
             if state.isFinished { camera.stop() }
-        }
-        viewModel.onFailure = { [weak self] message in
-            self?.presentMessage(title: "Сохранение", message: message)
+            if previousSaveState != state.saveState {
+                switch state.saveState {
+                case .saved, .failed:
+                    pendingSaveState = state.saveState
+                case .notSaved, .saving:
+                    pendingSaveState = nil
+                }
+            }
+            presentPendingSaveMessage()
         }
     }
 
     private func presentMessage(title: String, message: String) {
+        guard lastState?.isFinished != true,
+              presentedViewController == nil,
+              !isMessageDismissalInProgress else { return }
         let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "ОК", style: .default))
+        alert.addAction(UIAlertAction(title: "ОК", style: .default) { [weak self] _ in
+            self?.dismissMessage()
+        })
         present(alert, animated: true)
     }
 
+    private func presentPendingSaveMessage() {
+        guard let pendingSaveState,
+              viewIfLoaded?.window != nil,
+              presentedViewController == nil,
+              !isMessageDismissalInProgress else { return }
+
+        let alert: UIAlertController
+        switch pendingSaveState {
+        case .saved:
+            alert = UIAlertController(
+                title: "Тренировка завершена",
+                message: "Результат сохранён в истории.",
+                preferredStyle: .alert
+            )
+            alert.addAction(UIAlertAction(title: "ОК", style: .default) { [weak self] _ in
+                self?.dismissMessage()
+            })
+        case .failed(let message):
+            alert = UIAlertController(title: "Сохранение", message: message, preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "Повторить", style: .default) { [weak self] _ in
+                self?.dismissMessage(retrySave: true)
+            })
+            alert.addAction(UIAlertAction(title: "Позже", style: .cancel) { [weak self] _ in
+                self?.dismissMessage()
+            })
+        case .notSaved, .saving:
+            return
+        }
+        self.pendingSaveState = nil
+        present(alert, animated: true)
+    }
+
+    private func dismissMessage(retrySave: Bool = false) {
+        isMessageDismissalInProgress = true
+        dismiss(animated: true) { [weak self] in
+            guard let self else { return }
+            self.isMessageDismissalInProgress = false
+            if retrySave { self.viewModel.retrySave() }
+            self.presentPendingSaveMessage()
+        }
+    }
+
     @objc private func openHistory() {
+        guard presentedViewController == nil, !isMessageDismissalInProgress else { return }
         let controller = WorkoutHistoryViewController(persistence: persistence)
-        present(UINavigationController(rootViewController: controller), animated: true)
+        controller.onDismiss = { [weak self] in
+            self?.presentPendingSaveMessage()
+        }
+        let navigationController = UINavigationController(rootViewController: controller)
+        present(navigationController, animated: true)
+        navigationController.presentationController?.delegate = self
     }
 
     @objc private func togglePause() { viewModel.togglePause() }
 
     @objc private func finishWorkout() {
-        viewModel.finish()
-        presentMessage(title: "Тренировка завершена", message: "Результат сохранён в истории, если хранилище доступно.")
+        if lastState?.isFinished == true {
+            viewModel.retrySave()
+        } else {
+            viewModel.finish()
+        }
     }
 }
