@@ -9,7 +9,7 @@ Use UIKit + MVVM, with isolated domain logic and constructor injection. Do not i
 ## 2. Dependencies
 
 ```text
-AppDelegate (composition root)
+SceneDelegate (composition root for the window scene)
   ├── WorkoutViewController (UIKit, pose overlay)
   │     └── WorkoutViewModel (session state and UI state)
   │            ├── PoseAnalyzer (knee-angle extraction, smoothing)
@@ -20,6 +20,12 @@ AppDelegate (composition root)
 ```
 
 Current prototype uses constructor injection for services, not yet fully abstracted protocols. Protocol boundaries and test doubles are a planned refactor.
+
+`AppDelegate` remains the process entry point. The static `UIApplicationSceneManifest` in `RepsCounter/App/Info.plist` registers `UIWindowScene` and `SceneDelegate` for the application role; multiple simultaneous scenes are disabled. UIKit creates the scene and calls `scene(_:willConnectTo:options:)`. The scene delegate creates and retains `UIWindow(windowScene:)`, assembles the existing dependencies and presents `WorkoutViewController` with the existing dark appearance.
+
+There are no storyboard keys. Portrait orientation is declared in the same plist for iOS 17 and later. Xcode merges that file with the existing generated bundle metadata and camera permission description in both Debug and Release. This follows Apple's [scene lifecycle migration guidance](https://developer.apple.com/documentation/uikit/transitioning-to-the-uikit-scene-based-life-cycle).
+
+`SceneLifecycleTests` verifies the built app's manifest and the window connected by UIKit, including its scene delegate, root controller, visibility and appearance. Camera interruptions and workout state changes remain separate audit tasks.
 
 ## 3. Threading and concurrency
 
