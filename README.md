@@ -6,6 +6,16 @@ RepsCounter is an iOS exercise tracker designed to count repetitions using on-de
 
 > **Development status:** This repository contains an initial implementation scaffold. The design image below is a **UI concept, not a screenshot of running software**. Features and accuracy require verification on a real iPhone before they can be claimed as production-ready.
 
+## Technical audit — 24 October 2026
+
+The unchanged starter is preserved in the first commit and the `starter-v0.1.0` tag. See the [technical audit in Russian](Docs/TECHNICAL_AUDIT.md), [prioritized next tasks](Docs/NEXT_TASKS.md), and [baseline file checksums](Docs/BASELINE_MANIFEST.json).
+
+- Xcode 27.1 / Swift 6.4, project Swift language mode 5: Debug Simulator and unsigned Release device builds succeeded.
+- Existing XCTest on iOS Simulator 18.6: **8 passed, 0 failures**.
+- On iOS Simulator 27.0 with SDK 27.1, the host app fails to launch because it does not adopt the required `UIScene` lifecycle; XCTest cannot execute there.
+- Strict concurrency reports camera isolation issues; a separate Swift 6 diagnostic build fails. Project settings were not changed.
+- Xcode 26, iOS 17 runtime, physical camera, tracking accuracy and accessibility have not been validated. Defect fixes and new features have not started.
+
 ![RepsCounter interface — design concept, not a working application screenshot](Docs/Concept.png)
 
 ## MVP scope

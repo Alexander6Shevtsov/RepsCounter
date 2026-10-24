@@ -1,0 +1,136 @@
+{
+  "archive": "RepsCounter-Starter.zip",
+  "archiveSHA256": "73aba6fee2dedf97c6f9ca7a8232daa35be26b5c089569de7c7aee0adab60aeb",
+  "files": [
+    {
+      "path": "RepsCounter.xcodeproj/project.xcworkspace/contents.xcworkspacedata",
+      "size": 113,
+      "sha256": "5c2b91b67a72f0c341d6fa0eda978eee611ff4a1efee3017a5617c46284973b3"
+    },
+    {
+      "path": "RepsCounter.xcodeproj/xcshareddata/xcschemes/RepsCounter.xcscheme",
+      "size": 2360,
+      "sha256": "3c67be7558a2fdc874de78643de613064e9ab3091e32c86276ab17422151acec"
+    },
+    {
+      "path": "RepsCounter.xcodeproj/project.pbxproj",
+      "size": 13395,
+      "sha256": "93388f1bf8677826438dbb8908d3bf4a04d183de47f2d7520a88eeda9b444bd9"
+    },
+    {
+      "path": "LICENSE",
+      "size": 1075,
+      "sha256": "20d1e69f5472622bc787d22891371e00fb7a15bba915cf469b2ec40f80ba90d3"
+    },
+    {
+      "path": "RepsCounter/App/AppDelegate.swift",
+      "size": 1020,
+      "sha256": "9e3db4bc4936370e0289c4c193b13eb4318efcf3b3d93b317398cffbe6e20dbe"
+    },
+    {
+      "path": "RepsCounter/Services/WorkoutPersistence.swift",
+      "size": 2943,
+      "sha256": "ef0c747ab844e3699943703aa6ce4e5bcdaf175ecf1a1c96724b2a06fac0aff4"
+    },
+    {
+      "path": "RepsCounter/Services/PoseDetector.swift",
+      "size": 1709,
+      "sha256": "5f4ebb31542e5c830449359f8f5c2f087d6a0e080c7edfcabe50fd63484cc1a8"
+    },
+    {
+      "path": "RepsCounter/Services/CameraService.swift",
+      "size": 3488,
+      "sha256": "eed0087c9e18a1a174ccdb085b850d0b1111a937c08fa146b09960380784d896"
+    },
+    {
+      "path": "RepsCounter/Presentation/WorkoutHistoryViewController.swift",
+      "size": 1968,
+      "sha256": "ce11d7d9dc74544fba3e18e3f18ef3df402d07e7ef87bacc8f8f77feefa32d09"
+    },
+    {
+      "path": "RepsCounter/Presentation/PoseOverlayView.swift",
+      "size": 2612,
+      "sha256": "cdfffebd742d69d6d9590b08ed7fc8bef69a7bb0198dc70878c41352575d5b80"
+    },
+    {
+      "path": "RepsCounter/Presentation/WorkoutViewController.swift",
+      "size": 11134,
+      "sha256": "3d16955b2e674c8933e80e6e7381b91323c7b47daecfc2d0d2c26ea5ec5060bb"
+    },
+    {
+      "path": "RepsCounter/Presentation/WorkoutViewModel.swift",
+      "size": 4152,
+      "sha256": "47adeaa76d3b0455e64358ba81cdb173580275637bf7eead1467a66daaa58023"
+    },
+    {
+      "path": "RepsCounter/Presentation/CameraPreviewView.swift",
+      "size": 398,
+      "sha256": "160747e5d2870424fe9b0334a74800220f8901086829e22e11c16ba688d5ed50"
+    },
+    {
+      "path": "RepsCounter/Domain/BodyPose.swift",
+      "size": 711,
+      "sha256": "4913981b6deff160d84e456205ff72ed0382181954e6b3c90cae8ff5ad345606"
+    },
+    {
+      "path": "RepsCounter/Domain/JointAngleCalculator.swift",
+      "size": 852,
+      "sha256": "6aaf38a105893499c520bb345aafb874970817d1760758d35ab0c4d1e54c51f6"
+    },
+    {
+      "path": "RepsCounter/Domain/PoseAnalyzer.swift",
+      "size": 1313,
+      "sha256": "9f091f76dc689edff185a64a09bceb18bedf5c080b10d3b15f2c35b563b4af75"
+    },
+    {
+      "path": "RepsCounter/Domain/SquatCounter.swift",
+      "size": 1902,
+      "sha256": "633cce40c281bef9d90610aca5e279070604d0a2c9f204788300c2fc713408bc"
+    },
+    {
+      "path": "Docs/ROADMAP.md",
+      "size": 2110,
+      "sha256": "937f9ed5319a8901bed99d459c9f62477e13992d6a824baae7e7f915abaa2748"
+    },
+    {
+      "path": "Docs/PORTFOLIO_TEXTS.md",
+      "size": 2355,
+      "sha256": "2787c690df9ccada0fbdabbb7586c2c12974eecf76fd8fff11c9a7329a55dbb5"
+    },
+    {
+      "path": "Docs/ARCHITECTURE.md",
+      "size": 3722,
+      "sha256": "216b0b3810d946da73f0db818fa15970a2f3cb4e9f91837e25d184cb3ebb7f5e"
+    },
+    {
+      "path": "Docs/Concept.png",
+      "size": 2417877,
+      "sha256": "71569309cbd9f07d28306ff451b9f4ad7c798ff4290fa90ba38b9af326e21732"
+    },
+    {
+      "path": "RepsCounterTests/SquatCounterTests.swift",
+      "size": 1314,
+      "sha256": "8be5706ec58cf4590cb1775e78ab7d900fa5c5fa3968994be38080e7b0a96fcd"
+    },
+    {
+      "path": "RepsCounterTests/JointAngleCalculatorTests.swift",
+      "size": 871,
+      "sha256": "f2d24747f7c50e76579575c627b93baea1760a342fbe21c9104d4144a30b8e8f"
+    },
+    {
+      "path": "RepsCounterTests/WorkoutPersistenceTests.swift",
+      "size": 539,
+      "sha256": "70e366a5381c59af878198511844db6008cded958e0f23dba936ac2e35827df8"
+    },
+    {
+      "path": "README.md",
+      "size": 5103,
+      "sha256": "5930480efa64a114a2963ede86f3ee2ef0c32e3ba2914ffc0f1a536ff335df67"
+    },
+    {
+      "path": ".gitignore",
+      "size": 137,
+      "sha256": "16d032a18a31afea05e5fd0e0340304243a4e6efc6ba3f36a77713ce8211a2fd"
+    }
+  ]
+}
