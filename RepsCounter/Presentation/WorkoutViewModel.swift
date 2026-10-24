@@ -1,5 +1,12 @@
 import Foundation
 
+enum WorkoutSaveState: Equatable {
+    case notSaved
+    case saving
+    case saved
+    case failed(String)
+}
+
 struct WorkoutViewState {
     let repetitions: Int
     let totalRepetitions: Int
@@ -12,14 +19,15 @@ struct WorkoutViewState {
     let isPaused: Bool
     let isFinished: Bool
     let poseDetected: Bool
+    let saveState: WorkoutSaveState
 }
 
 @MainActor
 final class WorkoutViewModel {
     var onChange: ((WorkoutViewState) -> Void)?
-    var onFailure: ((String) -> Void)?
+    private(set) var finishedSummary: WorkoutSummary?
 
-    private let persistence: WorkoutPersistence
+    private let persistence: any WorkoutStoring
     private let analyzer = PoseAnalyzer()
     private var counter = SquatCounter()
     private var timer: Timer?
@@ -33,12 +41,13 @@ final class WorkoutViewModel {
     private var isPaused = false
     private var isFinished = false
     private var hasPose = false
+    private var saveState: WorkoutSaveState = .notSaved
 
     let targetRepetitions = 12
     let targetSets = 4
     let restDuration = 60
 
-    init(persistence: WorkoutPersistence) {
+    init(persistence: any WorkoutStoring) {
         self.persistence = persistence
         timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in self?.tick() }
@@ -83,29 +92,46 @@ final class WorkoutViewModel {
 
     func finish() {
         guard !isFinished else { return }
-        isFinished = true
-        timer?.invalidate()
-        timer = nil
-        let summary = WorkoutSummary(
+        finishedSummary = WorkoutSummary(
             date: startedAt,
             duration: elapsedSeconds,
             repetitions: totalRepetitions,
             sets: min(targetSets, completedSets + (counter.repetitions > 0 ? 1 : 0))
         )
+        isFinished = true
+        timer?.invalidate()
+        timer = nil
+        retrySave()
+    }
+
+    func retrySave() {
+        guard let finishedSummary else { return }
+        switch saveState {
+        case .saving, .saved:
+            return
+        case .notSaved, .failed:
+            break
+        }
+
+        saveState = .saving
+        publish()
         do {
-            try persistence.save(summary)
+            try persistence.save(finishedSummary)
+            saveState = .saved
         } catch {
-            onFailure?("Не удалось сохранить тренировку: \(error.localizedDescription)")
+            saveState = .failed("Не удалось сохранить тренировку: \(error.localizedDescription)")
         }
         publish()
     }
 
     var elapsedSeconds: Int {
+        if let finishedSummary { return finishedSummary.duration }
         let effectiveNow = pausedAt ?? Date()
         return max(0, Int(effectiveNow.timeIntervalSince(startedAt) - totalPausedTime))
     }
 
     private func tick() {
+        guard !isFinished else { return }
         if !isPaused, let restDeadline, Date() >= restDeadline {
             self.restDeadline = nil
             currentSet += 1
@@ -126,7 +152,8 @@ final class WorkoutViewModel {
             isResting: restDeadline != nil,
             isPaused: isPaused,
             isFinished: isFinished,
-            poseDetected: hasPose
+            poseDetected: hasPose,
+            saveState: saveState
         ))
     }
 }
