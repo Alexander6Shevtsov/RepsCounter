@@ -12,9 +12,23 @@ The unchanged starter is preserved in the first commit and the `starter-v0.1.0` 
 
 - Xcode 27.1 / Swift 6.4, project Swift language mode 5: Debug Simulator and unsigned Release device builds succeeded.
 - Existing XCTest on iOS Simulator 18.6: **8 passed, 0 failures**.
-- On iOS Simulator 27.0 with SDK 27.1, the host app fails to launch because it does not adopt the required `UIScene` lifecycle; XCTest cannot execute there.
+- The starter host app failed to launch on iOS Simulator 27.0 with SDK 27.1 because it did not adopt the required `UIScene` lifecycle. This is addressed by the A01 fix below.
 - Strict concurrency reports camera isolation issues; a separate Swift 6 diagnostic build fails. Project settings were not changed.
-- Xcode 26, iOS 17 runtime, physical camera, tracking accuracy and accessibility have not been validated. Defect fixes and new features have not started.
+- Xcode 26, iOS 17 runtime, physical camera, tracking accuracy and accessibility have not been validated.
+
+## A01 fix — scene lifecycle
+
+The `fix/scene-lifecycle` branch moves the existing window and dependency assembly into `SceneDelegate`. The static `RepsCounter/App/Info.plist` registers one programmatic window scene and preserves portrait orientation, dark appearance and iOS 17 deployment support. UIKit, MVVM, the workout algorithm, Core Data and the workout interface are unchanged.
+
+Validation with Xcode 27.1 / SDK 27.1:
+
+- Debug Simulator and unsigned Release device builds succeeded.
+- All **10 XCTest passed on iOS Simulator 27.0 and 18.6**: the original 8 tests plus 2 regressions for the built scene manifest and the actual connected workout window.
+- The app was also launched separately on iPhone 18 Pro Max / iOS Simulator 27.0; the workout screen appeared. The simulator reported that the rear camera was unavailable.
+- Debug and Release built plists were checked for scene registration, no storyboard keys, portrait, iOS 17.0, camera permission text and dark appearance.
+- An iOS 17 runtime is unavailable, so runtime compatibility with iOS 17 remains unverified. Existing camera concurrency and accessibility audit findings remain open.
+
+The fix is proposed for review; merging requires separate approval. Status remains **In Development**.
 
 ![RepsCounter interface — design concept, not a working application screenshot](Docs/Concept.png)
 
@@ -77,7 +91,7 @@ Camera analysis currently assumes a rear camera, portrait orientation, and a spe
 ```text
 RepsCounter.xcodeproj
 RepsCounter/
-  App/                 AppDelegate and composition root
+  App/                 AppDelegate, SceneDelegate composition root and scene manifest
   Domain/              Pose, geometry, smoothing, repetition state machine
   Services/            AVFoundation, Vision and Core Data
   Presentation/        UIKit screen, skeleton overlay, MVVM
