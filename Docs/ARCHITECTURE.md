@@ -1,6 +1,6 @@
 # Architecture Decision Record — RepsCounter v0.1
 
-**Status:** In Development
+**Status:** In Development. Updated 25 October 2026. Persistence is merged through PR #2 (`main` at `6c9474b`); timing changes are in the unmerged `fix/workout-timing` branch.
 
 ## 1. Decision
 
@@ -14,6 +14,7 @@ SceneDelegate (composition root for the window scene)
   │     └── WorkoutViewModel (session state and UI state)
   │            ├── PoseAnalyzer (knee-angle extraction, smoothing)
   │            ├── SquatCounter (pure finite-state machine)
+  │            ├── WorkoutTimeSource (monotonic time and start timestamp)
   │            └── WorkoutStoring (Domain contract)
   └── CameraService (AVFoundation)
         └── PoseDetector (Vision)
@@ -35,8 +36,21 @@ There are no storyboard keys. Portrait orientation is declared in the same plist
 - `WorkoutViewModel` is MainActor-isolated; updates and drawing are dispatched to the main thread.
 - Permission handling and camera startup use `async/await`.
 - Core Data operations are synchronous on MainActor, using a fresh main-queue context for each save/read. Failed writes roll back and discard that context; history reads committed data only. No managed objects cross the service boundary.
+- A MainActor task refreshes workout time after an asynchronous sleep. It captures the model weakly, checks cancellation after the suspension, and is cancelled on pause, finish and model release. A repeating `Timer` is no longer used.
 
-## 4. Squat detection
+## 4. Workout timing and pause
+
+`WorkoutTimeSource` supplies monotonic elapsed time and a calendar date. Production uses `ContinuousClock`; `Date` is read to capture the workout's start timestamp. Tests can supply controlled time without waiting for real rest periods. Active time begins when the ViewModel is created, includes rest and excludes explicit pauses. Camera availability does not gate this clock yet.
+
+Rest deadlines are expressed on that same active-time scale. Pausing freezes both elapsed time and remaining rest; resuming starts a new active interval without shifting the rest deadline. Refreshes and incoming poses check the deadline against elapsed time, so missed refreshes do not accumulate timer drift.
+
+Pausing clears pose smoothing and calls `SquatCounter.resetMovement()`: the phase returns to `seekingStanding`, intermediate frame counts are cleared, and completed repetitions are retained. Standing must be confirmed again after resume. `reset()` still clears the entire set when a rest period begins; normal movement thresholds are unchanged.
+
+The first finish freezes duration and the existing UUID summary. Retrying storage does not change its fields. `sets` means completed sets plus a current partial set with at least one counted repetition, capped at the target. An empty current set is not added.
+
+Automatic pausing when the app backgrounds or the camera is interrupted is not implemented in this stage. The camera lifecycle and on-device checks remain separate work.
+
+## 5. Squat detection
 
 Camera: rear-facing, vertical iPhone, 2D sagittal/side angle.
 
@@ -52,11 +66,11 @@ LOWERED          --3 frames angle >=160--> STANDING + 1 repetition
 
 Angles between thresholds do not transition the machine. Missing joints suspend counting and, after 12 missed observations, force re-acquisition of a standing posture. Thresholds and stability rules are prototype-only and need calibration with data.
 
-## 5. Frame orientation and overlay alignment
+## 6. Frame orientation and overlay alignment
 
 The detector uses `.right` orientation to interpret the rear camera's sensor stream as portrait. Vision reports normalized points with a lower-left origin; the overlay converts those to the unrotated capture-device coordinate system before calling AVFoundation's `layerPointConverted(fromCaptureDevicePoint:)`. Both camera preview rotation and overlay mapping **must be verified on real device hardware**. Format selection, mirroring and camera position changes require synchronized updates.
 
-## 6. Data schema
+## 7. Data schema
 
 Workout: `id: UUID?`, `date: Date`, `duration: Int64`, `repetitions: Int64`, `sets: Int64`. New summaries always have a UUID. The stored attribute is optional to allow migration from the initial schema, then a transaction assigns stable UUIDs to legacy rows.
 
@@ -64,11 +78,13 @@ A single Core Data store contains small session summaries. No video files, pose 
 
 The finished workout snapshot is retained separately from `.notSaved`, `.saving`, `.saved` and `.failed` persistence states. All retries reuse the snapshot UUID and fields. The storage checks that identifier before inserting, making retries idempotent within the current single-process app, including after reopening SQLite. See [persistence guarantees and limits](PERSISTENCE.md).
 
-## 7. Known MVP limitations
+## 8. Known MVP limitations
 
 - No adaptive thresholds or height/calibration flow.
 - No push-up recognition or multi-person tracking.
 - No background workout mode; foreground camera only.
+- No automatic workout pause on backgrounding or camera interruption.
+- An unsaved finished summary exists only in the current process; no draft recovery after force quitting.
 - Confidence threshold is heuristic and the first sufficiently visible leg is selected.
 - Temporary camera occlusion can invalidate a partially completed squat.
 - Camera/overlay transform and sensor thermal performance are unverified.
