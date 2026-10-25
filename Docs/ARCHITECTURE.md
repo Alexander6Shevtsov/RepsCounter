@@ -1,6 +1,6 @@
 # Architecture Decision Record — RepsCounter v0.1
 
-**Status:** In Development. Updated 25 October 2026. Persistence is merged through PR #2 (`main` at `6c9474b`); timing changes are in the unmerged `fix/workout-timing` branch.
+**Status:** In Development. Updated 25 October 2026. PR #3 timing changes are merged (`main` at `a134e81`); A02/A06 changes are in `fix/camera-lifecycle` awaiting review.
 
 ## 1. Decision
 
@@ -9,38 +9,42 @@ Use UIKit + MVVM, with isolated domain logic and constructor injection. Do not i
 ## 2. Dependencies
 
 ```text
-SceneDelegate (composition root for the window scene)
-  ├── WorkoutViewController (UIKit, pose overlay)
-  │     └── WorkoutViewModel (session state and UI state)
-  │            ├── PoseAnalyzer (knee-angle extraction, smoothing)
-  │            ├── SquatCounter (pure finite-state machine)
-  │            ├── WorkoutTimeSource (monotonic time and start timestamp)
-  │            └── WorkoutStoring (Domain contract)
-  └── CameraService (AVFoundation)
-        └── PoseDetector (Vision)
+SceneDelegate (window composition and lifecycle forwarding)
+  ├── WorkoutViewController (UIKit and pose overlay)
+  │     ├── WorkoutCameraCoordinator (MainActor lifecycle agreement)
+  │     └── WorkoutViewModel (MainActor workout and UI state)
+  │            ├── PoseAnalyzer / SquatCounter
+  │            ├── WorkoutTimeSource
+  │            └── WorkoutStoring
+  └── CameraService (MainActor permission/start state)
+        ├── CameraAuthorizing
+        └── CameraCapturing
+              └── CameraCapture (actor, serial session executor)
+                    └── CameraFrameProcessor (serial frame queue)
+                          └── PoseDetector (Vision)
 ```
 
-`WorkoutPersistence` implements the MainActor-isolated `WorkoutStoring` contract and is injected through the existing composition root. ViewModel and controllers receive the contract; camera and pose-analysis dependencies remain concrete. `WorkoutSummary` is a value type in Domain with a stable UUID. Mock storage and a controlled Core Data commit operation cover persistence failures without introducing a generic repository framework.
+`WorkoutPersistence` implements the MainActor-isolated `WorkoutStoring` contract. ViewModel and controllers receive that contract through constructor injection. `WorkoutSummary` is a Domain value with a stable UUID. `CameraService` receives two small contracts for permissions and capture; the coordinator receives the service and ViewModel. Mock capture/permission, controlled storage failures and a monotonic clock cover lifecycle behavior without a generic repository or camera framework. Analyzer and counter remain concrete domain components.
 
 `AppDelegate` remains the process entry point. The static `UIApplicationSceneManifest` in `RepsCounter/App/Info.plist` registers `UIWindowScene` and `SceneDelegate` for the application role; multiple simultaneous scenes are disabled. UIKit creates the scene and calls `scene(_:willConnectTo:options:)`. The scene delegate creates and retains `UIWindow(windowScene:)`, assembles the existing dependencies and presents `WorkoutViewController` with the existing dark appearance.
 
 There are no storyboard keys. Portrait orientation is declared in the same plist for iOS 17 and later. Xcode merges that file with the existing generated bundle metadata and camera permission description in both Debug and Release. This follows Apple's [scene lifecycle migration guidance](https://developer.apple.com/documentation/uikit/transitioning-to-the-uikit-scene-based-life-cycle).
 
-`SceneLifecycleTests` verifies the built app's manifest and the window connected by UIKit, including its scene delegate, root controller, visibility and appearance. Camera interruptions and workout state changes remain separate audit tasks.
+`SceneLifecycleTests` verifies the built app's manifest and the window connected by UIKit, including its scene delegate, root controller, visibility and appearance. The scene also forwards background/active/disconnect events to the camera coordinator. Background pauses and stops capture; active refreshes permission without automatically resuming; disconnect permanently releases capture resources for that scene.
 
 ## 3. Threading and concurrency
 
-- Session configuration and `startRunning` are dispatched away from the main thread.
-- `AVCaptureVideoDataOutput` invokes its delegate on a dedicated serial frame queue.
-- Vision inference runs on that queue and is throttled to ~12 frames per second; frames arriving sooner are skipped.
-- `WorkoutViewModel` is MainActor-isolated; updates and drawing are dispatched to the main thread.
-- Permission handling and camera startup use `async/await`.
-- Core Data operations are synchronous on MainActor, using a fresh main-queue context for each save/read. Failed writes roll back and discard that context; history reads committed data only. No managed objects cross the service boundary.
-- A MainActor task refreshes workout time after an asynchronous sleep. It captures the model weakly, checks cancellation after the suspension, and is cancelled on pause, finish and model release. A repeating `Timer` is no longer used.
+- `CameraCapture` owns all session configuration/start/stop on a custom serial executor, outside MainActor. No suspension occurs inside a configuration/start transaction.
+- A separate serial frame delegate owns Vision processing. An `OSAllocatedUnfairLock` confines mutable detector state and serializes invalidation. No raw buffers or Vision objects cross executors.
+- Analysis retains the 80 ms interval and AVFoundation late-frame discard. A newest-only pose stream, run generation, monotonic analysis timestamp and 250 ms age limit reject obsolete results at MainActor.
+- `CameraService`, the coordinator, ViewModel and UIKit updates are MainActor-isolated. Permission requests and pending starts are coalesced/cancellable; finish is terminal. Session notifications travel separately from frames and are removed on shutdown.
+- The only `@unchecked Sendable` type is a private-reference preview bridge. It only attaches the same session to the UIKit layer before start; it exposes no session operations. Full ownership/lock justification and native cancellation limits are recorded in [CAMERA_LIFECYCLE.md](CAMERA_LIFECYCLE.md).
+- Core Data operations remain synchronous on MainActor, with a fresh main-queue context per save/read, rollback on failure and committed-only history. Managed objects do not cross the service boundary.
+- The existing weakly captured MainActor update task is cancelled on pause, finish and model release. No repeating `Timer` is used.
 
 ## 4. Workout timing and pause
 
-`WorkoutTimeSource` supplies monotonic elapsed time and a calendar date. Production uses `ContinuousClock`; `Date` is read to capture the workout's start timestamp. Tests can supply controlled time without waiting for real rest periods. Active time begins when the ViewModel is created, includes rest and excludes explicit pauses. Camera availability does not gate this clock yet.
+`WorkoutTimeSource` supplies monotonic elapsed time and a calendar date. Production uses `ContinuousClock`; `Date` is read to capture the workout's start timestamp. Tests can supply controlled time without waiting for real rest periods. Production creates the ViewModel with `cameraReady: false`; active time begins only after the requested camera start succeeds. Standalone logic tests can declare the camera ready at initialization. Active time includes rest and excludes explicit/system pauses. The calendar timestamp is still captured at model creation, preserving existing summary semantics.
 
 Rest deadlines are expressed on that same active-time scale. Pausing freezes both elapsed time and remaining rest; resuming starts a new active interval without shifting the rest deadline. Refreshes and incoming poses check the deadline against elapsed time, so missed refreshes do not accumulate timer drift.
 
@@ -48,7 +52,7 @@ Pausing clears pose smoothing and calls `SquatCounter.resetMovement()`: the phas
 
 The first finish freezes duration and the existing UUID summary. Retrying storage does not change its fields. `sets` means completed sets plus a current partial set with at least one counted repetition, capped at the target. An empty current set is not added.
 
-Automatic pausing when the app backgrounds or the camera is interrupted is not implemented in this stage. The camera lifecycle and on-device checks remain separate work.
+Backgrounding, capture interruption and runtime errors now call the same idempotent pause path. Camera readiness alone does not resume the model: returning to foreground, permission changes and interruption end all require an explicit user action. `resetMovement`, rest, completed repetitions and frozen retry summaries keep the stage 3/4 semantics. Native camera behavior still requires iPhone verification.
 
 ## 5. Squat detection
 
@@ -83,7 +87,6 @@ The finished workout snapshot is retained separately from `.notSaved`, `.saving`
 - No adaptive thresholds or height/calibration flow.
 - No push-up recognition or multi-person tracking.
 - No background workout mode; foreground camera only.
-- No automatic workout pause on backgrounding or camera interruption.
 - An unsaved finished summary exists only in the current process; no draft recovery after force quitting.
 - Confidence threshold is heuristic and the first sufficiently visible leg is selected.
 - Temporary camera occlusion can invalidate a partially completed squat.

@@ -39,7 +39,8 @@ final class WorkoutViewModel {
     private var completedSets = 0
     private var totalRepetitions = 0
     private var currentSet = 1
-    private var isPaused = false
+    private(set) var isPaused = false
+    private var isCameraReady: Bool
     private var isFinished = false
     private var hasPose = false
     private var saveState: WorkoutSaveState = .notSaved
@@ -48,12 +49,14 @@ final class WorkoutViewModel {
     let targetSets = 4
     let restDuration = 60
 
-    init(persistence: any WorkoutStoring, timeSource: (any WorkoutTimeSource)? = nil) {
+    init(persistence: any WorkoutStoring, timeSource: (any WorkoutTimeSource)? = nil, cameraReady: Bool = true) {
         let source = timeSource ?? SystemWorkoutTimeSource()
         self.persistence = persistence
         self.timeSource = source
         startedAt = source.date
-        activeStartedAt = source.currentTime
+        isCameraReady = cameraReady
+        isPaused = !cameraReady
+        activeStartedAt = cameraReady ? source.currentTime : nil
         startUpdates()
     }
 
@@ -87,24 +90,36 @@ final class WorkoutViewModel {
     }
 
     func togglePause() {
-        guard !isFinished else { return }
-        let currentTime = timeSource.currentTime
-        let activeTime = activeDuration(at: currentTime)
-        if isPaused {
-            activeStartedAt = currentTime
-            isPaused = false
-            startUpdates()
-        } else {
-            advanceRest(at: activeTime)
-            accumulatedActiveTime = activeTime
-            activeStartedAt = nil
-            isPaused = true
-            counter.resetMovement()
-            analyzer.reset()
-            hasPose = false
-            stopUpdates()
-        }
+        if isPaused { resume() }
+        else { pause() }
+    }
+
+    func setCameraReady(_ ready: Bool) {
+        isCameraReady = ready
+        if !ready { pause() }
+        publish()
+    }
+
+    func pause() {
+        guard !isFinished, !isPaused else { return }
+        let activeTime = activeDuration(at: timeSource.currentTime)
+        advanceRest(at: activeTime)
+        accumulatedActiveTime = activeTime
+        activeStartedAt = nil
+        isPaused = true
+        counter.resetMovement()
+        analyzer.reset()
+        hasPose = false
+        stopUpdates()
         publish(activeTime: activeTime)
+    }
+
+    func resume() {
+        guard !isFinished, isPaused, isCameraReady else { return }
+        activeStartedAt = timeSource.currentTime
+        isPaused = false
+        startUpdates()
+        publish()
     }
 
     func finish() {

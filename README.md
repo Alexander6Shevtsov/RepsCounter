@@ -13,7 +13,7 @@ The unchanged starter is preserved in the first commit and the `starter-v0.1.0` 
 - Xcode 27.1 / Swift 6.4, project Swift language mode 5: Debug Simulator and unsigned Release device builds succeeded.
 - Existing XCTest on iOS Simulator 18.6: **8 passed, 0 failures**.
 - The starter host app failed to launch on iOS Simulator 27.0 with SDK 27.1 because it did not adopt the required `UIScene` lifecycle. This is addressed by the A01 fix below.
-- Strict concurrency reports camera isolation issues; a separate Swift 6 diagnostic build fails. Project settings were not changed.
+- The starter reported camera isolation issues and failed a Swift 6 diagnostic build. The A02/A06 changes below address this; project language settings remain unchanged.
 - Xcode 26, iOS 17 runtime, physical camera, tracking accuracy and accessibility have not been validated.
 
 ## A01 fix — scene lifecycle
@@ -42,13 +42,23 @@ An unsaved result is retained for the current process lifetime; recovery of an u
 
 ## Workout timing and pause — A05, A10 — 25 October 2026
 
-The `fix/workout-timing` branch starts from `main` (`6c9474b`). Workout duration includes rest and excludes explicit pauses. A `ContinuousClock` source measures elapsed time independently of changes to the system date; `Date` supplies the workout's start timestamp. Rest uses the same active-time scale, so both elapsed time and remaining rest freeze during a pause.
+The timing changes merged through [PR #3](https://github.com/Alexander6Shevtsov/RepsCounter/pull/3) into `main` (`a134e81`). Workout duration includes rest and excludes explicit pauses. A `ContinuousClock` source measures elapsed time independently of changes to the system date; `Date` supplies the workout's start timestamp. Rest uses the same active-time scale, so both elapsed time and remaining rest freeze during a pause.
 
 Pausing resets the unfinished movement and pose smoothing while preserving completed repetitions. After resuming, standing must be confirmed again before a new squat can count. A cancellable task replaces the repeating timer and is cancelled on pause, finish and model release. The finished summary retains the stable UUID and unchanged fields across save retries. The set count includes completed sets plus a current partial set containing at least one repetition.
 
 Validation with Xcode 27.1 / SDK 27.1: Debug with complete strict concurrency and unsigned Release builds succeeded; **54 XCTest passed on both iOS Simulator 27.0 and 18.6**. The additions are 19 deterministic timing tests and 6 movement-reset tests. They cover fractional time, 60-second rest, pause/resume, fresh standing confirmation, rapid Pause → Resume → Finish, frozen retry summaries and set counts without real waits. Existing storage, UUID and scene regressions pass. Remaining diagnostics concern the existing camera implementation and deprecated button API.
 
-Core Data, its schema, camera handling and the interface are unchanged by this stage. The branch has not been merged. Automatic pausing on backgrounding and physical-device validation remain open; an iOS 17 runtime is unavailable. See [architecture and timing semantics](Docs/ARCHITECTURE.md).
+Core Data, its schema, camera handling and the interface were unchanged by that stage. Automatic pausing is addressed in stage 5 below; physical-device validation and an iOS 17 runtime remain unavailable. See [architecture and timing semantics](Docs/ARCHITECTURE.md).
+
+## Camera lifecycle and concurrency — A02, A06 — 25 October 2026
+
+The `fix/camera-lifecycle` branch starts from merged PR #3 (`main`, `a134e81`). A capture actor owns session configuration/start/stop on one serial executor outside MainActor. Vision stays on a separate serial frame queue; generation and age checks prevent stopped or stale results from reaching the workout. Narrow permission/capture contracts allow tests without physical camera access.
+
+The workout waits for camera readiness before active time begins. Backgrounding, interruptions and runtime errors pause it without losing completed repetitions, rest or duration. Returning from Settings/foreground or ending an interruption requires an explicit **Продолжить**. Pending starts are cancelled on stop/finish, and retries preserve the existing frozen UUID summary. The interface uses its existing guidance label for Russian camera errors and the existing button for retry.
+
+Debug Simulator and unsigned Release device builds with complete strict concurrency succeeded. A separate Swift 6 `build-for-testing` also succeeded without changing project language mode 5. **90 XCTest passed on each available iOS Simulator version: 18.6, 26.5, 27.0 and 27.1** (54 existing + 36 new). Camera components and new tests have no concurrency warnings. Remaining diagnostics concern the existing deprecated button API and an unchanged Core Data test in the Swift 6 diagnostic compilation.
+
+One small `@unchecked Sendable` preview bridge is explicitly justified: it hides an immutable session reference and only attaches the UIKit preview on MainActor before startup; the actor exclusively controls session operations. See [concurrency rationale, cancellation limits and iPhone checklist](Docs/CAMERA_LIFECYCLE.md). Core Data/schema, counting and Vision algorithms, deployment target and dependencies are unchanged. Hardware camera, iOS 17 runtime, tracking accuracy and performance remain unverified. The branch awaits review; status remains **In Development**.
 
 ![RepsCounter interface — design concept, not a working application screenshot](Docs/Concept.png)
 
@@ -80,8 +90,8 @@ The main engineering challenge is translating noisy, low-confidence 2D joint mea
 | Pose estimation | Vision, `VNDetectHumanBodyPoseRequest` |
 | Domain logic | Joint-angle geometry, exponential smoothing, finite-state machine |
 | Persistence | Core Data, programmatic data model |
-| Concurrency | Swift Concurrency for camera permission/start; serial frame/session queues |
-| Testing | XCTest unit tests for geometry and repetition logic |
+| Concurrency | MainActor state; capture actor with serial executor; serial Vision queue and bounded pose stream |
+| Testing | XCTest for geometry, counting, timing, persistence, camera lifecycle and scene regressions |
 | Architecture | MVVM + lightweight Clean Architecture + constructor injection |
 
 ## How counting works

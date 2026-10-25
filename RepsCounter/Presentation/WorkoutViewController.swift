@@ -4,6 +4,7 @@ import UIKit
 final class WorkoutViewController: UIViewController, UIAdaptivePresentationControllerDelegate {
     private let viewModel: WorkoutViewModel
     private let camera: CameraService
+    let cameraCoordinator: WorkoutCameraCoordinator
     private let persistence: any WorkoutStoring
     private let cameraView = CameraPreviewView()
     private let overlayView = PoseOverlayView()
@@ -18,12 +19,12 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
     private var lastPose: BodyPose?
     private var lastState: WorkoutViewState?
     private var pendingSaveState: WorkoutSaveState?
-    private var cameraStarted = false
     private var isMessageDismissalInProgress = false
 
     init(viewModel: WorkoutViewModel, camera: CameraService, persistence: any WorkoutStoring) {
         self.viewModel = viewModel
         self.camera = camera
+        cameraCoordinator = WorkoutCameraCoordinator(viewModel: viewModel, camera: camera)
         self.persistence = persistence
         super.init(nibName: nil, bundle: nil)
     }
@@ -33,38 +34,30 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .black
-        cameraView.previewLayer.session = camera.captureSession
+        camera.previewSource?.connect(to: cameraView.previewLayer)
         cameraView.previewLayer.videoGravity = .resizeAspectFill
         configureLayout()
         bindState()
-        camera.onPose = { [weak self] pose in
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                self.lastPose = pose
-                self.overlayView.render(pose, previewLayer: self.cameraView.previewLayer)
-                self.viewModel.process(pose)
-            }
+        cameraCoordinator.onPose = { [weak self] pose in
+            guard let self else { return }
+            self.lastPose = pose
+            self.overlayView.render(pose, previewLayer: self.cameraView.previewLayer)
         }
+        cameraCoordinator.onCameraStateChange = { [weak self] state in
+            guard let self else { return }
+            if state == .running, let connection = self.cameraView.previewLayer.connection,
+               connection.isVideoRotationAngleSupported(90) {
+                connection.videoRotationAngle = 90
+            }
+            self.updateCameraMessage()
+        }
+        viewModel.setCameraReady(false)
     }
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         presentPendingSaveMessage()
-        guard !cameraStarted else { return }
-        cameraStarted = true
-        Task { [weak self] in
-            guard let self else { return }
-            do {
-                try await camera.start()
-                if let connection = cameraView.previewLayer.connection,
-                   connection.isVideoRotationAngleSupported(90) {
-                    connection.videoRotationAngle = 90
-                }
-            } catch {
-                cameraStarted = false
-                presentMessage(title: "Камера недоступна", message: error.localizedDescription)
-            }
-        }
+        cameraCoordinator.startInitially()
     }
 
     override func viewDidLayoutSubviews() {
@@ -202,8 +195,7 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
             restLabel.text = state.isResting ? "Отдых \(state.remainingRestSeconds) сек" : "Цель \(state.targetRepetitions) повторений"
             pauseButton.setTitle(state.isPaused ? "Продолжить" : "Пауза", for: .normal)
             pauseButton.setImage(UIImage(systemName: state.isPaused ? "play.fill" : "pause.fill"), for: .normal)
-            guidanceLabel.isHidden = state.poseDetected
-            pauseButton.isEnabled = !state.isFinished
+            updateCameraMessage()
             finishButton.isEnabled = !state.isFinished
             switch state.saveState {
             case .notSaved:
@@ -216,7 +208,7 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
                 finishButton.setTitle("Повторить", for: .normal)
                 finishButton.isEnabled = true
             }
-            if state.isFinished { camera.stop() }
+            if state.isFinished { cameraCoordinator.stopAfterFinish() }
             if previousSaveState != state.saveState {
                 switch state.saveState {
                 case .saved, .failed:
@@ -229,15 +221,28 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
         }
     }
 
-    private func presentMessage(title: String, message: String) {
-        guard lastState?.isFinished != true,
-              presentedViewController == nil,
-              !isMessageDismissalInProgress else { return }
-        let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "ОК", style: .default) { [weak self] _ in
-            self?.dismissMessage()
-        })
-        present(alert, animated: true)
+    private func updateCameraMessage() {
+        let message: String
+        switch camera.state {
+        case .idle, .starting:
+            message = "Подготовка камеры…"
+        case .requestingPermission:
+            message = "Разрешите доступ к камере для начала тренировки."
+        case .permissionDenied:
+            message = "Разрешите доступ к камере в настройках iPhone, вернитесь и нажмите «Продолжить»."
+        case .interrupted:
+            message = "Камера временно недоступна. Тренировка на паузе."
+        case .failed:
+            message = "Камера временно недоступна. Нажмите «Продолжить» для повтора."
+        case .stopped:
+            message = "Тренировка на паузе. Нажмите «Продолжить»."
+        case .running, .finished:
+            message = "Встаньте боком к камере так, чтобы ноги были видны полностью"
+        }
+        guidanceLabel.text = message
+        guidanceLabel.isHidden = camera.state == .running && lastState?.poseDetected == true
+        pauseButton.isEnabled = lastState?.isFinished != true
+            && camera.state != .requestingPermission && camera.state != .starting
     }
 
     private func presentPendingSaveMessage() {
@@ -293,13 +298,13 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
         navigationController.presentationController?.delegate = self
     }
 
-    @objc private func togglePause() { viewModel.togglePause() }
+    @objc private func togglePause() { cameraCoordinator.togglePause() }
 
     @objc private func finishWorkout() {
         if lastState?.isFinished == true {
             viewModel.retrySave()
         } else {
-            viewModel.finish()
+            cameraCoordinator.finish()
         }
     }
 }

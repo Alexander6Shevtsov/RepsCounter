@@ -4,9 +4,38 @@
 
 Проверена первоначальная версия [`5d81a44`](https://github.com/Alexander6Shevtsov/RepsCounter/commit/5d81a440ca316c669da0a09823c7f057d4914d71), тег [`starter-v0.1.0`](https://github.com/Alexander6Shevtsov/RepsCounter/tree/starter-v0.1.0). Репозиторий публичный, основная ветка — `main`.
 
+## Обновление этапа №5: A02, A06 — 25 октября 2026 года
+
+Ветка `fix/camera-lifecycle` создана от актуальной `main` (`a134e81`, объединённый PR №3). Camera state/разрешения и UIKit изолированы MainActor; `CameraCapture` владеет конфигурацией и start/stop на отдельном serial executor. Vision работает на serial frame queue с прежним ограничением 80 мс. Передаются только Sendable pose-значения; поколение, порядок и возраст результата исключают допуск кадров остановленного/предыдущего запуска. Накопление ограничено newest-only stream и `alwaysDiscardsLateVideoFrames`.
+
+Появились два узких тестовых контракта и coordinator камеры/тренировки. Background, interruption и runtime error вызывают идемпотентную паузу с `resetMovement`; foreground, Settings и interruptionEnded не продолжают тренировку автоматически. Время начинается только после готовности камеры; повторения, отдых, дробная длительность, UUID и повтор сохранения сохраняют прежние гарантии. Finish отменяет ожидающий запуск, задачи потоков и освобождает backend/наблюдателей. Разметка не изменена; русская ошибка отображается в существующей подсказке, повтор — существующей кнопкой.
+
+Фактически выполнено в **Xcode 27.1 (27A9275), Swift 6.4, SDK 27.1**:
+
+| Проверка этапа №5 | Результат |
+|---|---|
+| Debug, generic iOS Simulator, Swift 5 + complete strict concurrency | **BUILD SUCCEEDED** |
+| Release, generic iOS device, Swift 5 + complete strict concurrency | **BUILD SUCCEEDED**, без подписи/установки на iPhone |
+| Swift 6 diagnostic `build-for-testing`, generic Simulator, complete strict concurrency | **TEST BUILD SUCCEEDED** для приложения и XCTest target; настройки проекта не изменены |
+| Полный XCTest, iOS Simulator 18.6 / 26.5 / 27.0 / 27.1 | На каждой версии **90 прошли, 0 ошибок, 0 пропусков**, выполнение в штатном Swift 5 |
+| Состав | 24 camera lifecycle + 12 camera/workout/UI + прежние 54 теста |
+| Регрессии | 12 Core Data, 8 save ViewModel, 19 timing, 10 FSM, 3 геометрии, 2 UIScene сохранены |
+| Конфигурация | Debug/Release plist: iOS 17.0, portrait, SceneDelegate, один UIWindowScene, camera permission, Dark, без storyboard-ключей; Swift 5.0 в проекте |
+| Diff | Core Data/схема, WorkoutSummary, таймерный источник, SquatCounter, PoseAnalyzer, PoseDetector и Info.plist совпадают с main |
+
+Отдельно запущено итоговое приложение на iOS Simulator 27.0: главный экран отображается, недоступность камеры объясняется по-русски, доступны «Продолжить»/«Завершить», активное время остаётся 00:00. Это проверка UI при отсутствии камеры, а не аппаратного захвата.
+
+Новых предупреждений в изменённых компонентах/новых тестах нет. Сохранился deprecated `imageEdgeInsets` в `RepsCounter/Presentation/WorkoutViewController.swift:147` (A11). При диагностической компиляции Swift 6 дополнительно виден warning в неизменённом `RepsCounterTests/WorkoutPersistenceTests.swift:248`: `shouldFail` изменяется после захвата sendable closure. Он не препятствует сборке и в этот этап не исправлялся. Также Xcode пишет служебное сообщение об отсутствии AppIntents dependency; AppIntents не используется. Ошибок Swift 6 по камере больше нет. Запуск тестов в Swift 6 отдельно не выполнялся.
+
+36 новых регрессий проверяют grant/denial/Settings, дубли start, stop/cancel/finish при ожидающем разрешении и старте, start → stop → start, background/foreground без resume, interruption/end, runtime failure/retry, предыдущие/старые/переставленные результаты, сохранение повторений/отдыха/точной длительности и UUID, русское сообщение, потоки, освобождение объектов и удаление реальных NotificationCenter observers без открытия камеры. Ожидания основаны на управляемых continuation и времени; `Task.sleep` для новых временных сценариев не используется.
+
+Единственный `@unchecked Sendable` — ограниченный preview bridge с приватной immutable ссылкой на session. Он присоединяет UIKit layer на MainActor до первого запуска и не предоставляет управление сессией. Все session operations принадлежат actor. Необходимость SDK-границы, lock confinement и ограничения отмены описаны в [CAMERA_LIFECYCLE.md](CAMERA_LIFECYCLE.md). Полное соответствие видеопотока и preview на hardware модульными тестами не доказано.
+
+Системный permission prompt и уже начавшийся синхронный `startRunning` нельзя физически прервать Swift Task cancellation: поздний ответ отбрасывается, а начавшийся вызов останавливается после возврата SDK, не допуская готовность/кадры в завершённую тренировку. Требуется измерение этой задержки на iPhone. Runtime iOS 17 недоступен; физическая камера, реальные interruptions/media services reset, длительное профилирование, точность Vision и accessibility нового текста не проверены. Несохранённый итог по-прежнему живёт только в памяти процесса. Статус A02/A06 — **реализованы в ветке, требуют ревью и аппаратной проверки A06**. Merge не выполнен; следующий этап не начат.
+
 ## Обновление этапа №4: A05, A10 — 25 октября 2026 года
 
-Ветка `fix/workout-timing` создана от `main` (`6c9474b`) после объединения PR №2 с исправлениями A03/A04/A09. Статус ветки — **не объединена**; результаты проверок этого этапа фиксируются отдельно. Таблицы 8/10/29 тестов ниже сохраняют исторические результаты предыдущих версий.
+Ветка `fix/workout-timing` создана от `main` (`6c9474b`) после объединения PR №2 с исправлениями A03/A04/A09. Изменения объединены через [PR №3](https://github.com/Alexander6Shevtsov/RepsCounter/pull/3), `main` — `a134e81`. Ниже сохранены результаты проверок исходного кода этого этапа. Таблицы 8/10/29 тестов ниже сохраняют исторические результаты предыдущих версий.
 
 Фактически проверено в **Xcode 27.1 (27A9275), Swift 6.4, SDK 27.1**, штатный Swift language mode 5:
 
@@ -31,7 +60,7 @@
 
 Повторяющийся Timer заменён отменяемой задачей со слабым захватом модели и проверкой отмены после `await`. Она отменяется при паузе, завершении и освобождении ViewModel. Итоговая длительность и UUID-сводка замораживаются при finish и не меняются при повторе сохранения. Зафиксирована семантика `sets`: завершённые подходы плюс непустой текущий частичный подход, не больше цели.
 
-Изменения Core Data, схемы, камеры и разметки в этап №4 не входят. Автоматическая пауза при уходе в фон или прерывании камеры не реализована — это остаётся A06. Несохранённый результат по-прежнему существует только в памяти процесса. Runtime iOS 17 и физический iPhone недоступны для проверки. Подробности: [архитектура](ARCHITECTURE.md) и [план](NEXT_TASKS.md).
+Изменения Core Data, схемы, камеры и разметки в этап №4 не входят. На этапе №4 автоматическая пауза при уходе в фон или прерывании камеры ещё не была реализована; A06 описан в обновлении этапа №5. Несохранённый результат по-прежнему существует только в памяти процесса. Runtime iOS 17 и физический iPhone недоступны для проверки. Подробности: [архитектура](ARCHITECTURE.md) и [план](NEXT_TASKS.md).
 
 ## Обновление этапа №3: A03, A04, A09 — 25 октября 2026 года
 
@@ -177,6 +206,8 @@ Application failed to launch: UIScene life cycle is required for apps built with
 
 ### A02 · P2 · Границы изоляции камеры не проходят Swift 6
 
+**Обновление:** исправлено в `fix/camera-lifecycle`; диагностическая Swift 6 компиляция приложения и тестов проходит. Ниже — исходное замечание. Обоснование concurrency: [CAMERA_LIFECYCLE.md](CAMERA_LIFECYCLE.md).
+
 **Место:** `Services/CameraService.swift:19–26,40–55`, `Presentation/WorkoutViewController.swift:54` (здесь и далее Swift-пути относительно `RepsCounter/`).
 
 Swift 5 strict build предупреждает о захвате non-Sendable `self` в `sessionQueue.async` и передаче `self.camera` из MainActor. Отдельная диагностическая сборка в Swift 6 действительно падает на строке 54. Текущая Swift 5 сборка успешна; фактическая гонка данных в приложении не воспроизводилась.
@@ -216,6 +247,8 @@ Swift 5 strict build предупреждает о захвате non-Sendable `
 **Рекомендация:** единый источник времени, заморозка остатка отдыха, сброс незавершённого движения с сохранением уже засчитанных повторений; XCTest на паузу в каждой фазе и во время отдыха.
 
 ### A06 · P2 · Жизненный цикл камеры и прерывания не обработаны
+
+**Обновление:** управляющая логика исправлена и проверена mock-тестами в `fix/camera-lifecycle`. Аппаратная проверка разрешений, прерываний и SDK stop/start остаётся открытой. Ниже — исходное замечание.
 
 **Место:** `Services/CameraService.swift:28–57`, `Presentation/WorkoutViewController.swift:47–64`, `App/AppDelegate.swift:7–28`.
 
