@@ -1,11 +1,11 @@
 import CoreGraphics
 
-struct JointPoint {
+struct JointPoint: Sendable {
     let location: CGPoint
     let confidence: Float
 }
 
-enum BodyJoint: CaseIterable, Hashable {
+enum BodyJoint: CaseIterable, Hashable, Sendable {
     case leftShoulder
     case rightShoulder
     case leftElbow
@@ -20,7 +20,7 @@ enum BodyJoint: CaseIterable, Hashable {
     case rightAnkle
 }
 
-struct BodyPose {
+struct BodyPose: Sendable {
     let joints: [BodyJoint: JointPoint]
     let aspectRatio: CGFloat
 
