@@ -1,3 +1,10 @@
+//
+//  WorkoutViewModel.swift
+//  RepsCounter
+//
+//  Maintainer: Alexander Shevtsov
+//  Copyright © 2026 Alexander Shevtsov.
+
 import Foundation
 
 enum WorkoutSaveState: Equatable {

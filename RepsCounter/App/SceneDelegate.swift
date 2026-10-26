@@ -1,3 +1,10 @@
+//
+//  SceneDelegate.swift
+//  RepsCounter
+//
+//  Maintainer: Alexander Shevtsov
+//  Copyright © 2026 Alexander Shevtsov.
+
 import UIKit
 
 final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
