@@ -1,3 +1,10 @@
+//
+//  CameraService.swift
+//  RepsCounter
+//
+//  Maintainer: Alexander Shevtsov
+//  Copyright © 2026 Alexander Shevtsov.
+
 import Foundation
 
 enum CameraState: Equatable {
@@ -13,7 +20,7 @@ enum CameraState: Equatable {
 }
 
 @MainActor
-final class CameraService {
+final class CameraService: Sendable {
     enum CameraError: LocalizedError {
         case cameraUnavailable
         case configurationFailed

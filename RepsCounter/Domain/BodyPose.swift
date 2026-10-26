@@ -1,3 +1,10 @@
+//
+//  BodyPose.swift
+//  RepsCounter
+//
+//  Maintainer: Alexander Shevtsov
+//  Copyright © 2026 Alexander Shevtsov.
+
 import CoreGraphics
 
 struct JointPoint: Sendable {

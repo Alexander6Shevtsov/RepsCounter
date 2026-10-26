@@ -1,3 +1,10 @@
+//
+//  SceneLifecycleTests.swift
+//  RepsCounter
+//
+//  Maintainer: Alexander Shevtsov
+//  Copyright © 2026 Alexander Shevtsov.
+
 import UIKit
 import XCTest
 @testable import RepsCounter

@@ -1,3 +1,10 @@
+//
+//  WorkoutViewController.swift
+//  RepsCounter
+//
+//  Maintainer: Alexander Shevtsov
+//  Copyright © 2026 Alexander Shevtsov.
+
 import AVFoundation
 import UIKit
 
@@ -142,9 +149,17 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
         finishButton.titleLabel?.font = .preferredFont(forTextStyle: .headline)
         finishButton.addTarget(self, action: #selector(finishWorkout), for: .touchUpInside)
         for button in [pauseButton, finishButton] {
-            button.configuration = nil
+            var configuration = UIButton.Configuration.plain()
+            configuration.imagePadding = 12
+            configuration.baseForegroundColor = .white
+            configuration.contentInsets = .zero
+            configuration.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { attributes in
+                var updatedAttributes = attributes
+                updatedAttributes.font = .preferredFont(forTextStyle: .headline)
+                return updatedAttributes
+            }
+            button.configuration = configuration
             button.semanticContentAttribute = .forceLeftToRight
-            button.imageEdgeInsets.right = 12
             button.translatesAutoresizingMaskIntoConstraints = false
             button.heightAnchor.constraint(greaterThanOrEqualToConstant: 68).isActive = true
         }
