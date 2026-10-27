@@ -56,17 +56,21 @@ final class SquatDiagnosticsView: UIVisualEffectView {
         case .standing: phaseName = "standing — стоя"
         case .lowered: phaseName = "lowered — внизу"
         }
-        let measuredAngle = analysis?.smoothedAngle
-        let loweredCondition = measuredAngle.map { $0 <= diagnostics.loweredThreshold }
-        let standingCondition = measuredAngle.map { $0 >= diagnostics.standingThreshold }
+        let measuredAngle = analysis?.measuredAngle
+        let smoothedAngle = analysis?.smoothedAngle
+        let loweredCondition = smoothedAngle.map { $0 <= diagnostics.loweredThreshold }
+        let standingCondition = smoothedAngle.map { $0 >= diagnostics.standingThreshold }
+        let rawLoweredCondition = measuredAngle.map { $0 <= diagnostics.loweredThreshold }
+        let rawStandingCondition = measuredAngle.map { $0 >= diagnostics.standingThreshold }
         let lines = [
             "ДИАГНОСТИКА · DEBUG · confidence ≥ 0.50",
             measurementText("Левая", measurement: analysis?.leftMeasurement),
             measurementText("Правая", measurement: analysis?.rightMeasurement),
-            "Нога: \(selectedName) · raw \(angleText(analysis?.measuredAngle)) · EMA \(angleText(measuredAngle))",
+            "Нога: \(selectedName) · raw \(angleText(analysis?.measuredAngle)) · EMA \(angleText(smoothedAngle))",
             "Фаза: \(phaseName)",
+            "raw ≤ \(Int(diagnostics.loweredThreshold))°: \(conditionText(rawLoweredCondition)) · ≥ \(Int(diagnostics.standingThreshold))°: \(conditionText(rawStandingCondition))",
             "EMA ≤ \(Int(diagnostics.loweredThreshold))°: \(conditionText(loweredCondition)) · ≥ \(Int(diagnostics.standingThreshold))°: \(conditionText(standingCondition))",
-            "Последовательные кадры: \(diagnostics.consecutiveFrames)/\(diagnostics.requiredFrames)",
+            "Кадры raw подряд: \(diagnostics.consecutiveFrames)/\(diagnostics.requiredFrames)",
             "Результат: \(decisionText(diagnostics))"
         ]
         textLabel.text = lines.joined(separator: "\n")
@@ -114,13 +118,16 @@ final class SquatDiagnosticsView: UIVisualEffectView {
         }
         switch diagnostics.decision {
         case .awaitingStanding: return "нужно исходное положение ≥160°"
-        case .confirmingStanding: return "недостаточно кадров исходного положения"
+        case .confirmingStanding: return "недостаточно raw-кадров исходного положения"
+        case .awaitingStandingSmoothing: return "raw стоя подтверждено; EMA ещё <160°"
         case .standingConfirmed: return "стоя подтверждено; ожидается полный присед"
         case .awaitingDepth: return "глубина ≤105° не достигнута"
-        case .confirmingDepth: return "недостаточно кадров глубины ≤105°"
+        case .confirmingDepth: return "недостаточно raw-кадров глубины ≤105°"
+        case .awaitingDepthSmoothing: return "raw глубина подтверждена; EMA ещё >105°"
         case .loweredConfirmed: return "глубина подтверждена; нужно вернуться стоя"
         case .awaitingReturn: return "возврат ≥160° не достигнут"
-        case .confirmingReturn: return "недостаточно кадров возврата ≥160°"
+        case .confirmingReturn: return "недостаточно raw-кадров возврата ≥160°"
+        case .awaitingReturnSmoothing: return "raw возврат подтверждён; EMA ещё <160°"
         case .repetitionCounted: return "повторение засчитано"
         case .invalidMeasurement: return "нет надёжного угла; движение сброшено, нужно стоя"
         }

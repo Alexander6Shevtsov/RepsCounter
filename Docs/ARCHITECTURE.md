@@ -63,18 +63,20 @@ Use visible hip, knee and ankle joint landmarks. Require finite confidence in [0
 Finite-state machine:
 
 ```text
-SEEKING_STANDING --3 frames angle >=160--> STANDING
-STANDING         --3 frames angle <=105--> LOWERED
-LOWERED          --3 frames angle >=160--> STANDING + 1 repetition
+SEEKING_STANDING --3 consecutive raw >=160 AND current EMA >=160--> STANDING
+STANDING         --3 consecutive raw <=105 AND current EMA <=105--> LOWERED
+LOWERED          --3 consecutive raw >=160 AND current EMA >=160--> STANDING + 1 repetition
 ```
 
 Angles between thresholds break the current confirmation sequence. A missing/invalid measurement immediately clears unfinished movement while preserving completed repetitions. A change of analyzed leg also resets EMA and movement; observations from different legs cannot complete one repetition. Thresholds, confidence cutoff, EMA coefficient and three-frame confirmation are unchanged and remain prototype assumptions.
+
+Following user-reported iPhone 15 Pro confidence/angle checkpoints, raw stability and current EMA are evaluated together. The counter accumulates three reliable raw observations while EMA catches up, without waiting for another three filtered observations afterwards. Current raw must still satisfy the threshold, preventing an EMA tail from confirming a position that is no longer observed. Invalid raw or EMA resets movement; there is no low-confidence grace period. Synthetic before/after probes reproduce both a delayed missed cycle and a false cycle from only two raw outliers. Hardware precision/recall of the revised temporal criterion remains unverified.
 
 The ViewModel uses the existing injected monotonic clock to check continuity before processing a pose and during time refresh. A gap over 250 ms between valid delivered poses clears tracking and requires standing again. This is a conservative continuity policy, not a biomechanical threshold. Its duration matches the camera's existing age budget, but frame age and delivery interval are distinct checks. Low effective frame rates can increase missed repetitions and require hardware evaluation. Workout duration/rest and immutable save summaries are unchanged.
 
 ### Debug diagnostics
 
-`SquatDiagnostics` is a MainActor-published value assembled from analyzer/counter state. `SquatDiagnosticsView` renders both raw leg angles, six confidence values, selected leg, EMA, phase, thresholds, consecutive observations and a decision/reset reason. The controller subscribes weakly and renders only while the panel is enabled. Debug-only layout reserves a scrollable right column and separate space for workout metrics/controls; disabling it restores the normal layout. The panel, controls, snapshot and callback compile only under `#if DEBUG`; the project sets the condition only for Debug.
+`SquatDiagnostics` is a MainActor-published value assembled from analyzer/counter state. `SquatDiagnosticsView` renders both raw leg angles, six confidence values, selected leg, EMA, phase, separate raw/EMA threshold conditions, consecutive raw observations and a decision/reset reason. The controller subscribes weakly and renders only while the panel is enabled. Debug-only layout reserves a scrollable right column and separate space for workout metrics/controls; disabling it restores the normal layout. The panel, controls, snapshot and callback compile only under `#if DEBUG`; the project sets the condition only for Debug.
 
 No camera images, video, pose time series or diagnostic files are stored. Missing data is displayed explicitly rather than treated as depth. Unit tests use synthetic points and controlled time; they do not measure real Vision accuracy. Front-facing body depth is not generally observable from the current 2D angle, even with a correct overlay. A separately proposed `VNDetectHumanBodyPose3DRequest` experiment is documented but not implemented in [SQUAT_DIAGNOSTICS.md](SQUAT_DIAGNOSTICS.md).
 

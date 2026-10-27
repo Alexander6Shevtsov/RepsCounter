@@ -74,7 +74,9 @@ The `feature/squat-diagnostics` branch adds a user-toggleable **Debug-only** pan
 
 Initial leg selection uses the weakest joint confidence and retains that leg while valid. A leg change resets EMA and unfinished movement. Missing/invalid measurements or a delivery gap over 250 ms require fresh standing confirmation while preserving counted repetitions. Thresholds 105°/160°, confidence 0.5, EMA alpha 0.35 and three-frame confirmation are unchanged. The continuity timeout is conservative and may reduce recall at low frame rates.
 
-A correct 2D skeleton cannot establish squat depth from every front-facing body angle. Synthetic projections demonstrate this limitation; physical accuracy remains unverified. Debug, unsigned Release and Swift 6 diagnostic builds succeeded; **171 XCTest passed on each iOS Simulator 18.6, 26.5, 27.0 and 27.1** (133 existing + 38 new). A separate Release UIKit test passed and confirmed the diagnostic controls are absent. XCTest execution used Swift 5; Swift 6 checked compilation only. See [diagnostics, warnings, confirmed defects, iPhone protocol and the separate proposed 3D experiment](Docs/SQUAT_DIAGNOSTICS.md). Status remains **In Development**.
+Follow-up within PR #7 uses three consecutive reliable raw observations plus the current EMA threshold, replacing the extra three-frame wait after EMA crosses. This also prevents an EMA tail alone from confirming depth. Hip-confidence dips 0.39/0.44 or 0.49/0.48 still invalidate the cycle; no gap bridging or lower thresholds are introduced. The reported device checkpoints are sparse observations, not a reconstructed frame trace. Revised hardware accuracy requires retesting.
+
+A correct 2D skeleton cannot establish squat depth from every front-facing body angle. Synthetic projections demonstrate this limitation; physical accuracy remains unverified. Debug, unsigned Release and Swift 6 diagnostic builds succeeded; **189 XCTest passed on each iOS Simulator 18.6, 26.5, 27.0 and 27.1** (171 from the initial PR #7 version + 18 follow-up regressions). A separate Release UIKit test passed and confirmed the diagnostic controls are absent. XCTest execution used Swift 5; Swift 6 checked compilation only. See [diagnostics, warnings, confirmed defects, iPhone protocol and the separate proposed 3D experiment](Docs/SQUAT_DIAGNOSTICS.md). Status remains **In Development**.
 
 ![RepsCounter interface — design concept, not a working application screenshot](Docs/Concept.png)
 
@@ -116,7 +118,7 @@ The main engineering challenge is translating noisy, low-confidence 2D joint mea
 2. Vision returns a set of joint points with confidence values.
 3. Geometry computes the knee angle from hip, knee, and ankle (side view).
 4. Exponential smoothing stabilizes the angle estimate.
-5. The deterministic counter transitions: `seekingStanding` → `standing` → `lowered` → `standing`.
+5. Each transition requires three consecutive reliable raw angles and the current EMA to satisfy the same threshold. The deterministic counter transitions: `seekingStanding` → `standing` → `lowered` → `standing`.
 6. Only the last transition counts one complete repetition.
 
 Prototype thresholds: standing ≥160°, lowered ≤105°, with 3 consecutive frames per phase. The thresholds are **initial assumptions**, not validated biomechanical criteria. Any missing/invalid measurement or change of analyzed leg resets unfinished movement; standing must be confirmed again. The ViewModel also resets tracking after a delivery gap over 250 ms.

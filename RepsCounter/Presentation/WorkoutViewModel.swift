@@ -127,7 +127,7 @@ final class WorkoutViewModel {
         }
         #endif
 
-        let counted = counter.process(angle: analysis.smoothedAngle)
+        let counted = counter.process(measuredAngle: analysis.measuredAngle, smoothedAngle: analysis.smoothedAngle)
         #if DEBUG
         if counter.phase != .seekingStanding { trackingReset = nil }
         #endif

@@ -193,7 +193,7 @@ final class SquatDiagnosticsTests: XCTestCase {
         XCTAssertTrue(label.text?.contains("Правая: 165.0°") == true)
         XCTAssertTrue(label.text?.contains("Нога: правая") == true)
         XCTAssertTrue(label.text?.contains("≥ 160°: да") == true)
-        XCTAssertTrue(label.text?.contains("Последовательные кадры: 1/3") == true)
+        XCTAssertTrue(label.text?.contains("Кадры raw подряд: 1/3") == true)
         XCTAssertTrue(label.adjustsFontForContentSizeCategory)
     }
 
@@ -206,7 +206,7 @@ final class SquatDiagnosticsTests: XCTestCase {
         let filtered = try XCTUnwrap(fixture.viewModel.latestDiagnostics)
         XCTAssertEqual(filtered.analysis?.measuredAngle ?? 0, 90, accuracy: 0.001)
         XCTAssertGreaterThan(filtered.analysis?.smoothedAngle ?? 0, 105)
-        XCTAssertEqual(filtered.decision, .awaitingDepth)
+        XCTAssertEqual(filtered.decision, .confirmingDepth)
         fixture.viewModel.process(SquatPoseFixture.pose(leftAngle: 90, leftConfidence: 0.2))
         let rejected = try XCTUnwrap(fixture.viewModel.latestDiagnostics)
         XCTAssertEqual(rejected.decision, .invalidMeasurement)
@@ -262,6 +262,24 @@ final class SquatDiagnosticsTests: XCTestCase {
         XCTAssertEqual(fixture.viewModel.latestDiagnostics?.status, .finished)
         fixture.feed(SquatPoseFixture.pose(leftAngle: 170))
         XCTAssertEqual(fixture.state?.totalRepetitions, 12)
+    }
+    @MainActor
+    func testDiagnosticsSeparateRawConfirmationFromEMADelay() throws {
+        let fixture = SquatTrackingFixture()
+        defer { fixture.viewModel.finish() }
+        fixture.feed(SquatPoseFixture.pose(leftAngle: 170))
+        fixture.feed(SquatPoseFixture.pose(leftAngle: 110), frames: 48)
+        fixture.feed(SquatPoseFixture.pose(leftAngle: 104), frames: 3)
+        let diagnostics = try XCTUnwrap(fixture.viewModel.latestDiagnostics)
+        XCTAssertEqual(diagnostics.consecutiveFrames, 3)
+        XCTAssertEqual(diagnostics.decision, .awaitingDepthSmoothing)
+        let panel = SquatDiagnosticsView()
+        panel.render(diagnostics)
+        let label = try XCTUnwrap(allSubviews(in: panel).first { $0.accessibilityIdentifier == "squatDiagnosticsText" } as? UILabel)
+        XCTAssertTrue(label.text?.contains("raw ≤ 105°: да") == true)
+        XCTAssertTrue(label.text?.contains("EMA ≤ 105°: нет") == true)
+        XCTAssertTrue(label.text?.contains("Кадры raw подряд: 3/3") == true)
+        XCTAssertTrue(label.text?.contains("EMA ещё >105°") == true)
     }
     #endif
 
