@@ -72,6 +72,8 @@ Angles between thresholds break the current confirmation sequence. A missing/inv
 
 Following user-reported iPhone 15 Pro confidence/angle checkpoints, raw stability and current EMA are evaluated together. The counter accumulates three reliable raw observations while EMA catches up, without waiting for another three filtered observations afterwards. Current raw must still satisfy the threshold, preventing an EMA tail from confirming a position that is no longer observed. Invalid raw or EMA resets movement; there is no low-confidence grace period. Synthetic before/after probes reproduce both a delayed missed cycle and a false cycle from only two raw outliers. Hardware precision/recall of the revised temporal criterion remains unverified.
 
+Subsequent user footage confirms FP-001: a manually partial movement supplies sustained accepted 2D depth and a valid return, so the FSM emits one event without violating its input contract. A knee-angle proxy does not establish physical squat depth; 2D projection is not injective, and confidence does not bound landmark error. The screen overlay hides the selected hip, so Vision error cannot be isolated from feature/semantic limitations. No production workaround is added. The strict expected-failure regression and [paired 2D/3D evaluation proposal](SQUAT_DEPTH_VALIDATION.md) keep the limitation open; 3D is not implemented.
+
 The ViewModel uses the existing injected monotonic clock to check continuity before processing a pose and during time refresh. A gap over 250 ms between valid delivered poses clears tracking and requires standing again. This is a conservative continuity policy, not a biomechanical threshold. Its duration matches the camera's existing age budget, but frame age and delivery interval are distinct checks. Low effective frame rates can increase missed repetitions and require hardware evaluation. Workout duration/rest and immutable save summaries are unchanged.
 
 ### Debug diagnostics
@@ -104,7 +106,7 @@ The finished workout snapshot is retained separately from `.notSaved`, `.saving`
 - No push-up recognition or multi-person tracking.
 - No background workout mode; foreground camera only.
 - An unsaved finished summary exists only in the current process; no draft recovery after force quitting.
-- Confidence is not an anatomical-angle accuracy estimate; the selected valid leg is retained, but 2D projection can still hide squat depth.
+- Confidence is not an anatomical-angle accuracy estimate; 2D projection can hide depth or accept a manually partial movement. FP-001 is confirmed and unresolved.
 - Any unreliable measurement, leg change or observation gap over 250 ms intentionally invalidates a partially completed squat; low frame rates may reduce recall.
 - Camera/overlay transform and sensor thermal performance are unverified.
 - Unit tests cover pure counting logic but no automated video-fixture integration tests yet.
