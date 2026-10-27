@@ -39,6 +39,19 @@ struct CameraFrame: Sendable {
     let generation: UInt64
     let pose: BodyPose?
     let capturedAt: ContinuousClock.Instant
+    let position: CameraPosition
+    let rotationAngle: CGFloat
+
+    init(
+        generation: UInt64, pose: BodyPose?, capturedAt: ContinuousClock.Instant,
+        position: CameraPosition = .front, rotationAngle: CGFloat = 90
+    ) {
+        self.generation = generation
+        self.pose = pose
+        self.capturedAt = capturedAt
+        self.position = position
+        self.rotationAngle = rotationAngle
+    }
 }
 
 enum CameraSessionEvent: Sendable, Equatable {
@@ -51,7 +64,7 @@ protocol CameraCapturing: Sendable {
     var frames: AsyncStream<CameraFrame> { get }
     var events: AsyncStream<CameraSessionEvent> { get }
     var previewSource: CameraPreviewSource? { get }
-    func start(generation: UInt64) async throws
+    func start(generation: UInt64, position: CameraPosition) async throws -> CameraConfiguration
     func stop(generation: UInt64) async
     func shutdown() async
 }
@@ -115,11 +128,18 @@ private final class CameraFrameProcessor: NSObject, AVCaptureVideoDataOutputSamp
     }
 
     private let generation: UInt64
+    private let position: CameraPosition
+    private let rotationAngle: CGFloat
     private let continuation: AsyncStream<CameraFrame>.Continuation
     private let processing = OSAllocatedUnfairLock(uncheckedState: FrameState())
 
-    init(generation: UInt64, continuation: AsyncStream<CameraFrame>.Continuation) {
+    init(
+        generation: UInt64, position: CameraPosition, rotationAngle: CGFloat,
+        continuation: AsyncStream<CameraFrame>.Continuation
+    ) {
         self.generation = generation
+        self.position = position
+        self.rotationAngle = rotationAngle
         self.continuation = continuation
     }
 
@@ -135,8 +155,11 @@ private final class CameraFrameProcessor: NSObject, AVCaptureVideoDataOutputSamp
                previousTime.duration(to: capturedAt) < .milliseconds(80) { return }
             state.previousAnalysisTime = capturedAt
             guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
-            let pose = state.detector.detect(pixelBuffer: pixelBuffer)
-            continuation.yield(CameraFrame(generation: generation, pose: pose, capturedAt: capturedAt))
+            let pose = state.detector.detect(pixelBuffer: pixelBuffer, rotationAngle: rotationAngle)
+            continuation.yield(CameraFrame(
+                generation: generation, pose: pose, capturedAt: capturedAt,
+                position: position, rotationAngle: rotationAngle
+            ))
         }
     }
 }
@@ -154,6 +177,8 @@ actor CameraCapture: CameraCapturing {
     private let eventContinuation: AsyncStream<CameraSessionEvent>.Continuation
     private let notifications: CameraSessionNotifications
     private var output: AVCaptureVideoDataOutput?
+    private var cameraInput: AVCaptureDeviceInput?
+    private var cameraPosition: CameraPosition?
     private var processor: CameraFrameProcessor?
     private var latestGeneration: UInt64 = 0
     private var isShutdown = false
@@ -171,24 +196,36 @@ actor CameraCapture: CameraCapturing {
         notifications = CameraSessionNotifications(session: session, center: .default, continuation: eventStream.continuation)
     }
 
-    func start(generation: UInt64) throws {
+    func start(generation: UInt64, position: CameraPosition) throws -> CameraConfiguration {
         try Task.checkCancellation()
         guard !isShutdown, generation >= latestGeneration else { throw CancellationError() }
         latestGeneration = generation
-        if output == nil { try configure() }
-        try Task.checkCancellation()
-        if !session.isRunning { session.startRunning() }
+        let requiresConfiguration = cameraPosition != position || cameraInput == nil || output == nil
+        if requiresConfiguration { stopSession() }
         do {
+            let rotationAngle: CGFloat
+            if requiresConfiguration { rotationAngle = try configure(position: position) }
+            else { rotationAngle = try configureVideoConnection() }
+            try Task.checkCancellation()
+            if !session.isRunning { session.startRunning() }
             try Task.checkCancellation()
             guard session.isRunning else { throw CameraService.CameraError.cameraUnavailable }
+            processor?.invalidate()
+            output?.setSampleBufferDelegate(nil, queue: nil)
+            frameQueue.sync {}
+            try Task.checkCancellation()
+            let processor = CameraFrameProcessor(
+                generation: generation, position: position, rotationAngle: rotationAngle,
+                continuation: frameContinuation
+            )
+            self.processor = processor
+            output?.setSampleBufferDelegate(processor, queue: frameQueue)
+            try Task.checkCancellation()
+            return CameraConfiguration(position: position, rotationAngle: rotationAngle)
         } catch {
-            if session.isRunning { session.stopRunning() }
+            stopSession()
             throw error
         }
-        processor?.invalidate()
-        let processor = CameraFrameProcessor(generation: generation, continuation: frameContinuation)
-        self.processor = processor
-        output?.setSampleBufferDelegate(processor, queue: frameQueue)
     }
 
     func stop(generation: UInt64) {
@@ -211,23 +248,96 @@ actor CameraCapture: CameraCapturing {
         output?.setSampleBufferDelegate(nil, queue: nil)
         processor = nil
         if session.isRunning { session.stopRunning() }
+        frameQueue.sync {}
     }
 
-    private func configure() throws {
-        guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) else {
+    private func configure(position: CameraPosition) throws -> CGFloat {
+        let devicePosition: AVCaptureDevice.Position = position == .front ? .front : .back
+        guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: devicePosition) else {
             throw CameraService.CameraError.cameraUnavailable
         }
-        let input = try AVCaptureDeviceInput(device: device)
-        let output = AVCaptureVideoDataOutput()
-        output.alwaysDiscardsLateVideoFrames = true
+        let replacementInput = try AVCaptureDeviceInput(device: device)
+        try Task.checkCancellation()
+        let previousInput = cameraInput
+        let previousPosition = cameraPosition
+        let previousOutput = output
+        try replaceInput(replacementInput, position: position)
+        do {
+            return try configureVideoConnection()
+        } catch {
+            session.beginConfiguration()
+            if let cameraInput { session.removeInput(cameraInput) }
+            if previousOutput == nil, let output { session.removeOutput(output) }
+            output = previousOutput
+            restoreInput(previousInput, position: previousPosition)
+            session.commitConfiguration()
+            throw error
+        }
+    }
+
+    private func replaceInput(_ replacementInput: AVCaptureDeviceInput, position: CameraPosition) throws {
+        let previousInput = cameraInput
+        let previousPosition = cameraPosition
+        let candidateOutput = output ?? AVCaptureVideoDataOutput()
+        candidateOutput.alwaysDiscardsLateVideoFrames = true
         session.beginConfiguration()
         defer { session.commitConfiguration() }
         session.sessionPreset = .hd1280x720
-        guard session.canAddInput(input), session.canAddOutput(output) else {
+        if let previousInput { session.removeInput(previousInput) }
+        cameraInput = nil
+        cameraPosition = nil
+        guard session.canAddInput(replacementInput), output != nil || session.canAddOutput(candidateOutput) else {
+            restoreInput(previousInput, position: previousPosition)
             throw CameraService.CameraError.configurationFailed
         }
-        session.addInput(input)
-        session.addOutput(output)
-        self.output = output
+        session.addInput(replacementInput)
+        if output == nil { session.addOutput(candidateOutput) }
+        cameraInput = replacementInput
+        cameraPosition = position
+        output = candidateOutput
+    }
+
+    private func restoreInput(_ previousInput: AVCaptureDeviceInput?, position: CameraPosition?) {
+        cameraInput = nil
+        cameraPosition = nil
+        guard let previousInput, let position, session.canAddInput(previousInput) else { return }
+        session.addInput(previousInput)
+        cameraInput = previousInput
+        cameraPosition = position
+    }
+
+    private func configureVideoConnection() throws -> CGFloat {
+        guard let connection = output?.connection(with: .video), let cameraInput else {
+            throw CameraService.CameraError.configurationFailed
+        }
+        let requestedAngle: CGFloat
+        if #available(iOS 27.0, *) {
+            let coordinator = AVCaptureDevice.RotationCoordinator(device: cameraInput.device, previewLayer: nil)
+            requestedAngle = coordinator.videoRotationAngleRelative(toDeviceOrientation: .portrait)
+        } else {
+            requestedAngle = try legacyPortraitAngle(connection: connection)
+        }
+        guard requestedAngle.isFinite else { throw CameraService.CameraError.configurationFailed }
+        let remainder = requestedAngle.truncatingRemainder(dividingBy: 360)
+        let normalized = remainder < 0 ? remainder + 360 : remainder
+        let quarterTurn = (normalized / 90).rounded() * 90
+        let rotationAngle = quarterTurn.truncatingRemainder(dividingBy: 360)
+        guard abs(normalized - quarterTurn) < 0.001,
+              connection.isVideoRotationAngleSupported(rotationAngle) else {
+            throw CameraService.CameraError.configurationFailed
+        }
+        connection.videoRotationAngle = rotationAngle
+        if connection.isVideoMirroringSupported {
+            connection.automaticallyAdjustsVideoMirroring = false
+            connection.isVideoMirrored = false
+        }
+        return rotationAngle
+    }
+
+    @available(iOS, introduced: 17.0, deprecated: 17.0, obsoleted: 27.0, message: "Fixed-portrait compatibility for iOS 17–26; static device-relative rotation requires iOS 27.")
+    private func legacyPortraitAngle(connection: AVCaptureConnection) throws -> CGFloat {
+        guard connection.isVideoOrientationSupported else { throw CameraService.CameraError.configurationFailed }
+        connection.videoOrientation = .portrait
+        return connection.videoRotationAngle
     }
 }

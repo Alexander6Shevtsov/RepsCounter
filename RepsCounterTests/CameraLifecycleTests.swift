@@ -395,8 +395,8 @@ final class CameraFixture {
         camera = CameraService(permission: permission, capture: capture, frameTime: { frameTime })
     }
 
-    func frame(generation: UInt64, offset: Duration = .zero, pose: BodyPose? = nil) -> CameraFrame {
-        CameraFrame(generation: generation, pose: pose, capturedAt: currentFrameTime.advanced(by: offset))
+    func frame(generation: UInt64, offset: Duration = .zero, pose: BodyPose? = nil, position: CameraPosition = .front, rotationAngle: CGFloat = 90) -> CameraFrame {
+        CameraFrame(generation: generation, pose: pose, capturedAt: currentFrameTime.advanced(by: offset), position: position, rotationAngle: rotationAngle)
     }
 }
 
@@ -435,6 +435,9 @@ final class ControlledCameraPermission: CameraAuthorizing {
 actor ControlledCameraCapture: CameraCapturing {
     struct Snapshot: Sendable {
         let starts: [UInt64]
+        let positions: [CameraPosition]
+        let position: CameraPosition
+        let rotationAngle: CGFloat
         let generation: UInt64
         let isRunning: Bool
         let shutdownCount: Int
@@ -447,7 +450,16 @@ actor ControlledCameraCapture: CameraCapturing {
     nonisolated let eventContinuation: AsyncStream<CameraSessionEvent>.Continuation
     private nonisolated let generationState = OSAllocatedUnfairLock(initialState: UInt64(0))
     nonisolated var currentGeneration: UInt64 { generationState.withLock { $0 } }
+    private nonisolated let positionState = OSAllocatedUnfairLock(initialState: CameraPosition.front)
+    nonisolated var currentPosition: CameraPosition { positionState.withLock { $0 } }
     private var starts: [UInt64] = []
+    private var positions: [CameraPosition] = []
+    private var position: CameraPosition = .front
+    private var rotationAngle: CGFloat = 90
+    private var frontRotationAngle: CGFloat = 90
+    private var backRotationAngle: CGFloat = 90
+    private nonisolated let rotationState = OSAllocatedUnfairLock(initialState: CGFloat(90))
+    nonisolated var currentRotationAngle: CGFloat { rotationState.withLock { $0 } }
     private var generation: UInt64 = 0
     private var isRunning = false
     private var shutdownCount = 0
@@ -466,11 +478,13 @@ actor ControlledCameraCapture: CameraCapturing {
         eventContinuation = eventStream.continuation
     }
 
-    func start(generation: UInt64) async throws {
+    func start(generation: UInt64, position: CameraPosition) async throws -> CameraConfiguration {
         guard shutdownCount == 0, generation >= self.generation else { throw CancellationError() }
         self.generation = generation
         generationState.withLock { $0 = generation }
         starts.append(generation)
+        positions.append(position)
+        isRunning = false
         if shouldSuspend {
             shouldSuspend = false
             await withCheckedContinuation { continuation in
@@ -485,7 +499,13 @@ actor ControlledCameraCapture: CameraCapturing {
             shouldFail = false
             throw CameraService.CameraError.cameraUnavailable
         }
+        self.position = position
+        rotationAngle = position == .front ? frontRotationAngle : backRotationAngle
+        positionState.withLock { $0 = position }
+        let currentRotation = rotationAngle
+        rotationState.withLock { $0 = currentRotation }
         isRunning = true
+        return CameraConfiguration(position: position, rotationAngle: rotationAngle)
     }
 
     func stop(generation: UInt64) {
@@ -503,6 +523,11 @@ actor ControlledCameraCapture: CameraCapturing {
         eventContinuation.finish()
         shutdownRequested?.resume()
         shutdownRequested = nil
+    }
+
+    func setRotationAngle(_ angle: CGFloat, for position: CameraPosition) {
+        if position == .front { frontRotationAngle = angle }
+        else { backRotationAngle = angle }
     }
 
     func suspendNextStart() { shouldSuspend = true }
@@ -524,6 +549,6 @@ actor ControlledCameraCapture: CameraCapturing {
     }
 
     func snapshot() -> Snapshot {
-        Snapshot(starts: starts, generation: generation, isRunning: isRunning, shutdownCount: shutdownCount)
+        Snapshot(starts: starts, positions: positions, position: position, rotationAngle: rotationAngle, generation: generation, isRunning: isRunning, shutdownCount: shutdownCount)
     }
 }

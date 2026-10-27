@@ -1,6 +1,6 @@
 # Architecture Decision Record — RepsCounter v0.1
 
-**Status:** In Development. Updated 25 October 2026. PR #3 timing changes are merged (`main` at `a134e81`); A02/A06 changes are in `fix/camera-lifecycle` awaiting review.
+**Status:** In Development. Updated 27 October 2026. Camera lifecycle and file-header/warning changes are merged through PR #4/#5 (`main` at `6c2b82d`); front/rear switching is in `feature/camera-switching` awaiting review.
 
 ## 1. Decision
 
@@ -35,9 +35,9 @@ There are no storyboard keys. Portrait orientation is declared in the same plist
 ## 3. Threading and concurrency
 
 - `CameraCapture` owns all session configuration/start/stop on a custom serial executor, outside MainActor. No suspension occurs inside a configuration/start transaction.
-- A separate serial frame delegate owns Vision processing. An `OSAllocatedUnfairLock` confines mutable detector state and serializes invalidation. No raw buffers or Vision objects cross executors.
-- Analysis retains the 80 ms interval and AVFoundation late-frame discard. A newest-only pose stream, run generation, monotonic analysis timestamp and 250 ms age limit reject obsolete results at MainActor.
-- `CameraService`, the coordinator, ViewModel and UIKit updates are MainActor-isolated. Permission requests and pending starts are coalesced/cancellable; finish is terminal. Session notifications travel separately from frames and are removed on shutdown.
+- A separate serial frame delegate owns Vision processing. An `OSAllocatedUnfairLock` confines mutable detector state and serializes invalidation. No raw buffers or Vision objects are sent to MainActor; the lock confines processor state, including cross-queue invalidation.
+- Analysis retains the 80 ms interval and AVFoundation late-frame discard. A newest-only pose stream, run generation, camera position, actual rotation, monotonic analysis timestamp and 250 ms age limit reject obsolete results at MainActor.
+- `CameraService`, the coordinator, ViewModel and UIKit updates are MainActor-isolated. Permission requests and pending starts/switches are coalesced/cancellable; finish is terminal. Session notifications travel separately from frames and are removed on shutdown.
 - The only `@unchecked Sendable` type is a private-reference preview bridge. It only attaches the same session to the UIKit layer before start; it exposes no session operations. Full ownership/lock justification and native cancellation limits are recorded in [CAMERA_LIFECYCLE.md](CAMERA_LIFECYCLE.md).
 - Core Data operations remain synchronous on MainActor, with a fresh main-queue context per save/read, rollback on failure and committed-only history. Managed objects do not cross the service boundary.
 - The existing weakly captured MainActor update task is cancelled on pause, finish and model release. No repeating `Timer` is used.
@@ -56,7 +56,7 @@ Backgrounding, capture interruption and runtime errors now call the same idempot
 
 ## 5. Squat detection
 
-Camera: rear-facing, vertical iPhone, 2D sagittal/side angle.
+Camera: front or rear, vertical iPhone, 2D sagittal/side angle. Front capture is the default; body-angle thresholds are unchanged.
 
 Use visible hip, knee and ankle joint landmarks. Require confidence >= 0.5 on all three landmarks. Compute knee angle with the dot-product formula and clamp the cosine to [-1,1]. Smooth with exponential moving average alpha = 0.35.
 
@@ -70,9 +70,15 @@ LOWERED          --3 frames angle >=160--> STANDING + 1 repetition
 
 Angles between thresholds do not transition the machine. Missing joints suspend counting and, after 12 missed observations, force re-acquisition of a standing posture. Thresholds and stability rules are prototype-only and need calibration with data.
 
-## 6. Frame orientation and overlay alignment
+## 6. Camera switching, orientation and overlay alignment
 
-The detector uses `.right` orientation to interpret the rear camera's sensor stream as portrait. Vision reports normalized points with a lower-left origin; the overlay converts those to the unrotated capture-device coordinate system before calling AVFoundation's `layerPointConverted(fromCaptureDevicePoint:)`. Both camera preview rotation and overlay mapping **must be verified on real device hardware**. Format selection, mirroring and camera position changes require synchronized updates.
+`CameraService` defaults to front capture and commits `CameraConfiguration` only after the backend reports a running session. A switch increments the run generation, publishes `.switching`, pauses the workout and replaces the input within the same capture actor. The previous delegate is invalidated, capture stops, and the frame queue drains before a new delegate is attached. Failed configuration attempts restore the previous input when AVFoundation permits and remain paused for explicit retry. There is never a second capture session.
+
+The coordinator preserves whether the workout was active before switching. Only a successful switch may restore that active state; switching on pause keeps the workout paused. Duplicate requests are ignored. Background, interruption, runtime error and finish invalidate pending auto-resume. Existing `resetMovement`, timing and UUID save semantics remain unchanged.
+
+The portrait output rotation comes from the selected device: iOS 27 uses `RotationCoordinator.videoRotationAngleRelative(toDeviceOrientation: .portrait)`. On iOS 17–26, the isolated typed compatibility helper sets the legacy portrait orientation and reads the actual `videoRotationAngle`; it retains one explicit deprecation diagnostic. A fixed 90° angle is insufficient for different sensor mountings. The input is physically rotated and unmirrored, so Vision uses `.up`, with aspect ratio from actual pixel-buffer dimensions.
+
+`CameraFrame` and `BodyPose` carry the effective quarter-turn angle. `PoseGeometry` converts lower-left Vision coordinates back to unrotated top-left capture coordinates for 0/90/180/270 degrees. `AVCaptureVideoPreviewLayer.layerPointConverted` then handles preview orientation, video gravity and the single front-camera mirror. No second horizontal flip or production crop implementation is added. Mathematical conversion tests use synthetic buffers and a test-only projection model; they do not validate actual sensor/preview behavior. See [compatibility rationale and iPhone 15 Pro checks](CAMERA_LIFECYCLE.md).
 
 ## 7. Data schema
 

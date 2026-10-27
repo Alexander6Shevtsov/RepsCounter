@@ -30,6 +30,13 @@ enum BodyJoint: CaseIterable, Hashable, Sendable {
 struct BodyPose: Sendable {
     let joints: [BodyJoint: JointPoint]
     let aspectRatio: CGFloat
+    let rotationAngle: CGFloat
+
+    init(joints: [BodyJoint: JointPoint], aspectRatio: CGFloat, rotationAngle: CGFloat = 90) {
+        self.joints = joints
+        self.aspectRatio = aspectRatio
+        self.rotationAngle = rotationAngle
+    }
 
     func confidentPoint(for joint: BodyJoint, minimumConfidence: Float = 0.5) -> CGPoint? {
         guard let point = joints[joint], point.confidence >= minimumConfidence else {

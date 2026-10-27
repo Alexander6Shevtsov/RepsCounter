@@ -18,6 +18,10 @@ final class WorkoutCameraCoordinator {
     private var hasStarted = false
     private var shouldResumeWhenReady = false
 
+    var canSwitchCamera: Bool {
+        isForeground && viewModel.finishedSummary == nil && camera.canSwitchCamera
+    }
+
     init(viewModel: WorkoutViewModel, camera: CameraService) {
         self.viewModel = viewModel
         self.camera = camera
@@ -47,6 +51,13 @@ final class WorkoutCameraCoordinator {
         }
     }
 
+    func switchCamera() {
+        guard canSwitchCamera else { return }
+        shouldResumeWhenReady = !viewModel.isPaused && camera.state == .running
+        viewModel.setCameraReady(false)
+        camera.switchCamera()
+    }
+
     func sceneDidEnterBackground() {
         isForeground = false
         shouldResumeWhenReady = false
@@ -57,6 +68,7 @@ final class WorkoutCameraCoordinator {
     func sceneDidBecomeActive() {
         isForeground = true
         camera.refreshAuthorization()
+        onCameraStateChange?(camera.state)
     }
 
     func finish() {
@@ -97,7 +109,7 @@ final class WorkoutCameraCoordinator {
             shouldResumeWhenReady = false
         } else {
             viewModel.setCameraReady(false)
-            if state != .starting, state != .requestingPermission { shouldResumeWhenReady = false }
+            if state != .starting, state != .switching, state != .requestingPermission { shouldResumeWhenReady = false }
             onPose?(nil)
         }
         onCameraStateChange?(state)

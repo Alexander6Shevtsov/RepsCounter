@@ -48,8 +48,9 @@ final class PoseOverlayView: UIView {
         ]
         func displayPoint(for joint: BodyJoint) -> CGPoint? {
             guard let point = pose.confidentPoint(for: joint) else { return nil }
-            let capturePoint = CGPoint(x: 1 - point.y, y: 1 - point.x)
-            return previewLayer.layerPointConverted(fromCaptureDevicePoint: capturePoint)
+            return PoseGeometry.layerPoint(fromVisionPoint: point, rotationAngle: pose.rotationAngle) { capturePoint in
+                previewLayer.layerPointConverted(fromCaptureDevicePoint: capturePoint)
+            }
         }
 
         let skeletonPath = UIBezierPath()

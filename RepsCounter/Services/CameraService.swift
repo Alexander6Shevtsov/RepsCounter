@@ -6,11 +6,13 @@
 //  Copyright © 2026 Alexander Shevtsov.
 
 import Foundation
+import CoreGraphics
 
 enum CameraState: Equatable {
     case idle
     case requestingPermission
     case starting
+    case switching
     case running
     case stopped
     case permissionDenied
@@ -36,7 +38,16 @@ final class CameraService: Sendable {
     var onStateChange: ((CameraState) -> Void)?
     var onPose: ((BodyPose?) -> Void)?
     private(set) var state: CameraState = .idle
+    private(set) var position: CameraPosition = .front
+    private(set) var rotationAngle: CGFloat = 90
     var previewSource: CameraPreviewSource? { capture.previewSource }
+    var canSwitchCamera: Bool {
+        guard startTask == nil else { return false }
+        switch state {
+        case .running, .stopped, .failed: return true
+        default: return false
+        }
+    }
 
     private let permission: any CameraAuthorizing
     private let capture: any CameraCapturing
@@ -86,8 +97,20 @@ final class CameraService: Sendable {
     func start() -> Task<Void, Never> {
         if let startTask { return startTask }
         guard state != .running, state != .finished else { return Task {} }
+        return beginStart(position: position, switching: false)
+    }
+
+    @discardableResult
+    func switchCamera() -> Task<Void, Never> {
+        if let startTask { return startTask }
+        guard canSwitchCamera else { return Task {} }
+        return beginStart(position: position.opposite, switching: true)
+    }
+
+    private func beginStart(position requestedPosition: CameraPosition, switching: Bool) -> Task<Void, Never> {
         generation += 1
         let currentGeneration = generation
+        lastFrameTime = nil
         let permission = permission
         let capture = capture
         let authorization = permission.status
@@ -98,7 +121,8 @@ final class CameraService: Sendable {
             }
         }
         let permissionRequest = permissionTask
-        setState(authorization == .notDetermined ? .requestingPermission : .starting)
+        let preparingState: CameraState = switching ? .switching : .starting
+        setState(authorization == .notDetermined ? .requestingPermission : preparingState)
         let operation = Task { @MainActor [weak self] in
             await withTaskCancellationHandler {
                 defer { self?.completeStart(generation: currentGeneration) }
@@ -110,16 +134,24 @@ final class CameraService: Sendable {
                 }
                 guard !Task.isCancelled, self?.generation == currentGeneration else { return }
                 guard authorized else {
+                    await capture.stop(generation: currentGeneration)
+                    guard !Task.isCancelled, self?.generation == currentGeneration else { return }
                     self?.setState(.permissionDenied)
                     return
                 }
-                self?.setState(.starting)
+                self?.setState(preparingState)
                 do {
-                    try await capture.start(generation: currentGeneration)
+                    let configuration = try await capture.start(generation: currentGeneration, position: requestedPosition)
                     guard !Task.isCancelled, self?.generation == currentGeneration else {
                         await capture.stop(generation: currentGeneration)
                         return
                     }
+                    guard configuration.position == requestedPosition else {
+                        await capture.stop(generation: currentGeneration)
+                        throw CameraError.configurationFailed
+                    }
+                    self?.position = configuration.position
+                    self?.rotationAngle = configuration.rotationAngle
                     self?.setState(.running)
                 } catch is CancellationError {
                     if self?.generation == currentGeneration { self?.setState(.stopped) }
@@ -177,12 +209,16 @@ final class CameraService: Sendable {
         guard generation == completedGeneration else { return }
         startTask = nil
         permissionTask = nil
-        if Task.isCancelled, state == .starting || state == .requestingPermission { setState(.stopped) }
+        if Task.isCancelled, state == .starting || state == .switching || state == .requestingPermission {
+            setState(.stopped)
+        } else {
+            onStateChange?(state)
+        }
     }
 
     private func cancelStart(generation expectedGeneration: UInt64) {
         guard generation == expectedGeneration,
-              state == .starting || state == .requestingPermission || state == .running else { return }
+              state == .starting || state == .switching || state == .requestingPermission || state == .running else { return }
         stop()
     }
 
@@ -200,7 +236,9 @@ final class CameraService: Sendable {
     }
 
     func receive(_ frame: CameraFrame) {
-        guard state == .running, frame.generation == generation,
+        guard state == .running, frame.generation == generation, frame.position == position,
+              frame.rotationAngle == rotationAngle,
+              frame.pose.map({ $0.rotationAngle == frame.rotationAngle }) ?? true,
               frame.capturedAt <= frameTime(),
               frame.capturedAt.duration(to: frameTime()) <= .milliseconds(250),
               lastFrameTime.map({ frame.capturedAt > $0 }) ?? true else { return }
@@ -213,7 +251,7 @@ final class CameraService: Sendable {
         case .interruptionEnded:
             if state == .interrupted { setState(.stopped) }
         case .interrupted, .runtimeError:
-            guard state == .running || state == .starting else { return }
+            guard state == .running || state == .starting || state == .switching else { return }
             invalidateStart()
             if case .runtimeError(let message) = event { setState(.failed(message)) }
             else { setState(.interrupted) }

@@ -13,8 +13,8 @@ import Vision
 final class PoseDetector {
     private let request = VNDetectHumanBodyPoseRequest()
 
-    func detect(pixelBuffer: CVPixelBuffer) -> BodyPose? {
-        let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .right, options: [:])
+    func detect(pixelBuffer: CVPixelBuffer, rotationAngle: CGFloat = 90) -> BodyPose? {
+        let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: PoseGeometry.visionOrientation, options: [:])
         do {
             try handler.perform([request])
             guard let observation = request.results?.first else { return nil }
@@ -38,9 +38,8 @@ final class PoseDetector {
                     confidence: recognizedPoint.confidence
                 )
             }
-            let portraitWidth = CGFloat(CVPixelBufferGetHeight(pixelBuffer))
-            let portraitHeight = CGFloat(CVPixelBufferGetWidth(pixelBuffer))
-            return BodyPose(joints: joints, aspectRatio: portraitWidth / max(portraitHeight, 1))
+            let aspectRatio = PoseGeometry.aspectRatio(pixelBuffer: pixelBuffer)
+            return BodyPose(joints: joints, aspectRatio: aspectRatio, rotationAngle: rotationAngle)
         } catch {
             return nil
         }
