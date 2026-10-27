@@ -23,6 +23,7 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
     private let guidanceLabel = UILabel()
     private let pauseButton = UIButton(type: .system)
     private let finishButton = UIButton(type: .system)
+    private let cameraSwitchButton = UIButton(type: .system)
     private var lastPose: BodyPose?
     private var lastState: WorkoutViewState?
     private var pendingSaveState: WorkoutSaveState?
@@ -52,10 +53,7 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
         }
         cameraCoordinator.onCameraStateChange = { [weak self] state in
             guard let self else { return }
-            if state == .running, let connection = self.cameraView.previewLayer.connection,
-               connection.isVideoRotationAngleSupported(90) {
-                connection.videoRotationAngle = 90
-            }
+            if state == .running { self.configurePreview() }
             self.updateCameraMessage()
         }
         viewModel.setCameraReady(false)
@@ -69,11 +67,23 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        if camera.state == .running { configurePreview() }
         overlayView.render(lastPose, previewLayer: cameraView.previewLayer)
     }
 
     func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
         presentPendingSaveMessage()
+    }
+
+    private func configurePreview() {
+        guard let connection = cameraView.previewLayer.connection else { return }
+        if connection.isVideoRotationAngleSupported(camera.rotationAngle) {
+            connection.videoRotationAngle = camera.rotationAngle
+        }
+        connection.automaticallyAdjustsVideoMirroring = false
+        if connection.isVideoMirroringSupported {
+            connection.isVideoMirrored = camera.position == .front
+        }
     }
 
     private func configureLayout() {
@@ -101,6 +111,16 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
         historyButton.accessibilityLabel = "История тренировок"
         historyButton.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(historyButton)
+
+        cameraSwitchButton.setImage(UIImage(systemName: "arrow.triangle.2.circlepath.camera"), for: .normal)
+        cameraSwitchButton.tintColor = .white
+        cameraSwitchButton.backgroundColor = UIColor.black.withAlphaComponent(0.45)
+        cameraSwitchButton.layer.cornerRadius = 20
+        cameraSwitchButton.accessibilityIdentifier = "cameraSwitchButton"
+        cameraSwitchButton.accessibilityLabel = "Переключить камеру"
+        cameraSwitchButton.addTarget(self, action: #selector(switchCamera), for: .touchUpInside)
+        cameraSwitchButton.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(cameraSwitchButton)
 
         countLabel.font = .monospacedDigitSystemFont(ofSize: 112, weight: .bold)
         countLabel.adjustsFontSizeToFitWidth = true
@@ -155,7 +175,7 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
             configuration.contentInsets = .zero
             configuration.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { attributes in
                 var updatedAttributes = attributes
-                updatedAttributes.font = .preferredFont(forTextStyle: .headline)
+                updatedAttributes[AttributeScopes.UIKitAttributes.FontAttribute.self] = UIFont.preferredFont(forTextStyle: .headline)
                 return updatedAttributes
             }
             button.configuration = configuration
@@ -171,6 +191,10 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
         view.addSubview(controls)
 
         NSLayoutConstraint.activate([
+            cameraSwitchButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 12),
+            cameraSwitchButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -22),
+            cameraSwitchButton.widthAnchor.constraint(equalToConstant: 54),
+            cameraSwitchButton.heightAnchor.constraint(equalToConstant: 54),
             historyButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 12),
             historyButton.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 22),
             historyButton.widthAnchor.constraint(equalToConstant: 54),
@@ -241,6 +265,8 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
         switch camera.state {
         case .idle, .starting:
             message = "Подготовка камеры…"
+        case .switching:
+            message = "Переключение камеры…"
         case .requestingPermission:
             message = "Разрешите доступ к камере для начала тренировки."
         case .permissionDenied:
@@ -257,7 +283,10 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
         guidanceLabel.text = message
         guidanceLabel.isHidden = camera.state == .running && lastState?.poseDetected == true
         pauseButton.isEnabled = lastState?.isFinished != true
-            && camera.state != .requestingPermission && camera.state != .starting
+            && camera.state != .requestingPermission && camera.state != .starting && camera.state != .switching
+        cameraSwitchButton.isEnabled = cameraCoordinator.canSwitchCamera
+        cameraSwitchButton.accessibilityValue = camera.position == .front ? "Фронтальная камера" : "Задняя камера"
+        cameraSwitchButton.accessibilityHint = camera.position == .front ? "Включить заднюю камеру" : "Включить фронтальную камеру"
     }
 
     private func presentPendingSaveMessage() {
@@ -312,6 +341,8 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
         present(navigationController, animated: true)
         navigationController.presentationController?.delegate = self
     }
+
+    @objc private func switchCamera() { cameraCoordinator.switchCamera() }
 
     @objc private func togglePause() { cameraCoordinator.togglePause() }
 

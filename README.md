@@ -58,7 +58,15 @@ The workout waits for camera readiness before active time begins. Backgrounding,
 
 Debug Simulator and unsigned Release device builds with complete strict concurrency succeeded. A separate Swift 6 `build-for-testing` also succeeded without changing project language mode 5. **90 XCTest passed on each available iOS Simulator version: 18.6, 26.5, 27.0 and 27.1** (54 existing + 36 new). Camera components and new tests have no concurrency warnings. Remaining diagnostics concern the existing deprecated button API and an unchanged Core Data test in the Swift 6 diagnostic compilation.
 
-One small `@unchecked Sendable` preview bridge is explicitly justified: it hides an immutable session reference and only attaches the UIKit preview on MainActor before startup; the actor exclusively controls session operations. See [concurrency rationale, cancellation limits and iPhone checklist](Docs/CAMERA_LIFECYCLE.md). Core Data/schema, counting and Vision algorithms, deployment target and dependencies are unchanged. Hardware camera, iOS 17 runtime, tracking accuracy and performance remain unverified. The branch awaits review; status remains **In Development**.
+One small `@unchecked Sendable` preview bridge is explicitly justified: it hides an immutable session reference and only attaches the UIKit preview on MainActor before startup; the actor exclusively controls session operations. See [concurrency rationale, cancellation limits and iPhone checklist](Docs/CAMERA_LIFECYCLE.md). Core Data/schema, counting and Vision algorithms, deployment target and dependencies are unchanged. Hardware camera, iOS 17 runtime, tracking accuracy and performance remain unverified. Those changes merged through [PR #4](https://github.com/Alexander6Shevtsov/RepsCounter/pull/4). PR #5 subsequently updated file headers and button configuration. Status remains **In Development**.
+
+## Front and rear camera switching — 27 October 2026
+
+The `feature/camera-switching` branch starts from `main` after PR #5 (`6c2b82d`). The workout starts with the front camera. The top-right `arrow.triangle.2.circlepath.camera` button switches front → back → front in the existing capture session. Repeated taps during an operation are ignored. Switching freezes active time/rest and clears only unfinished movement; counted repetitions, sets and the frozen save/retry summary are preserved. An active workout resumes after successful camera readiness, while a paused workout stays paused. Backgrounding, interruption or failure cancels automatic continuation.
+
+Capture and preview use the selected sensor's actual portrait rotation. Vision receives upright, unmirrored buffers; only the front preview is mirrored. Pose values carry the actual rotation, and overlay conversion delegates mirroring/aspect fill to AVFoundation once. On iOS 17–26, a narrow legacy portrait compatibility helper is required to obtain the device-specific angle; iOS 27 uses the static RotationCoordinator API. Its intentional deprecation warning and the reason a fixed 90° angle is insufficient are documented in [camera lifecycle and switching](Docs/CAMERA_LIFECYCLE.md).
+
+Debug/unsigned Release builds and a Swift 6 diagnostic build-for-testing succeeded with Xcode 27.1 / SDK 27.1. All **133 XCTest passed on each iOS Simulator 18.6, 26.5, 27.0 and 27.1**: 90 existing plus 26 switching/state/UIKit and 17 geometry tests. XCTest execution used project Swift language mode 5. The new tests cover switching, timing, repetition preservation, interruptions, cancellation, UIKit controls and geometry. Physical switching, Vision alignment and performance still require the [iPhone 15 Pro checklist](Docs/CAMERA_LIFECYCLE.md#проверка-pr6-на-iphone-15-pro). No physical-device success is claimed. Status remains **In Development**; the branch awaits review.
 
 ![RepsCounter interface — design concept, not a working application screenshot](Docs/Concept.png)
 
@@ -107,14 +115,14 @@ Prototype thresholds: standing ≥160°, lowered ≤105°, with 3 consecutive fr
 
 ## Run locally
 
-1. Download the repository and open `RepsCounter.xcodeproj` in Xcode 26.
+1. Download the repository and open `RepsCounter.xcodeproj` in Xcode 27.1 (the verified SDK/toolchain; deployment target remains iOS 17).
 2. Select the **RepsCounter** scheme and set your Apple Developer team (Signing & Capabilities).
 3. Connect an iPhone running iOS 17 or later. The iOS Simulator does not provide the physical camera workflow required for pose tracking.
 4. Build and run. Grant camera permission when prompted.
 5. Place the iPhone securely, preferably side-on, with shoulders, hips, knees and ankles in frame.
 6. Stand upright to initialize recognition; complete a squat and return to standing to count one repetition.
 
-Camera analysis currently assumes a rear camera, portrait orientation, and a specific image orientation transform (`.right`). Verify camera/skeleton alignment on-device; update the transform if device orientation or video format differs.
+Camera analysis uses a fixed portrait interface, the selected front/rear sensor’s actual rotation and unmirrored Vision input. Front preview mirroring and skeleton alignment still require on-device verification; see the camera lifecycle document.
 
 ## Repository layout
 
