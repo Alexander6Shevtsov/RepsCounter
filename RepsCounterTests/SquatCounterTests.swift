@@ -124,6 +124,84 @@ final class SquatCounterTests: XCTestCase {
         XCTAssertEqual(counter.phase, .standing)
     }
 
+    func testSingleMissingFrameInvalidatesLoweredPhaseWithoutLosingCountedRepetitions() {
+        var counter = makeCounterAfterOneRepetition()
+        for angle in [95.0, 95, 95] { _ = counter.process(angle: angle) }
+        XCTAssertFalse(counter.process(angle: nil))
+        XCTAssertEqual(counter.phase, .seekingStanding)
+        XCTAssertEqual(counter.decision, .invalidMeasurement)
+        for angle in [170.0, 170, 170] { XCTAssertFalse(counter.process(angle: angle)) }
+        XCTAssertEqual(counter.repetitions, 1)
+    }
+
+    func testInvalidAnglesCannotConfirmStanding() {
+        for angle in [Double.nan, .infinity, -.infinity, -1, 181] {
+            var counter = SquatCounter()
+            for _ in 0..<4 { XCTAssertFalse(counter.process(angle: angle)) }
+            XCTAssertEqual(counter.phase, .seekingStanding)
+            XCTAssertEqual(counter.consecutiveFrames, 0)
+            XCTAssertEqual(counter.decision, .invalidMeasurement)
+        }
+    }
+
+    func testExactThresholdsRequireThreeConsecutiveFramesPerTransition() {
+        var counter = SquatCounter()
+        XCTAssertFalse(counter.process(angle: 160))
+        XCTAssertEqual(counter.consecutiveFrames, 1)
+        XCTAssertEqual(counter.decision, .confirmingStanding)
+        XCTAssertFalse(counter.process(angle: 160))
+        XCTAssertEqual(counter.consecutiveFrames, 2)
+        XCTAssertFalse(counter.process(angle: 160))
+        XCTAssertEqual(counter.consecutiveFrames, 3)
+        XCTAssertEqual(counter.decision, .standingConfirmed)
+        for _ in 0..<3 { XCTAssertFalse(counter.process(angle: 105)) }
+        XCTAssertEqual(counter.phase, .lowered)
+        XCTAssertEqual(counter.decision, .loweredConfirmed)
+        XCTAssertFalse(counter.process(angle: 160))
+        XCTAssertFalse(counter.process(angle: 160))
+        XCTAssertEqual(counter.decision, .confirmingReturn)
+        XCTAssertTrue(counter.process(angle: 160))
+        XCTAssertEqual(counter.decision, .repetitionCounted)
+        XCTAssertEqual(counter.repetitions, 1)
+    }
+
+    func testIntermediateAngleBreaksConsecutiveDepthConfirmation() {
+        var counter = SquatCounter()
+        for angle in [170.0, 170, 170, 100, 100, 120] { _ = counter.process(angle: angle) }
+        XCTAssertEqual(counter.consecutiveFrames, 0)
+        XCTAssertEqual(counter.decision, .awaitingDepth)
+        for angle in [100.0, 100] { _ = counter.process(angle: angle) }
+        XCTAssertEqual(counter.phase, .standing)
+        XCTAssertEqual(counter.consecutiveFrames, 2)
+        XCTAssertFalse(counter.process(angle: 100))
+        XCTAssertEqual(counter.phase, .lowered)
+    }
+
+    func testMissingFrameClearsPartialStandingConfirmation() {
+        var counter = SquatCounter()
+        for angle in [170.0, 170] { _ = counter.process(angle: angle) }
+        _ = counter.process(angle: nil)
+        _ = counter.process(angle: 170)
+        XCTAssertEqual(counter.phase, .seekingStanding)
+        XCTAssertEqual(counter.consecutiveFrames, 1)
+    }
+
+    func testHoldingStandingAfterCountDoesNotCountTwice() {
+        var counter = makeCounterAfterOneRepetition()
+        for _ in 0..<30 { XCTAssertFalse(counter.process(angle: 170)) }
+        XCTAssertEqual(counter.repetitions, 1)
+        XCTAssertEqual(counter.decision, .awaitingDepth)
+    }
+
+    func testStartingLoweredCannotCountWithoutConfirmedStanding() {
+        var counter = SquatCounter()
+        for angle in [90.0, 90, 90, 170, 170, 100, 100, 100, 170, 170, 170] {
+            XCTAssertFalse(counter.process(angle: angle))
+        }
+        XCTAssertEqual(counter.repetitions, 0)
+        XCTAssertEqual(counter.phase, .standing)
+    }
+
     private func makeCounterAfterOneRepetition() -> SquatCounter {
         var counter = SquatCounter()
         for angle in [170.0, 170, 170, 95, 95, 95, 170, 170, 170] {

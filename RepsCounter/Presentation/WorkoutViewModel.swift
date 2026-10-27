@@ -29,10 +29,46 @@ struct WorkoutViewState {
     let saveState: WorkoutSaveState
 }
 
+#if DEBUG
+enum SquatTrackingStatus: Equatable {
+    case waitingForCamera
+    case tracking
+    case paused
+    case resting
+    case finished
+}
+
+enum SquatTrackingReset: Equatable {
+    case measurementLost
+    case legChanged
+    case observationGap
+}
+
+struct SquatDiagnostics {
+    let analysis: PoseAnalysis?
+    let phase: SquatPhase
+    let decision: SquatDecision
+    let consecutiveFrames: Int
+    let requiredFrames: Int
+    let standingThreshold: Double
+    let loweredThreshold: Double
+    let status: SquatTrackingStatus
+    let resetReason: SquatTrackingReset?
+}
+
+#endif
+
 @MainActor
 final class WorkoutViewModel {
     var onChange: ((WorkoutViewState) -> Void)?
     private(set) var finishedSummary: WorkoutSummary?
+
+    #if DEBUG
+    var onDiagnosticsChange: ((SquatDiagnostics) -> Void)?
+    private(set) var latestDiagnostics: SquatDiagnostics?
+    private var latestAnalysis: PoseAnalysis?
+    private var trackingReset: SquatTrackingReset?
+    #endif
 
     private let persistence: any WorkoutStoring
     private let timeSource: any WorkoutTimeSource
@@ -50,6 +86,8 @@ final class WorkoutViewModel {
     private var isCameraReady: Bool
     private var isFinished = false
     private var hasPose = false
+    private var lastPoseTime: TimeInterval?
+    private let maximumPoseInterval: TimeInterval = 0.25
     private var saveState: WorkoutSaveState = .notSaved
 
     let targetRepetitions = 12
@@ -73,14 +111,27 @@ final class WorkoutViewModel {
 
     func process(_ pose: BodyPose?) {
         guard !isPaused, !isFinished else { return }
-        let activeTime = activeDuration(at: timeSource.currentTime)
+        let currentTime = timeSource.currentTime
+        let activeTime = activeDuration(at: currentTime)
         advanceRest(at: activeTime)
         guard restDeadline == nil else { return }
-        let measuredAngle = pose.flatMap { analyzer.kneeAngle(from: $0) }
-        hasPose = measuredAngle != nil
-        if pose == nil { analyzer.reset() }
+        expireTracking(at: currentTime)
+        let analysis = analyzer.analyze(pose)
+        hasPose = analysis.smoothedAngle != nil
+        lastPoseTime = hasPose ? currentTime : nil
+        if analysis.requiresMovementReset { counter.resetMovement() }
+        #if DEBUG
+        latestAnalysis = analysis
+        if analysis.requiresMovementReset {
+            trackingReset = analysis.selectedLeg == nil ? .measurementLost : .legChanged
+        }
+        #endif
 
-        if counter.process(angle: measuredAngle) {
+        let counted = counter.process(angle: analysis.smoothedAngle)
+        #if DEBUG
+        if counter.phase != .seekingStanding { trackingReset = nil }
+        #endif
+        if counted {
             totalRepetitions += 1
             if counter.repetitions >= targetRepetitions {
                 completedSets += 1
@@ -90,7 +141,7 @@ final class WorkoutViewModel {
                 }
                 restDeadline = activeTime + TimeInterval(restDuration)
                 counter.reset()
-                analyzer.reset()
+                resetTracking()
             }
         }
         publish(activeTime: activeTime)
@@ -114,9 +165,7 @@ final class WorkoutViewModel {
         accumulatedActiveTime = activeTime
         activeStartedAt = nil
         isPaused = true
-        counter.resetMovement()
-        analyzer.reset()
-        hasPose = false
+        resetTracking()
         stopUpdates()
         publish(activeTime: activeTime)
     }
@@ -173,9 +222,30 @@ final class WorkoutViewModel {
 
     func refreshTime() {
         guard !isPaused, !isFinished else { return }
-        let activeTime = activeDuration(at: timeSource.currentTime)
+        let currentTime = timeSource.currentTime
+        let activeTime = activeDuration(at: currentTime)
         advanceRest(at: activeTime)
+        expireTracking(at: currentTime)
         publish(activeTime: activeTime)
+    }
+
+    private func expireTracking(at currentTime: TimeInterval) {
+        guard let lastPoseTime, currentTime - lastPoseTime > maximumPoseInterval else { return }
+        resetTracking()
+        #if DEBUG
+        trackingReset = .observationGap
+        #endif
+    }
+
+    private func resetTracking() {
+        counter.resetMovement()
+        analyzer.reset()
+        lastPoseTime = nil
+        hasPose = false
+        #if DEBUG
+        latestAnalysis = nil
+        trackingReset = nil
+        #endif
     }
 
     private func activeDuration(at currentTime: TimeInterval) -> TimeInterval {
@@ -213,6 +283,21 @@ final class WorkoutViewModel {
     private func publish(activeTime: TimeInterval? = nil) {
         let currentDuration = activeTime ?? activeDuration(at: timeSource.currentTime)
         let remainingRest = restDeadline.map { max(0, Int(ceil($0 - currentDuration))) } ?? 0
+        #if DEBUG
+        let diagnostics = SquatDiagnostics(
+            analysis: latestAnalysis,
+            phase: counter.phase,
+            decision: counter.decision,
+            consecutiveFrames: counter.consecutiveFrames,
+            requiredFrames: counter.requiredStableFrames,
+            standingThreshold: counter.standingThreshold,
+            loweredThreshold: counter.loweredThreshold,
+            status: isFinished ? .finished : (!isCameraReady ? .waitingForCamera : (isPaused ? .paused : (restDeadline != nil ? .resting : .tracking))),
+            resetReason: trackingReset
+        )
+        latestDiagnostics = diagnostics
+        onDiagnosticsChange?(diagnostics)
+        #endif
         onChange?(WorkoutViewState(
             repetitions: counter.repetitions,
             totalRepetitions: totalRepetitions,

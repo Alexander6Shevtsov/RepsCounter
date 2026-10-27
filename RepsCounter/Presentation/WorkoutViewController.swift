@@ -24,6 +24,11 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
     private let pauseButton = UIButton(type: .system)
     private let finishButton = UIButton(type: .system)
     private let cameraSwitchButton = UIButton(type: .system)
+    #if DEBUG
+    private let diagnosticsButton = UIButton(type: .system)
+    private let diagnosticsView = SquatDiagnosticsView()
+    private var diagnosticsLayoutConstraints: [NSLayoutConstraint] = []
+    #endif
     private var lastPose: BodyPose?
     private var lastState: WorkoutViewState?
     private var pendingSaveState: WorkoutSaveState?
@@ -46,6 +51,12 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
         cameraView.previewLayer.videoGravity = .resizeAspectFill
         configureLayout()
         bindState()
+        #if DEBUG
+        viewModel.onDiagnosticsChange = { [weak self] diagnostics in
+            guard let self, !self.diagnosticsView.isHidden else { return }
+            self.diagnosticsView.render(diagnostics)
+        }
+        #endif
         cameraCoordinator.onPose = { [weak self] pose in
             guard let self else { return }
             self.lastPose = pose
@@ -206,7 +217,59 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
             controls.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -18),
             controls.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -14)
         ])
+        #if DEBUG
+        configureDiagnostics(above: controls, beside: upperStack)
+        #endif
     }
+
+    #if DEBUG
+    private func configureDiagnostics(above controls: UIView, beside indicators: UIStackView) {
+        diagnosticsButton.setTitle("Диагностика", for: .normal)
+        diagnosticsButton.titleLabel?.font = .preferredFont(forTextStyle: .caption1)
+        diagnosticsButton.titleLabel?.adjustsFontForContentSizeCategory = true
+        diagnosticsButton.titleLabel?.adjustsFontSizeToFitWidth = true
+        diagnosticsButton.tintColor = .white
+        diagnosticsButton.backgroundColor = UIColor.black.withAlphaComponent(0.6)
+        diagnosticsButton.layer.cornerRadius = 14
+        diagnosticsButton.accessibilityIdentifier = "squatDiagnosticsButton"
+        diagnosticsButton.accessibilityLabel = "Показать диагностику приседаний"
+        diagnosticsButton.accessibilityValue = "Выключена"
+        diagnosticsButton.addTarget(self, action: #selector(toggleDiagnostics), for: .touchUpInside)
+        diagnosticsButton.translatesAutoresizingMaskIntoConstraints = false
+        diagnosticsView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(diagnosticsButton)
+        view.addSubview(diagnosticsView)
+        NSLayoutConstraint.activate([
+            diagnosticsButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 12),
+            diagnosticsButton.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            diagnosticsButton.widthAnchor.constraint(equalToConstant: 140),
+            diagnosticsButton.heightAnchor.constraint(equalToConstant: 54),
+            diagnosticsView.leadingAnchor.constraint(equalTo: view.centerXAnchor, constant: 4),
+            diagnosticsView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -18),
+            diagnosticsView.bottomAnchor.constraint(equalTo: controls.topAnchor, constant: -10),
+            diagnosticsView.topAnchor.constraint(equalTo: diagnosticsButton.bottomAnchor, constant: 10)
+        ])
+        diagnosticsLayoutConstraints = [
+            indicators.trailingAnchor.constraint(equalTo: diagnosticsView.leadingAnchor, constant: -8),
+            indicators.bottomAnchor.constraint(lessThanOrEqualTo: controls.topAnchor, constant: -10)
+        ]
+    }
+
+    @objc private func toggleDiagnostics() {
+        diagnosticsView.isHidden.toggle()
+        if diagnosticsView.isHidden { NSLayoutConstraint.deactivate(diagnosticsLayoutConstraints) }
+        else { NSLayoutConstraint.activate(diagnosticsLayoutConstraints) }
+        for label in [setLabel, timeLabel, restLabel] {
+            label.numberOfLines = diagnosticsView.isHidden ? 1 : 0
+        }
+        diagnosticsButton.accessibilityLabel = diagnosticsView.isHidden
+            ? "Показать диагностику приседаний" : "Скрыть диагностику приседаний"
+        diagnosticsButton.accessibilityValue = diagnosticsView.isHidden ? "Выключена" : "Включена"
+        if !diagnosticsView.isHidden, let diagnostics = viewModel.latestDiagnostics {
+            diagnosticsView.render(diagnostics)
+        }
+    }
+    #endif
 
     private func panel(_ label: UILabel) -> UIView {
         let container = UIVisualEffectView(effect: UIBlurEffect(style: .systemThinMaterialDark))

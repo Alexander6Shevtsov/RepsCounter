@@ -17,12 +17,14 @@ enum JointAngleCalculator {
         let firstLength = hypot(firstVectorX, firstVectorY)
         let thirdLength = hypot(thirdVectorX, thirdVectorY)
 
-        guard firstLength > 0.0001, thirdLength > 0.0001 else {
+        guard firstLength.isFinite, thirdLength.isFinite,
+              firstLength > 0.0001, thirdLength > 0.0001 else {
             return nil
         }
 
         let normalizedDotProduct = (firstVectorX * thirdVectorX + firstVectorY * thirdVectorY)
             / (firstLength * thirdLength)
+        guard normalizedDotProduct.isFinite else { return nil }
         let clampedDotProduct = min(1, max(-1, normalizedDotProduct))
         return acos(clampedDotProduct) * 180 / .pi
     }
