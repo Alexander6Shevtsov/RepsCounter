@@ -90,11 +90,13 @@ Dynamic Type scales text; accessibility sizes stack cards and actions vertically
 
 Concept-only settings, flash, sound/autostart switches, plans and profile are deferred because their functionality is absent. See [implemented elements, verification and physical-device checks](Docs/PORTFOLIO_UI.md). Status remains **In Development**.
 
-The following are **actual Release screenshots from iPhone 15 Pro / iOS 18.6 Simulator**, not concept images. The simulator has no usable camera, so it shows the camera error with a real zero result and an empty history; these images do not demonstrate pose accuracy.
+Final polish makes the metric column narrower, reduces card padding, moves the summary toward the bottom and lightens the camera backdrop. Text size and primary controls are preserved. The user reports that the initial PR #10 interface, skeleton, counter, finish and history work on iPhone 15 Pro; the new brightness/layout still needs device review. [Before/after comparisons](Docs/PORTFOLIO_UI.md#сравнение-допосле) use matching **synthetic UIKit fixtures**, clearly separated from camera screenshots and the concept.
+
+The following are **actual Release screenshots from iPhone 15 Pro / iOS 18.6 Simulator**, not concept images. The updated workout screenshot shows denied camera access with a real zero result; the history screenshot shows the empty state. These images do not demonstrate pose accuracy.
 
 | Workout | Empty history |
 |---|---|
-| <img src="Docs/UI/Workout-Simulator.png" width="260" alt="Release workout on Simulator, camera unavailable"> | <img src="Docs/UI/History-Empty-Simulator.png" width="260" alt="Release empty workout history on Simulator"> |
+| <img src="Docs/UI/Workout-Simulator.png" width="260" alt="Release workout on Simulator, camera access denied"> | <img src="Docs/UI/History-Empty-Simulator.png" width="260" alt="Release empty workout history on Simulator"> |
 
 ## MVP scope
 

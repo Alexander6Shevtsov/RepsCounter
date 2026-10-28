@@ -25,10 +25,10 @@ enum WorkoutAppearance {
         return label
     }
 
-    static func surfaceView() -> UIVisualEffectView {
+    static func surfaceView(cornerRadius: CGFloat = 20) -> UIVisualEffectView {
         let surface = UIVisualEffectView(effect: UIBlurEffect(style: .systemThinMaterialDark))
         surface.contentView.backgroundColor = Self.surface
-        surface.layer.cornerRadius = 20
+        surface.layer.cornerRadius = cornerRadius
         surface.layer.cornerCurve = .continuous
         surface.layer.borderWidth = 1
         surface.layer.borderColor = UIColor.white.withAlphaComponent(0.14).cgColor
@@ -140,7 +140,7 @@ final class WorkoutDashboardView: UIView {
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         addSubview(scrollView)
         contentStack.axis = .vertical
-        contentStack.spacing = 14
+        contentStack.spacing = 12
         contentStack.alignment = .leading
         contentStack.translatesAutoresizingMaskIntoConstraints = false
         scrollView.addSubview(contentStack)
@@ -148,12 +148,19 @@ final class WorkoutDashboardView: UIView {
         exerciseLabel.accessibilityTraits = .header
         let caption = WorkoutAppearance.label("workoutCountCaption", style: .subheadline)
         caption.text = "Повторения в подходе"
+        for label in [countLabel, caption, exerciseLabel, titleLabel] {
+            label.layer.shadowColor = UIColor.black.cgColor
+            label.layer.shadowOpacity = 1
+            label.layer.shadowRadius = 3
+            label.layer.shadowOffset = CGSize(width: 0, height: 1)
+            label.clipsToBounds = false
+        }
         let hero = UIStackView(arrangedSubviews: [countLabel, caption, exerciseLabel])
         hero.axis = .vertical
         hero.spacing = 2
         contentStack.addArrangedSubview(hero)
         cardsStack.axis = .vertical
-        cardsStack.spacing = 10
+        cardsStack.spacing = 8
         cardsStack.addArrangedSubview(card(title: "Подход", symbol: "dumbbell.fill", value: setLabel))
         cardsStack.addArrangedSubview(card(title: "Цель подхода", symbol: "scope", value: goalLabel))
         cardsStack.addArrangedSubview(card(title: "Статус", symbol: "waveform.path.ecg", value: statusLabel))
@@ -161,7 +168,14 @@ final class WorkoutDashboardView: UIView {
         restCard = rest
         cardsStack.addArrangedSubview(rest)
         contentStack.addArrangedSubview(cardsStack)
-        summaryStack.spacing = 10
+        let cameraSpace = UIView()
+        let collapsedSpace = cameraSpace.heightAnchor.constraint(equalToConstant: 0)
+        collapsedSpace.priority = .fittingSizeLevel
+        collapsedSpace.isActive = true
+        cameraSpace.heightAnchor.constraint(greaterThanOrEqualToConstant: 0).isActive = true
+        contentStack.addArrangedSubview(cameraSpace)
+        contentStack.setCustomSpacing(0, after: cameraSpace)
+        summaryStack.spacing = 8
         summaryStack.distribution = .fillEqually
         summaryStack.addArrangedSubview(card(title: "Активное время", symbol: "clock", value: timeLabel))
         summaryStack.addArrangedSubview(card(title: "Всего повторений", symbol: "arrow.triangle.2.circlepath", value: totalLabel))
@@ -177,7 +191,7 @@ final class WorkoutDashboardView: UIView {
         ])
         contentStack.addArrangedSubview(guidance)
         for section in [hero, summaryStack, guidance] { section.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true }
-        narrowCards = cardsStack.widthAnchor.constraint(equalTo: contentStack.widthAnchor, multiplier: 0.64)
+        narrowCards = cardsStack.widthAnchor.constraint(equalTo: contentStack.widthAnchor, multiplier: 0.50)
         wideCards = cardsStack.widthAnchor.constraint(equalTo: contentStack.widthAnchor)
         controls.accessibilityIdentifier = "workoutControls"
         controls.spacing = 10
@@ -195,6 +209,7 @@ final class WorkoutDashboardView: UIView {
         addSubview(controls)
         NSLayoutConstraint.activate([
             toolbar.topAnchor.constraint(equalTo: safeAreaLayoutGuide.topAnchor, constant: 10),
+            toolbar.heightAnchor.constraint(equalToConstant: 48),
             toolbar.leadingAnchor.constraint(equalTo: safeAreaLayoutGuide.leadingAnchor, constant: 20),
             toolbar.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor, constant: -20),
             scrollView.topAnchor.constraint(equalTo: toolbar.bottomAnchor, constant: 14),
@@ -206,6 +221,7 @@ final class WorkoutDashboardView: UIView {
             contentStack.leadingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.leadingAnchor),
             contentStack.trailingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.trailingAnchor),
             contentStack.widthAnchor.constraint(equalTo: scrollView.frameLayoutGuide.widthAnchor),
+            contentStack.heightAnchor.constraint(greaterThanOrEqualTo: scrollView.frameLayoutGuide.heightAnchor, constant: -8),
             controls.leadingAnchor.constraint(equalTo: safeAreaLayoutGuide.leadingAnchor, constant: 20),
             controls.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor, constant: -20),
             controls.bottomAnchor.constraint(equalTo: safeAreaLayoutGuide.bottomAnchor, constant: -16)
@@ -213,28 +229,28 @@ final class WorkoutDashboardView: UIView {
     }
 
     private func card(title: String, symbol: String, value: UILabel) -> UIView {
-        let surface = WorkoutAppearance.surfaceView()
+        let surface = WorkoutAppearance.surfaceView(cornerRadius: 16)
         let caption = WorkoutAppearance.label("", style: .caption1)
         caption.text = title
         caption.textColor = UIColor.white.withAlphaComponent(0.8)
         let icon = UIImageView(image: UIImage(systemName: symbol))
         icon.tintColor = WorkoutAppearance.accent
         icon.contentMode = .scaleAspectFit
-        icon.widthAnchor.constraint(equalToConstant: 22).isActive = true
-        icon.heightAnchor.constraint(equalToConstant: 22).isActive = true
+        icon.widthAnchor.constraint(equalToConstant: 18).isActive = true
+        icon.heightAnchor.constraint(equalToConstant: 18).isActive = true
         let texts = UIStackView(arrangedSubviews: [caption, value])
         texts.axis = .vertical
-        texts.spacing = 4
+        texts.spacing = 2
         let row = UIStackView(arrangedSubviews: [icon, texts])
         row.alignment = .center
-        row.spacing = 10
+        row.spacing = 8
         row.translatesAutoresizingMaskIntoConstraints = false
         surface.contentView.addSubview(row)
         NSLayoutConstraint.activate([
-            row.topAnchor.constraint(equalTo: surface.contentView.topAnchor, constant: 12),
-            row.bottomAnchor.constraint(equalTo: surface.contentView.bottomAnchor, constant: -12),
-            row.leadingAnchor.constraint(equalTo: surface.contentView.leadingAnchor, constant: 12),
-            row.trailingAnchor.constraint(equalTo: surface.contentView.trailingAnchor, constant: -12)
+            row.topAnchor.constraint(equalTo: surface.contentView.topAnchor, constant: 8),
+            row.bottomAnchor.constraint(equalTo: surface.contentView.bottomAnchor, constant: -8),
+            row.leadingAnchor.constraint(equalTo: surface.contentView.leadingAnchor, constant: 10),
+            row.trailingAnchor.constraint(equalTo: surface.contentView.trailingAnchor, constant: -10)
         ])
         return surface
     }
@@ -327,9 +343,9 @@ final class WorkoutBackdropView: UIView {
     override init(frame: CGRect) {
         super.init(frame: frame)
         isUserInteractionEnabled = false
-        gradient.colors = [UIColor.black.withAlphaComponent(0.68).cgColor, UIColor.black.withAlphaComponent(0.52).cgColor,
-                           UIColor.black.withAlphaComponent(0.72).cgColor]
-        gradient.locations = [0, 0.55, 1]
+        gradient.colors = [UIColor.black.withAlphaComponent(0.30).cgColor, UIColor.black.withAlphaComponent(0.06).cgColor,
+                           UIColor.black.withAlphaComponent(0.34).cgColor]
+        gradient.locations = [0, 0.5, 1]
         layer.addSublayer(gradient)
     }
 
