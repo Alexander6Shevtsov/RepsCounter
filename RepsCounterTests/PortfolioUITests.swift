@@ -146,6 +146,10 @@ final class PortfolioUITests: XCTestCase {
                 XCTAssertEqual(dashboard.traitCollection.preferredContentSizeCategory, category)
                 let context = "\(viewport) \(category.rawValue)"
                 let expectedTraits = UITraitCollection(preferredContentSizeCategory: category)
+                let counterFont = UIFontMetrics(forTextStyle: .largeTitle).scaledFont(
+                    for: .monospacedDigitSystemFont(ofSize: 86, weight: .bold), compatibleWith: expectedTraits
+                )
+                XCTAssertEqual(try label("workoutCount", in: dashboard).font.pointSize, counterFont.pointSize, accuracy: 0.01, context)
                 let guidanceFont = UIFont.preferredFont(forTextStyle: .subheadline, compatibleWith: expectedTraits)
                 XCTAssertEqual(try label("workoutGuidance", in: dashboard).font.pointSize, guidanceFont.pointSize, context)
                 for identifier in ["workoutSet", "workoutTime", "workoutGoal", "workoutStatus"] {
@@ -201,11 +205,30 @@ final class PortfolioUITests: XCTestCase {
     }
 
     @MainActor
-    func testCompactMetricsLeaveTheRightHalfAvailableAtDefaultTextSize() throws {
-        let dashboard = WorkoutDashboardView(frame: CGRect(x: 0, y: 0, width: 393, height: 852))
-        dashboard.traitOverrides.preferredContentSizeCategory = .large
+    func testCompactMetricsLeaveTheRightHalfAvailableAtDefaultTextSize() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        let controller = DashboardRenderController()
+        let appeared = expectation(description: "Compact dashboard appeared")
+        controller.onAppear = { appeared.fulfill() }
+        controller.traitOverrides.preferredContentSizeCategory = .large
+        let dashboard = WorkoutDashboardView()
+        controller.view = dashboard
+        window.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
+        window.rootViewController = controller
+        window.isHidden = false
+        defer { window.isHidden = true }
+        await fulfillment(of: [appeared], timeout: 3)
+        window.layoutIfNeeded()
+        let nativeInsets = dashboard.safeAreaInsets
+        controller.additionalSafeAreaInsets = UIEdgeInsets(top: 59 - nativeInsets.top, left: -nativeInsets.left,
+                                                          bottom: 34 - nativeInsets.bottom, right: -nativeInsets.right)
         dashboard.render(state(), cameraState: .running)
+        dashboard.setNeedsLayout()
         dashboard.layoutIfNeeded()
+        XCTAssertEqual(dashboard.bounds.size, CGSize(width: 393, height: 852))
+        XCTAssertEqual(dashboard.safeAreaInsets, UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0))
+        XCTAssertEqual(dashboard.traitCollection.preferredContentSizeCategory, .large)
         for identifier in ["workoutSet", "workoutGoal", "workoutStatus"] {
             let card = try metricCard(identifier, in: dashboard)
             let frame = card.convert(card.bounds, to: dashboard)
@@ -215,11 +238,73 @@ final class PortfolioUITests: XCTestCase {
             let needed = content.sizeThatFits(CGSize(width: content.bounds.width, height: .greatestFiniteMagnitude))
             XCTAssertGreaterThanOrEqual(content.bounds.height + 0.5, needed.height, identifier)
         }
-        XCTAssertGreaterThanOrEqual(try label("workoutCount", in: dashboard).font.pointSize, 86)
         let count = try label("workoutCount", in: dashboard)
+        XCTAssertEqual(count.traitCollection.preferredContentSizeCategory, .large)
+        let expectedFont = UIFontMetrics(forTextStyle: .largeTitle).scaledFont(
+            for: .monospacedDigitSystemFont(ofSize: 86, weight: .bold), compatibleWith: count.traitCollection
+        )
+        XCTAssertEqual(count.font.pointSize, expectedFont.pointSize, accuracy: 0.01)
         XCTAssertLessThan(count.convert(count.bounds, to: dashboard).minY, dashboard.bounds.height / 4)
         let summary = try metricCard("workoutTime", in: dashboard)
         XCTAssertGreaterThan(summary.convert(summary.bounds, to: dashboard).minY, dashboard.bounds.height * 0.7)
+    }
+
+    @MainActor
+    func testCounterFontFollowsInheritedTraitsAfterAttachmentAndCategoryChanges() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        let controller = DashboardRenderController()
+        let appeared = expectation(description: "Typography dashboard appeared")
+        controller.onAppear = { appeared.fulfill() }
+        controller.traitOverrides.preferredContentSizeCategory = .extraSmall
+        let container = UIView(frame: CGRect(x: 0, y: 0, width: 393, height: 852))
+        let dashboard = WorkoutDashboardView(frame: container.bounds)
+        dashboard.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        container.addSubview(dashboard)
+        controller.view = container
+        window.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
+        window.rootViewController = controller
+        window.isHidden = false
+        defer { window.isHidden = true }
+        await fulfillment(of: [appeared], timeout: 3)
+        dashboard.frame = container.bounds
+        dashboard.render(state(), cameraState: .running)
+        dashboard.setNeedsLayout()
+        dashboard.layoutIfNeeded()
+        let count = try label("workoutCount", in: dashboard)
+        let metrics = UIFontMetrics(forTextStyle: .largeTitle)
+        let baseFont = UIFont.monospacedDigitSystemFont(ofSize: 86, weight: .bold)
+        XCTAssertEqual(dashboard.traitCollection.preferredContentSizeCategory, .extraSmall)
+        XCTAssertEqual(count.font.pointSize, metrics.scaledFont(for: baseFont, compatibleWith: count.traitCollection).pointSize, accuracy: 0.01)
+        let initialSize = count.font.pointSize
+        dashboard.removeFromSuperview()
+        XCTAssertNil(dashboard.window)
+        dashboard.traitOverrides.preferredContentSizeCategory = .large
+        dashboard.layoutIfNeeded()
+        container.addSubview(dashboard)
+        container.setNeedsLayout()
+        window.layoutIfNeeded()
+        dashboard.setNeedsLayout()
+        dashboard.layoutIfNeeded()
+        XCTAssertTrue(dashboard.window === window)
+        XCTAssertEqual(dashboard.traitCollection.preferredContentSizeCategory, .large)
+        XCTAssertEqual(count.traitCollection.preferredContentSizeCategory, .large)
+        XCTAssertEqual(count.font.pointSize, metrics.scaledFont(for: baseFont, compatibleWith: count.traitCollection).pointSize, accuracy: 0.01)
+        XCTAssertGreaterThan(count.font.pointSize, initialSize)
+        dashboard.traitOverrides.remove(UITraitPreferredContentSizeCategory.self)
+        for category in [UIContentSizeCategory.small, .accessibilityExtraExtraExtraLarge, .large] {
+            controller.traitOverrides.preferredContentSizeCategory = category
+            container.setNeedsLayout()
+            window.setNeedsLayout()
+            window.layoutIfNeeded()
+            dashboard.setNeedsLayout()
+            dashboard.layoutIfNeeded()
+            XCTAssertEqual(controller.traitCollection.preferredContentSizeCategory, category)
+            XCTAssertEqual(container.traitCollection.preferredContentSizeCategory, category)
+            XCTAssertEqual(dashboard.traitCollection.preferredContentSizeCategory, category)
+            XCTAssertEqual(count.traitCollection.preferredContentSizeCategory, category)
+            XCTAssertEqual(count.font.pointSize, metrics.scaledFont(for: baseFont, compatibleWith: count.traitCollection).pointSize, accuracy: 0.01)
+        }
     }
 
     @MainActor

@@ -92,6 +92,8 @@ Concept-only settings, flash, sound/autostart switches, plans and profile are de
 
 Final polish makes the metric column narrower, reduces card padding, moves the summary toward the bottom and lightens the camera backdrop. Text size and primary controls are preserved. The user reports that the initial PR #10 interface, skeleton, counter, finish and history work on iPhone 15 Pro; the new brightness/layout still needs device review. [Before/after comparisons](Docs/PORTFOLIO_UI.md#сравнение-допосле) use matching **synthetic UIKit fixtures**, clearly separated from camera screenshots and the concept.
 
+The detached-view Dynamic Type test has been corrected to use a real window, assert the effective category and compare the counter with `UIFontMetrics`. Production typography is unchanged. The original 80 pt result is valid for the device's XS setting; the requested Large category applies after hierarchy layout. Full XCTest also ran on physical iPhone 15 Pro / iOS 27.2; see [cause, measured values and regression coverage](Docs/DYNAMIC_TYPE_TESTING.md).
+
 The following are **actual Release screenshots from iPhone 15 Pro / iOS 18.6 Simulator**, not concept images. The updated workout screenshot shows denied camera access with a real zero result; the history screenshot shows the empty state. These images do not demonstrate pose accuracy.
 
 | Workout | Empty history |
