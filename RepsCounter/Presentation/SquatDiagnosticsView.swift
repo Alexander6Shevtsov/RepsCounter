@@ -9,6 +9,7 @@
 import UIKit
 
 final class SquatDiagnosticsView: UIVisualEffectView {
+    var onComparison: (() -> Void)?
     private let textLabel = UILabel()
 
     init() {
@@ -25,22 +26,35 @@ final class SquatDiagnosticsView: UIVisualEffectView {
         textLabel.textColor = .white
         textLabel.numberOfLines = 0
         textLabel.accessibilityIdentifier = "squatDiagnosticsText"
-        textLabel.translatesAutoresizingMaskIntoConstraints = false
-        scrollView.addSubview(textLabel)
+        let comparisonButton = UIButton(type: .system)
+        comparisonButton.setTitle("Эксперимент 2D / 3D", for: .normal)
+        comparisonButton.titleLabel?.font = .preferredFont(forTextStyle: .caption1)
+        comparisonButton.titleLabel?.adjustsFontForContentSizeCategory = true
+        comparisonButton.titleLabel?.numberOfLines = 0
+        comparisonButton.accessibilityIdentifier = "poseComparisonButton"
+        comparisonButton.addTarget(self, action: #selector(openComparison), for: .touchUpInside)
+        comparisonButton.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
+        let contents = UIStackView(arrangedSubviews: [comparisonButton, textLabel])
+        contents.axis = .vertical
+        contents.spacing = 8
+        contents.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.addSubview(contents)
         NSLayoutConstraint.activate([
             scrollView.topAnchor.constraint(equalTo: contentView.topAnchor),
             scrollView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
             scrollView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
-            textLabel.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor, constant: 10),
-            textLabel.leadingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.leadingAnchor, constant: 12),
-            textLabel.trailingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.trailingAnchor, constant: -12),
-            textLabel.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor, constant: -10),
-            textLabel.widthAnchor.constraint(equalTo: scrollView.frameLayoutGuide.widthAnchor, constant: -24)
+            contents.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor, constant: 10),
+            contents.leadingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.leadingAnchor, constant: 12),
+            contents.trailingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.trailingAnchor, constant: -12),
+            contents.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor, constant: -10),
+            contents.widthAnchor.constraint(equalTo: scrollView.frameLayoutGuide.widthAnchor, constant: -24)
         ])
     }
 
     required init?(coder: NSCoder) { nil }
+
+    @objc private func openComparison() { onComparison?() }
 
     func render(_ diagnostics: SquatDiagnostics) {
         let analysis = diagnostics.analysis

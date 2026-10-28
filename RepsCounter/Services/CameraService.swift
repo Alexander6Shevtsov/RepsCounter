@@ -41,6 +41,9 @@ final class CameraService: Sendable {
     private(set) var position: CameraPosition = .front
     private(set) var rotationAngle: CGFloat = 90
     var previewSource: CameraPreviewSource? { capture.previewSource }
+    #if DEBUG
+    var experimentCapture: PoseExperimentCapture? { capture.experiment }
+    #endif
     var canSwitchCamera: Bool {
         guard startTask == nil else { return false }
         switch state {

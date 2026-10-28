@@ -6,6 +6,16 @@ RepsCounter is an iOS exercise tracker designed to count repetitions using on-de
 
 > **Development status:** This repository contains an initial implementation scaffold. The design image below is a **UI concept, not a screenshot of running software**. Features and accuracy require verification on a real iPhone before they can be claimed as production-ready.
 
+## Experimental Vision 2D / 3D — 28 October 2026
+
+After merged PR #7 (`main`, `7db6c77`), `experiment/vision-3d` adds an opt-in Debug panel: **Диагностика → Эксперимент 2D / 3D**. It compares angles from the same timestamped camera sample, with one capture session, a bounded worker (at most 2 Hz), cancellation, frame identity checks, measured latency and coverage. Choose the viewpoint, start/finish a series, then explicitly enter manually assessed full/partial/uncertain counts. Numeric samples stay in bounded process memory; no images, video or exports are saved. Release contains no experimental UI or 3D processing.
+
+The panel opens in **Кратко**: seven compact metric rows without scrolling. **Подробно** retains the complete scrollable report while keeping the series button and settings menu fixed. The menu contains viewpoint selection, the displayed leg and manual annotation; changing display mode preserves the running series and every collected sample. Accessibility text sizes use a readable mode menu and show one leg at a time, with full VoiceOver descriptions. See [HUD layout and metric meanings](Docs/VISION_3D_EXPERIMENT.md#debug-интерфейс-кратко--подробно).
+
+**3D full-repetition count remains indeterminate (`—`)**: spatial knee angles and hip-versus-knee model coordinates do not establish physical depth without a validated criterion. No 2D thresholds are transferred, and production counting, switching, timers and persistence are preserved. [FP-001 / Issue #8](https://github.com/Alexander6Shevtsov/RepsCounter/issues/8) remains open with its strict expected-failure test. [Implementation, concurrency limits, validation and the iPhone 15 Pro protocol](Docs/VISION_3D_EXPERIMENT.md) distinguish implemented measurement from unconfirmed physical accuracy.
+
+Validation: Debug, unsigned Release and Swift 6 diagnostic builds succeeded. Each iOS Simulator 18.6 / 26.5 / 27.0 / 27.1 ran **253 tests: 252 passed, 1 expected failure FP-001**. Two Release UI absence tests passed. All four simulators reported no supported Vision 3D revision; real body reconstruction, device latency and accuracy require an iPhone trial. Project language mode remains Swift 5.
+
 ## Technical audit — 24 October 2026
 
 The unchanged starter is preserved in the first commit and the `starter-v0.1.0` tag. See the [technical audit in Russian](Docs/TECHNICAL_AUDIT.md), [prioritized next tasks](Docs/NEXT_TASKS.md), and [baseline file checksums](Docs/BASELINE_MANIFEST.json).
