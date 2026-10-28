@@ -82,6 +82,20 @@ A correct 2D skeleton cannot establish physical squat depth from every viewpoint
 
 ![RepsCounter interface — design concept, not a working application screenshot](Docs/Concept.png)
 
+## Portfolio UIKit redesign — PR #10
+
+The `feature/portfolio-ui` branch follows the concept's visual direction: fullscreen camera and skeleton, a large current-set counter, dark translucent metric cards, blue primary actions and compact history/camera controls. UIKit presentation renders real workout state; counting, timing, persistence and camera lifecycle are unchanged. History, empty/error states, permission guidance, pause, rest and save/retry share the same style.
+
+Dynamic Type scales text; accessibility sizes stack cards and actions vertically. Workout controls stay outside the vertically scrollable metric body. Main's Debug 2D diagnostics remain toggleable and are excluded from Release. The separate Vision 3D experiment in open PR #9 is not included. FP-001 remains an explicitly expected failure; the redesign makes no accuracy claim.
+
+Concept-only settings, flash, sound/autostart switches, plans and profile are deferred because their functionality is absent. See [implemented elements, verification and physical-device checks](Docs/PORTFOLIO_UI.md). Status remains **In Development**.
+
+The following are **actual Release screenshots from iPhone 15 Pro / iOS 18.6 Simulator**, not concept images. The simulator has no usable camera, so it shows the camera error with a real zero result and an empty history; these images do not demonstrate pose accuracy.
+
+| Workout | Empty history |
+|---|---|
+| <img src="Docs/UI/Workout-Simulator.png" width="260" alt="Release workout on Simulator, camera unavailable"> | <img src="Docs/UI/History-Empty-Simulator.png" width="260" alt="Release empty workout history on Simulator"> |
+
 ## MVP scope
 
 - [x] Initial Xcode project structure and UIKit app entry point
@@ -105,7 +119,7 @@ The main engineering challenge is translating noisy, low-confidence 2D joint mea
 
 | Area | Technology |
 |---|---|
-| UI | UIKit, Auto Layout, Dynamic Type (initial support) |
+| UI | UIKit, programmatic Auto Layout, Dynamic Type, translucent metric cards |
 | Camera | AVFoundation, `AVCaptureVideoDataOutput` |
 | Pose estimation | Vision, `VNDetectHumanBodyPoseRequest` |
 | Domain logic | Joint-angle geometry, exponential smoothing, finite-state machine |

@@ -150,11 +150,19 @@ final class SquatDiagnosticsTests: XCTestCase {
                 controller.view.layoutIfNeeded()
                 let panelFrame = panel.convert(panel.bounds, to: controller.view)
                 XCTAssertTrue(controller.view.bounds.contains(panelFrame))
-                let labels = contents.compactMap { $0 as? UILabel }.filter { !$0.isDescendant(of: panel) }
+                func isVisible(_ element: UIView) -> Bool {
+                    var ancestor: UIView? = element
+                    while let current = ancestor {
+                        if current.isHidden { return false }
+                        ancestor = current.superview
+                    }
+                    return true
+                }
+                let labels = contents.compactMap { $0 as? UILabel }.filter { !$0.isDescendant(of: panel) && isVisible($0) }
                 for label in labels {
                     XCTAssertFalse(panelFrame.intersects(label.convert(label.bounds, to: controller.view)), label.text ?? "label")
                 }
-                for control in contents.compactMap({ $0 as? UIButton }) where !control.isDescendant(of: panel) {
+                for control in contents.compactMap({ $0 as? UIButton }) where !control.isDescendant(of: panel) && isVisible(control) {
                     XCTAssertFalse(panelFrame.intersects(control.convert(control.bounds, to: controller.view)))
                 }
                 if viewport.width == 393, category == .large {
