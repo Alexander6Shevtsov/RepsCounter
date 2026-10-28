@@ -31,6 +31,8 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
     private lazy var comparisonModel = PoseComparisonViewModel(capture: camera.experimentCapture)
     private weak var annotationAlert: UIAlertController?
     private var diagnosticsLayoutConstraints: [NSLayoutConstraint] = []
+    private weak var workoutIndicators: UIStackView?
+    private var comparisonBottomConstraint: NSLayoutConstraint?
     #endif
     private var lastPose: BodyPose?
     private var lastState: WorkoutViewState?
@@ -57,7 +59,8 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
         #if DEBUG
         comparisonModel.onChange = { [weak self] in
             guard let self, !self.comparisonView.isHidden else { return }
-            self.comparisonView.render(self.comparisonModel)
+            self.comparisonView.render(self.comparisonModel, cameraPosition: self.camera.position,
+                                       workoutState: self.lastState, cameraState: self.camera.state)
         }
         viewModel.onDiagnosticsChange = { [weak self] diagnostics in
             guard let self, !self.diagnosticsView.isHidden else { return }
@@ -231,6 +234,9 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
 
     #if DEBUG
     private func configureDiagnostics(above controls: UIView, beside indicators: UIStackView) {
+        workoutIndicators = indicators
+        indicators.accessibilityIdentifier = "workoutIndicators"
+        controls.accessibilityIdentifier = "workoutControls"
         diagnosticsButton.setTitle("Диагностика", for: .normal)
         diagnosticsButton.titleLabel?.font = .preferredFont(forTextStyle: .caption1)
         diagnosticsButton.titleLabel?.adjustsFontForContentSizeCategory = true
@@ -254,6 +260,9 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
         }
         comparisonView.onAnnotate = { [weak self] in self?.annotateComparisonSeries() }
         comparisonView.onViewpoint = { [weak self] in self?.comparisonModel.selectedViewpoint = $0 }
+        comparisonView.onDisplayModeChange = { [weak self] mode in
+            self?.comparisonBottomConstraint?.isActive = mode == .detailed && self?.comparisonView.isHidden == false
+        }
         view.addSubview(diagnosticsButton)
         view.addSubview(diagnosticsView)
         view.addSubview(comparisonView)
@@ -269,10 +278,11 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
         ])
         NSLayoutConstraint.activate([
             comparisonView.topAnchor.constraint(equalTo: diagnosticsView.topAnchor),
-            comparisonView.bottomAnchor.constraint(equalTo: diagnosticsView.bottomAnchor),
-            comparisonView.leadingAnchor.constraint(equalTo: diagnosticsView.leadingAnchor),
-            comparisonView.trailingAnchor.constraint(equalTo: diagnosticsView.trailingAnchor)
+            comparisonView.bottomAnchor.constraint(lessThanOrEqualTo: controls.topAnchor, constant: -10),
+            comparisonView.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 22),
+            comparisonView.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -22)
         ])
+        comparisonBottomConstraint = comparisonView.bottomAnchor.constraint(equalTo: controls.topAnchor, constant: -10)
         diagnosticsLayoutConstraints = [
             indicators.trailingAnchor.constraint(equalTo: diagnosticsView.leadingAnchor, constant: -8),
             indicators.bottomAnchor.constraint(lessThanOrEqualTo: controls.topAnchor, constant: -10)
@@ -300,9 +310,13 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
     private func showComparison(_ shown: Bool) {
         diagnosticsView.isHidden = shown
         comparisonView.isHidden = !shown
+        workoutIndicators?.isHidden = shown
+        if shown { NSLayoutConstraint.deactivate(diagnosticsLayoutConstraints) }
+        else { NSLayoutConstraint.activate(diagnosticsLayoutConstraints) }
+        comparisonBottomConstraint?.isActive = shown && comparisonView.displayMode == .detailed
         comparisonModel.setEnabled(shown)
         updateComparisonAvailability()
-        comparisonView.render(comparisonModel)
+        comparisonView.render(comparisonModel, cameraPosition: camera.position, workoutState: lastState, cameraState: camera.state)
     }
 
     private func updateComparisonAvailability() {

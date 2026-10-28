@@ -29,6 +29,10 @@ final class PoseComparisonTests: XCTestCase {
         diagnosticsButton.sendActions(for: .touchUpInside)
         comparisonButton.sendActions(for: .touchUpInside)
         XCTAssertFalse(comparisonPanel.isHidden)
+        let modeControl = try XCTUnwrap(contents.first { $0.accessibilityIdentifier == "poseComparisonModeControl" } as? UISegmentedControl)
+        XCTAssertEqual(modeControl.selectedSegmentIndex, 0)
+        modeControl.selectedSegmentIndex = 1
+        modeControl.sendActions(for: .valueChanged)
         let label = try XCTUnwrap(contents.first { $0.accessibilityIdentifier == "poseComparisonText" } as? UILabel)
         XCTAssertTrue(label.text?.contains("3D: —") == true)
         XCTAssertTrue(label.text?.contains("полный присед не определён") == true)
@@ -39,6 +43,8 @@ final class PoseComparisonTests: XCTestCase {
         XCTAssertNil(diagnostics)
         XCTAssertNil(comparison)
         XCTAssertNil(panel)
+        XCTAssertFalse(contents.contains { $0.accessibilityIdentifier?.hasPrefix("poseHUD") == true })
+        XCTAssertFalse(contents.contains { $0.accessibilityIdentifier == "poseComparisonModeControl" || $0.accessibilityIdentifier == "poseComparisonModeMenuButton" })
         #endif
     }
 
@@ -48,6 +54,377 @@ final class PoseComparisonTests: XCTestCase {
     }
 
     #if DEBUG
+    @MainActor
+    func testCompactHUDDefaultsToNoScrollAndDoesNotInventMeasurements() throws {
+        let fixture = PoseComparisonFixture()
+        defer { fixture.model.setEnabled(false) }
+        fixture.model.selectedViewpoint = .diagonal
+        let panel = PoseComparisonView()
+        panel.render(fixture.model, cameraPosition: .back)
+        let contents = descendants(panel)
+        XCTAssertEqual(panel.displayMode, .compact)
+        XCTAssertEqual(try hudLabel("Summary", inside: panel).text, "Счёт 0 · Задняя · 45°")
+        XCTAssertEqual(try hudLabel("Status", inside: panel).text, "3D: нет актуальных данных")
+        XCTAssertEqual(try hudLabel("Planar", inside: panel).text, "2D Л — · П —")
+        XCTAssertEqual(try hudLabel("Spatial", inside: panel).text, "3D Л — · П —")
+        XCTAssertEqual(try hudLabel("Rates", inside: panel).text, "FPS 2D — · 3D —")
+        XCTAssertEqual(try hudLabel("Coverage", inside: panel).text, "Coverage — · 3D Δ —")
+        let scroll = try XCTUnwrap(contents.first { $0.accessibilityIdentifier == "poseComparisonDetailsScroll" } as? UIScrollView)
+        XCTAssertTrue(scroll.isHidden)
+        XCTAssertFalse(contents.contains { $0 is UIScrollView && isVisible($0) })
+    }
+
+    @MainActor
+    func testDisplayModeSwitchPreservesRecordingAndCollectsEveryDeliveredPair() throws {
+        let fixture = PoseComparisonFixture()
+        defer { fixture.model.setEnabled(false) }
+        let panel = PoseComparisonView()
+        panel.onSeries = {
+            if fixture.model.isRecording { fixture.model.finishSeries() }
+            else { fixture.model.startSeries() }
+        }
+        panel.onViewpoint = { fixture.model.selectedViewpoint = $0 }
+        let model = fixture.model
+        model.onChange = { [weak panel, weak model] in
+            guard let model else { return }
+            panel?.render(model, cameraPosition: .front)
+        }
+        panel.render(model, cameraPosition: .front)
+        let button = try XCTUnwrap(descendants(panel).first { $0.accessibilityIdentifier == "poseComparisonSeriesButton" } as? UIButton)
+        button.sendActions(for: .touchUpInside)
+        XCTAssertTrue(model.isRecording)
+        let epoch = fixture.capture.currentEpoch
+        let seriesIdentifier = model.series.last?.id
+        model.receive(.paired(fixture.pair(sequence: 1), fixture.counters))
+        let control = try modeControl(inside: panel)
+        control.selectedSegmentIndex = 1
+        control.sendActions(for: .valueChanged)
+        XCTAssertEqual(panel.displayMode, .detailed)
+        model.receive(.paired(fixture.pair(sequence: 2), fixture.counters))
+        control.selectedSegmentIndex = 0
+        control.sendActions(for: .valueChanged)
+        XCTAssertEqual(panel.displayMode, .compact)
+        model.receive(.paired(fixture.pair(sequence: 3), fixture.counters))
+        XCTAssertEqual(fixture.capture.currentEpoch, epoch)
+        XCTAssertTrue(fixture.capture.isProcessingEnabled)
+        XCTAssertTrue(model.isRecording)
+        XCTAssertEqual(model.series.last?.id, seriesIdentifier)
+        XCTAssertEqual(model.series.last?.pairs.map { $0.source.metadata.identity.sequence }, [1, 2, 3])
+        XCTAssertEqual(model.statistics, fixture.counters)
+        button.sendActions(for: .touchUpInside)
+        XCTAssertFalse(model.isRecording)
+        XCTAssertTrue(model.annotate(full: 0, partial: 3, uncertain: 0))
+        XCTAssertEqual(model.series.last?.annotation?.partialRepetitions, 3)
+    }
+
+    @MainActor
+    func testSeriesMenuKeepsViewpointSelectionAndManualAnnotationInBothModes() throws {
+        let fixture = PoseComparisonFixture()
+        defer { fixture.model.setEnabled(false) }
+        let panel = PoseComparisonView()
+        panel.onViewpoint = { fixture.model.selectedViewpoint = $0 }
+        let model = fixture.model
+        model.onChange = { [weak panel, weak model] in
+            guard let model else { return }
+            panel?.render(model)
+        }
+        panel.render(model)
+        let settings = try XCTUnwrap(descendants(panel).first { $0.accessibilityIdentifier == "poseComparisonSettingsButton" } as? UIButton)
+        panel.selectViewpoint(.diagonal)
+        XCTAssertEqual(model.selectedViewpoint, .diagonal)
+        XCTAssertTrue(try hudLabel("Summary", inside: panel).text?.contains("45°") == true)
+        let before = try XCTUnwrap(menuActions(settings.menu).first { $0.identifier.rawValue == "poseComparisonAnnotation" })
+        XCTAssertTrue(before.attributes.contains(.disabled))
+        model.startSeries()
+        panel.selectViewpoint(.side)
+        XCTAssertEqual(model.selectedViewpoint, .diagonal)
+        XCTAssertEqual(model.series.last?.viewpoint, .diagonal)
+        for modeIndex in [1, 0] {
+            let control = try modeControl(inside: panel)
+            control.selectedSegmentIndex = modeIndex
+            control.sendActions(for: .valueChanged)
+            let actions = menuActions(settings.menu)
+            for title in ["Лицом", "45°", "Боком"] {
+                let action = try XCTUnwrap(actions.first { $0.title == title })
+                XCTAssertTrue(action.attributes.contains(.disabled))
+            }
+            XCTAssertTrue(actions.contains { $0.identifier.rawValue == "poseComparisonAnnotation" })
+        }
+        model.finishSeries()
+        let after = try XCTUnwrap(menuActions(settings.menu).first { $0.identifier.rawValue == "poseComparisonAnnotation" })
+        XCTAssertFalse(after.attributes.contains(.disabled))
+        panel.selectViewpoint(.side)
+        XCTAssertEqual(model.selectedViewpoint, .side)
+        XCTAssertTrue(model.annotate(full: 0, partial: 4, uncertain: 0))
+    }
+
+    @MainActor
+    func testCompactHUDKeepsCameraFailureAndPermissionMessagesVisible() throws {
+        let fixture = PoseComparisonFixture()
+        defer { fixture.model.setEnabled(false) }
+        let panel = PoseComparisonView()
+        let scenarios: [(CameraState, String)] = [(.permissionDenied, "Нет доступа"), (.interrupted, "Прерывание"),
+                                                  (.failed("Controlled camera failure"), "Ошибка камеры"), (.stopped, "Пауза")]
+        for scenario in scenarios {
+            panel.render(fixture.model, cameraPosition: .back, cameraState: scenario.0)
+            XCTAssertEqual(try hudLabel("Status", inside: panel).text, "3D: нет актуальных данных")
+            XCTAssertEqual(try hudLabel("Reason", inside: panel).text, "Причина: " + scenario.1)
+        }
+    }
+
+    @MainActor
+    func testCompactHUDReportsNativeRejectionsWithoutLongErrors() throws {
+        let fixture = PoseComparisonFixture()
+        defer { fixture.model.setEnabled(false) }
+        let panel = PoseComparisonView()
+        let scenarios: [(Pose3DIssue, String)] = [
+            (.noBody, "noBody"), (.missingJoint, "missingJoint"),
+            (.visionError, "visionError"), (.unsupportedRevision, "unsupportedRevision")
+        ]
+        for (offset, scenario) in scenarios.enumerated() {
+            let pair = displayPair(fixture, sequence: UInt64(offset + 1), issue: scenario.0)
+            fixture.model.receive(.paired(pair, fixture.counters))
+            panel.render(fixture.model, cameraPosition: .front)
+            XCTAssertEqual(try hudLabel("Status", inside: panel).text, "3D: " + scenario.1)
+            XCTAssertFalse(try hudLabel("Reason", inside: panel).isHidden)
+            XCTAssertFalse(try hudLabel("Reason", inside: panel).text?.contains("Long Vision detail") == true)
+            XCTAssertEqual(try hudLabel("Spatial", inside: panel).text, "3D Л — · П —")
+        }
+        fixture.clock.advance(.milliseconds(751))
+        panel.render(fixture.model, cameraPosition: .front)
+        XCTAssertEqual(try hudLabel("Status", inside: panel).text, "3D: нет актуальных данных")
+        XCTAssertEqual(try hudLabel("Coverage", inside: panel).text, "Coverage 10% · 3D Δ —")
+    }
+
+    @MainActor
+    func testCompactHUDUsesFresh2DWithoutSubstitutingAnother3DFrame() throws {
+        let fixture = PoseComparisonFixture()
+        defer { fixture.model.setEnabled(false) }
+        fixture.model.receive(.paired(fixture.pair(sequence: 1), fixture.counters))
+        fixture.clock.advance(.milliseconds(751))
+        fixture.model.receive(.planar(fixture.pair(sequence: 2).source, fixture.counters))
+        let panel = PoseComparisonView()
+        panel.render(fixture.model, cameraPosition: .front)
+        XCTAssertEqual(try hudLabel("Planar", inside: panel).text, "2D Л 170.0° · П 168.0°")
+        XCTAssertEqual(try hudLabel("Spatial", inside: panel).text, "3D Л — · П —")
+        XCTAssertEqual(try hudLabel("Status", inside: panel).text, "3D: нет актуальных данных")
+    }
+
+    @MainActor
+    func testCompactMetricsAndDisplayedLegComeFromExistingDataOnly() throws {
+        let fixture = PoseComparisonFixture()
+        defer { fixture.model.setEnabled(false) }
+        fixture.model.startSeries()
+        let initial = fixture.pair(sequence: 1)
+        fixture.clock.advance(.milliseconds(100))
+        let pair = PoseComparisonPair(source: initial.source, detection: initial.detection, spatial: initial.spatial,
+                                      latency: 0.06, completedAt: fixture.clock.current)
+        fixture.model.receive(.paired(pair, fixture.counters))
+        let epoch = fixture.capture.currentEpoch
+        let panel = PoseComparisonView()
+        panel.render(fixture.model, cameraPosition: .front)
+        XCTAssertEqual(try hudLabel("Rates", inside: panel).text, "FPS 2D 100.0 · 3D 10.0")
+        XCTAssertEqual(try hudLabel("Coverage", inside: panel).text, "Coverage 10% · 3D Δ 100 мс")
+        XCTAssertEqual(try hudLabel("Status", inside: panel).text, "3D: распознаётся")
+        XCTAssertTrue(try hudLabel("Reason", inside: panel).isHidden)
+        panel.selectHUDLeg(.right)
+        XCTAssertEqual(try hudLabel("Planar", inside: panel).text, "2D П 168.0°")
+        XCTAssertEqual(fixture.capture.currentEpoch, epoch)
+        XCTAssertEqual(fixture.model.series.last?.pairs.count, 1)
+        XCTAssertEqual(fixture.model.latestPair?.source.metadata.identity.sequence, 1)
+    }
+
+    @MainActor
+    func testDetailedModeKeepsFullDiagnosticsAndScrollsInsideFixedControls() throws {
+        let fixture = PoseComparisonFixture()
+        defer { fixture.model.setEnabled(false) }
+        fixture.model.startSeries()
+        fixture.model.receive(.paired(fixture.pair(sequence: 1), fixture.counters))
+        let panel = PoseComparisonView()
+        panel.isHidden = false
+        panel.frame = CGRect(x: 0, y: 0, width: 349, height: 500)
+        panel.render(fixture.model, cameraPosition: .front)
+        let control = try modeControl(inside: panel)
+        control.selectedSegmentIndex = 1
+        control.sendActions(for: .valueChanged)
+        panel.layoutIfNeeded()
+        let contents = descendants(panel)
+        let label = try XCTUnwrap(contents.first { $0.accessibilityIdentifier == "poseComparisonText" } as? UILabel)
+        let text = try XCTUnwrap(label.text)
+        for token in ["Кадры:", "Пропуски:", "Устарели", "Кадр 1:1", "PTS", "EXIF", "2D: standing", "3D: measuring", "ΔY", "Depth data", "Оценка роста", "3D: —"] {
+            XCTAssertTrue(text.contains(token), token)
+        }
+        let scroll = try XCTUnwrap(contents.first { $0.accessibilityIdentifier == "poseComparisonDetailsScroll" } as? UIScrollView)
+        XCTAssertFalse(scroll.isHidden)
+        XCTAssertGreaterThan(scroll.contentSize.height, scroll.bounds.height)
+        let seriesButton = try XCTUnwrap(contents.first { $0.accessibilityIdentifier == "poseComparisonSeriesButton" })
+        let originalFrame = seriesButton.convert(seriesButton.bounds, to: panel)
+        scroll.contentOffset.y = max(0, scroll.contentSize.height - scroll.bounds.height)
+        XCTAssertEqual(seriesButton.convert(seriesButton.bounds, to: panel), originalFrame)
+        XCTAssertFalse(originalFrame.intersects(scroll.convert(scroll.bounds, to: panel)))
+    }
+
+    @MainActor
+    func testCompactHUDAllDynamicTypeSizesFitIPhone15ProWithoutClippedMetrics() throws {
+        let workout = ExperimentWorkoutFixture(cameraReady: false)
+        let camera = CameraService(permission: ControlledCameraPermission(status: .denied), capture: ControlledCameraCapture())
+        let controller = WorkoutViewController(viewModel: workout.viewModel, camera: camera, persistence: workout.store)
+        controller.loadViewIfNeeded()
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
+        window.rootViewController = controller
+        window.isHidden = false
+        window.layoutIfNeeded()
+        let systemInsets = controller.view.safeAreaInsets
+        controller.additionalSafeAreaInsets = UIEdgeInsets(top: 59 - systemInsets.top, left: -systemInsets.left,
+                                                           bottom: 34 - systemInsets.bottom, right: -systemInsets.right)
+        defer {
+            controller.cameraCoordinator.finish()
+            window.isHidden = true
+        }
+        let contents = descendants(controller.view)
+        let toggle = try XCTUnwrap(contents.first { $0.accessibilityIdentifier == "squatDiagnosticsButton" } as? UIButton)
+        let openButton = try XCTUnwrap(contents.first { $0.accessibilityIdentifier == "poseComparisonButton" } as? UIButton)
+        toggle.sendActions(for: .touchUpInside)
+        openButton.sendActions(for: .touchUpInside)
+        let panel = try XCTUnwrap(contents.first { $0.accessibilityIdentifier == "poseComparisonPanel" } as? PoseComparisonView)
+        let controls = try XCTUnwrap(contents.first { $0.accessibilityIdentifier == "workoutControls" })
+        let indicators = try XCTUnwrap(contents.first { $0.accessibilityIdentifier == "workoutIndicators" })
+        XCTAssertTrue(indicators.isHidden)
+        let fixture = PoseComparisonFixture()
+        defer { fixture.model.setEnabled(false) }
+        fixture.model.updateWorkout(active: true, repetitions: 48)
+        fixture.model.selectedViewpoint = .frontal
+        fixture.model.startSeries()
+        var sequence: UInt64 = 0
+        let categories: [UIContentSizeCategory] = [.extraSmall, .small, .medium, .large, .extraLarge, .extraExtraLarge, .extraExtraExtraLarge,
+                                                  .accessibilityMedium, .accessibilityLarge, .accessibilityExtraLarge,
+                                                  .accessibilityExtraExtraLarge, .accessibilityExtraExtraExtraLarge]
+        for category in categories {
+            sequence += 1
+            let initialPair = displayPair(fixture, sequence: sequence, issue: .unsupportedRevision)
+            fixture.clock.advance(.milliseconds(749))
+            let pair = PoseComparisonPair(source: initialPair.source, detection: initialPair.detection, spatial: initialPair.spatial,
+                                          latency: initialPair.latency, completedAt: fixture.clock.current)
+            fixture.model.receive(.paired(pair, fixture.counters))
+            controller.traitOverrides.preferredContentSizeCategory = category
+            controller.view.setNeedsLayout()
+            controller.view.layoutIfNeeded()
+            panel.render(fixture.model, cameraPosition: .front)
+            controller.view.layoutIfNeeded()
+            XCTAssertEqual(controller.view.bounds.size, CGSize(width: 393, height: 852))
+            XCTAssertEqual(controller.view.safeAreaInsets, UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0))
+            XCTAssertEqual(panel.traitCollection.preferredContentSizeCategory, category)
+            let expectedFont = UIFont.preferredFont(forTextStyle: .caption2, compatibleWith: UITraitCollection(preferredContentSizeCategory: category))
+            XCTAssertEqual(try hudLabel("Status", inside: panel).font.pointSize, expectedFont.pointSize)
+            let panelFrame = panel.convert(panel.bounds, to: controller.view)
+            let controlsFrame = controls.convert(controls.bounds, to: controller.view)
+            assertCompactMetricsFit(panel, container: controller.view, controls: controls, context: category.rawValue)
+            if category.isAccessibilityCategory {
+                XCTAssertFalse(try hudLabel("Planar", inside: panel).text?.contains("П ") == true)
+                XCTAssertTrue(try hudLabel("Planar", inside: panel).text?.contains("Л ") == true)
+                let menuButton = try XCTUnwrap(descendants(panel).first { $0.accessibilityIdentifier == "poseComparisonModeMenuButton" } as? UIButton)
+                XCTAssertTrue(isVisible(menuButton))
+                XCTAssertEqual(menuButton.accessibilityValue, "Кратко")
+                XCTAssertEqual(Set(menuActions(menuButton.menu).map(\.title)), Set(["Кратко", "Подробно"]))
+                XCTAssertTrue(try modeControl(inside: panel).isHidden)
+                if let title = menuButton.titleLabel {
+                    let needed = title.sizeThatFits(CGSize(width: title.bounds.width, height: .greatestFiniteMagnitude))
+                    XCTAssertGreaterThan(title.bounds.width, 0)
+                    XCTAssertGreaterThanOrEqual(title.bounds.height + 0.5, needed.height, "\(category.rawValue) mode menu")
+                }
+            }
+            let seriesButton = try XCTUnwrap(descendants(panel).first { $0.accessibilityIdentifier == "poseComparisonSeriesButton" } as? UIButton)
+            if let title = seriesButton.titleLabel {
+                let needed = title.sizeThatFits(CGSize(width: title.bounds.width, height: .greatestFiniteMagnitude))
+                XCTAssertGreaterThan(title.bounds.width, 0)
+                XCTAssertGreaterThanOrEqual(title.bounds.height + 0.5, needed.height, "\(category.rawValue) series button")
+            }
+            if category == .large { XCTAssertLessThanOrEqual(panelFrame.height, 250) }
+            print("HUD layout \(category.rawValue): height=\(panelFrame.height), font=\(try hudLabel("Status", inside: panel).font.pointSize), safe=\(controller.view.safeAreaInsets)")
+            if category == .large || category == .accessibilityExtraExtraExtraLarge {
+                let image = UIGraphicsImageRenderer(size: controller.view.bounds.size).image { context in
+                    controller.view.drawHierarchy(in: controller.view.bounds, afterScreenUpdates: true)
+                }
+                let attachment = XCTAttachment(image: image)
+                attachment.name = "Synthetic compact HUD \(category.rawValue)"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+            for issue: Pose3DIssue? in [.noBody, .missingJoint, .visionError, .invalidGeometry, .cancelled, nil] {
+                sequence += 1
+                fixture.model.receive(.paired(displayPair(fixture, sequence: sequence, issue: issue), fixture.counters))
+                panel.render(fixture.model, cameraPosition: .back)
+                controller.view.layoutIfNeeded()
+                assertCompactMetricsFit(panel, container: controller.view, controls: controls, context: category.rawValue + " \(String(describing: issue))")
+            }
+            fixture.clock.advance(.milliseconds(751))
+            panel.render(fixture.model, cameraPosition: .back, cameraState: .permissionDenied)
+            controller.view.layoutIfNeeded()
+            assertCompactMetricsFit(panel, container: controller.view, controls: controls, context: category.rawValue + " stale / denied")
+            panel.selectDisplayMode(.detailed)
+            controller.view.layoutIfNeeded()
+            XCTAssertLessThanOrEqual(panel.convert(panel.bounds, to: controller.view).maxY, controlsFrame.minY - 9)
+            panel.selectDisplayMode(.compact)
+        }
+        toggle.sendActions(for: .touchUpInside)
+        XCTAssertFalse(indicators.isHidden)
+    }
+
+    @MainActor
+    private func assertCompactMetricsFit(_ panel: UIView, container: UIView, controls: UIView, context: String) {
+        let panelFrame = panel.convert(panel.bounds, to: container)
+        let controlsFrame = controls.convert(controls.bounds, to: container)
+        XCTAssertTrue(container.bounds.contains(panelFrame), context)
+        XCTAssertLessThanOrEqual(panelFrame.maxY, controlsFrame.minY - 9, context)
+        XCTAssertFalse(panelFrame.intersects(controlsFrame), context)
+        for label in descendants(panel).compactMap({ $0 as? UILabel }) where label.accessibilityIdentifier?.hasPrefix("poseHUD") == true && isVisible(label) {
+            let needed = label.sizeThatFits(CGSize(width: label.bounds.width, height: .greatestFiniteMagnitude))
+            XCTAssertGreaterThanOrEqual(label.bounds.height + 0.5, needed.height, "\(context) \(label.accessibilityIdentifier ?? "")")
+            XCTAssertTrue(panel.bounds.contains(label.convert(label.bounds, to: panel)), "\(context) \(label.accessibilityIdentifier ?? "")")
+        }
+    }
+
+    @MainActor
+    private func hudLabel(_ identifier: String, inside panel: UIView) throws -> UILabel {
+        try XCTUnwrap(descendants(panel).first { $0.accessibilityIdentifier == "poseHUD" + identifier } as? UILabel)
+    }
+
+    @MainActor
+    private func modeControl(inside panel: UIView) throws -> UISegmentedControl {
+        try XCTUnwrap(descendants(panel).first { $0.accessibilityIdentifier == "poseComparisonModeControl" } as? UISegmentedControl)
+    }
+
+    @MainActor
+    private func menuActions(_ menu: UIMenu?) -> [UIAction] {
+        guard let menu else { return [] }
+        return menu.children.flatMap { element -> [UIAction] in
+            if let action = element as? UIAction { return [action] }
+            return menuActions(element as? UIMenu)
+        }
+    }
+
+    @MainActor
+    private func isVisible(_ view: UIView) -> Bool {
+        var ancestor: UIView? = view
+        while let current = ancestor {
+            if current.isHidden { return false }
+            ancestor = current.superview
+        }
+        return true
+    }
+
+    @MainActor
+    private func displayPair(_ fixture: PoseComparisonFixture, sequence: UInt64, issue: Pose3DIssue?) -> PoseComparisonPair {
+        let original = fixture.pair(sequence: sequence)
+        let pose = issue == nil ? Pose3DFixture.pose() : nil
+        return PoseComparisonPair(source: original.source,
+                                  detection: Pose3DDetection(pose: pose, issue: issue, detail: "Long Vision detail " + String(repeating: "x", count: 300)),
+                                  spatial: ExperimentalDepthAnalysis(pose: pose), latency: original.latency,
+                                  completedAt: fixture.clock.current)
+    }
+
     @MainActor
     func testBackgroundDoesNotReactivateExperimentBeforeExplicitResume() async throws {
         let workout = ExperimentWorkoutFixture(cameraReady: false)
@@ -130,7 +507,7 @@ final class PoseComparisonTests: XCTestCase {
                 XCTAssertFalse(panelFrame.intersects(button.convert(button.bounds, to: controller.view)))
             }
         }
-        let label = try XCTUnwrap(contents.first { $0.accessibilityIdentifier == "poseComparisonText" } as? UILabel)
+        let label = try hudLabel("Status", inside: controller.view)
         XCTAssertTrue(label.adjustsFontForContentSizeCategory)
     }
 

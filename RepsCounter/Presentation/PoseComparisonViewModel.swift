@@ -50,6 +50,15 @@ final class PoseComparisonViewModel {
 
     var isAvailable: Bool { capture != nil }
     var canStartSeries: Bool { isAvailable && isEnabled && workoutActive }
+    var hasRateMeasurement: Bool {
+        guard let rateStartedAt else { return false }
+        return rateStartedAt.duration(to: clock()) > .zero
+    }
+    var isLatestPlanarFresh: Bool {
+        guard let latestPlanar else { return false }
+        return latestPlanar.metadata.receivedAt <= clock()
+            && latestPlanar.metadata.receivedAt.duration(to: clock()) < PoseExperimentCapture.maximumResultAge
+    }
     var isLatestPairFresh: Bool {
         guard let latestPair else { return false }
         return latestPair.source.metadata.receivedAt.duration(to: clock()) < PoseExperimentCapture.maximumResultAge
