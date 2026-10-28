@@ -27,6 +27,9 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
     #if DEBUG
     private let diagnosticsButton = UIButton(type: .system)
     private let diagnosticsView = SquatDiagnosticsView()
+    private let comparisonView = PoseComparisonView()
+    private lazy var comparisonModel = PoseComparisonViewModel(capture: camera.experimentCapture)
+    private weak var annotationAlert: UIAlertController?
     private var diagnosticsLayoutConstraints: [NSLayoutConstraint] = []
     #endif
     private var lastPose: BodyPose?
@@ -52,6 +55,10 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
         configureLayout()
         bindState()
         #if DEBUG
+        comparisonModel.onChange = { [weak self] in
+            guard let self, !self.comparisonView.isHidden else { return }
+            self.comparisonView.render(self.comparisonModel)
+        }
         viewModel.onDiagnosticsChange = { [weak self] diagnostics in
             guard let self, !self.diagnosticsView.isHidden else { return }
             self.diagnosticsView.render(diagnostics)
@@ -237,8 +244,19 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
         diagnosticsButton.addTarget(self, action: #selector(toggleDiagnostics), for: .touchUpInside)
         diagnosticsButton.translatesAutoresizingMaskIntoConstraints = false
         diagnosticsView.translatesAutoresizingMaskIntoConstraints = false
+        comparisonView.translatesAutoresizingMaskIntoConstraints = false
+        diagnosticsView.onComparison = { [weak self] in self?.showComparison(true) }
+        comparisonView.onClose = { [weak self] in self?.showComparison(false) }
+        comparisonView.onSeries = { [weak self] in
+            guard let self else { return }
+            if self.comparisonModel.isRecording { self.comparisonModel.finishSeries() }
+            else { self.comparisonModel.startSeries() }
+        }
+        comparisonView.onAnnotate = { [weak self] in self?.annotateComparisonSeries() }
+        comparisonView.onViewpoint = { [weak self] in self?.comparisonModel.selectedViewpoint = $0 }
         view.addSubview(diagnosticsButton)
         view.addSubview(diagnosticsView)
+        view.addSubview(comparisonView)
         NSLayoutConstraint.activate([
             diagnosticsButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 12),
             diagnosticsButton.centerXAnchor.constraint(equalTo: view.centerXAnchor),
@@ -249,6 +267,12 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
             diagnosticsView.bottomAnchor.constraint(equalTo: controls.topAnchor, constant: -10),
             diagnosticsView.topAnchor.constraint(equalTo: diagnosticsButton.bottomAnchor, constant: 10)
         ])
+        NSLayoutConstraint.activate([
+            comparisonView.topAnchor.constraint(equalTo: diagnosticsView.topAnchor),
+            comparisonView.bottomAnchor.constraint(equalTo: diagnosticsView.bottomAnchor),
+            comparisonView.leadingAnchor.constraint(equalTo: diagnosticsView.leadingAnchor),
+            comparisonView.trailingAnchor.constraint(equalTo: diagnosticsView.trailingAnchor)
+        ])
         diagnosticsLayoutConstraints = [
             indicators.trailingAnchor.constraint(equalTo: diagnosticsView.leadingAnchor, constant: -8),
             indicators.bottomAnchor.constraint(lessThanOrEqualTo: controls.topAnchor, constant: -10)
@@ -256,6 +280,9 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
     }
 
     @objc private func toggleDiagnostics() {
+        if !comparisonView.isHidden {
+            showComparison(false)
+        }
         diagnosticsView.isHidden.toggle()
         if diagnosticsView.isHidden { NSLayoutConstraint.deactivate(diagnosticsLayoutConstraints) }
         else { NSLayoutConstraint.activate(diagnosticsLayoutConstraints) }
@@ -267,6 +294,58 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
         diagnosticsButton.accessibilityValue = diagnosticsView.isHidden ? "Выключена" : "Включена"
         if !diagnosticsView.isHidden, let diagnostics = viewModel.latestDiagnostics {
             diagnosticsView.render(diagnostics)
+        }
+    }
+
+    private func showComparison(_ shown: Bool) {
+        diagnosticsView.isHidden = shown
+        comparisonView.isHidden = !shown
+        comparisonModel.setEnabled(shown)
+        updateComparisonAvailability()
+        comparisonView.render(comparisonModel)
+    }
+
+    private func updateComparisonAvailability() {
+        comparisonModel.updateWorkout(
+            active: camera.state == .running && lastState?.isPaused == false
+                && lastState?.isResting == false && lastState?.isFinished == false,
+            repetitions: lastState?.totalRepetitions ?? 0
+        )
+    }
+
+    private func annotateComparisonSeries() {
+        guard presentedViewController == nil, !comparisonModel.isRecording else { return }
+        let alert = UIAlertController(
+            title: "Ручная оценка серии",
+            message: "Введите фактически выполненные движения. Оставьте спорные в отдельной категории. Значения Vision не подставляются. Данные останутся только в памяти.",
+            preferredStyle: .alert
+        )
+        annotationAlert = alert
+        for placeholder in ["Полных", "Неполных", "Спорных"] {
+            alert.addTextField { field in
+                field.placeholder = placeholder
+                field.accessibilityLabel = placeholder
+                field.keyboardType = .numberPad
+                field.addTarget(self, action: #selector(WorkoutViewController.validateComparisonAnnotation), for: .editingChanged)
+            }
+        }
+        alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Принять", style: .default) { [weak self, weak alert] _ in
+            guard let fields = alert?.textFields, fields.count == 3,
+                  let fullCount = Int(fields[0].text ?? ""),
+                  let partialCount = Int(fields[1].text ?? ""),
+                  let uncertainCount = Int(fields[2].text ?? "") else { return }
+            self?.comparisonModel.annotate(full: fullCount, partial: partialCount, uncertain: uncertainCount)
+        })
+        validateComparisonAnnotation()
+        present(alert, animated: true)
+    }
+
+    @objc private func validateComparisonAnnotation() {
+        guard let alert = annotationAlert, let fields = alert.textFields else { return }
+        alert.actions.last?.isEnabled = fields.count == 3 && fields.allSatisfy { field in
+            guard let count = Int(field.text ?? "") else { return false }
+            return (0...1000).contains(count)
         }
     }
     #endif
@@ -324,6 +403,9 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
     }
 
     private func updateCameraMessage() {
+        #if DEBUG
+        updateComparisonAvailability()
+        #endif
         let message: String
         switch camera.state {
         case .idle, .starting:

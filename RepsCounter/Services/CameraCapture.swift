@@ -67,7 +67,16 @@ protocol CameraCapturing: Sendable {
     func start(generation: UInt64, position: CameraPosition) async throws -> CameraConfiguration
     func stop(generation: UInt64) async
     func shutdown() async
+    #if DEBUG
+    var experiment: PoseExperimentCapture? { get }
+    #endif
 }
+
+#if DEBUG
+extension CameraCapturing {
+    var experiment: PoseExperimentCapture? { nil }
+}
+#endif
 
 final class CameraPreviewSource: @unchecked Sendable {
     private let session: AVCaptureSession
@@ -125,6 +134,10 @@ private final class CameraFrameProcessor: NSObject, AVCaptureVideoDataOutputSamp
         let detector = PoseDetector()
         var isActive = true
         var previousAnalysisTime: ContinuousClock.Instant?
+        #if DEBUG
+        var experiment: PoseExperimentCapture?
+        var frameSequence: UInt64 = 0
+        #endif
     }
 
     private let generation: UInt64
@@ -147,10 +160,24 @@ private final class CameraFrameProcessor: NSObject, AVCaptureVideoDataOutputSamp
         processing.withLock { state in state.isActive = false }
     }
 
+    #if DEBUG
+    func attachExperiment(_ experiment: PoseExperimentCapture) {
+        processing.withLock { $0.experiment = experiment }
+    }
+
+    func captureOutput(_ output: AVCaptureOutput, didDrop sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+        processing.withLock { $0.experiment?.noteSourceFrame(dropped: true) }
+    }
+    #endif
+
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         processing.withLockUnchecked { state in
             let capturedAt = ContinuousClock.now
             guard state.isActive else { return }
+            #if DEBUG
+            state.frameSequence += 1
+            state.experiment?.noteSourceFrame()
+            #endif
             if let previousTime = state.previousAnalysisTime,
                previousTime.duration(to: capturedAt) < .milliseconds(80) { return }
             state.previousAnalysisTime = capturedAt
@@ -160,11 +187,26 @@ private final class CameraFrameProcessor: NSObject, AVCaptureVideoDataOutputSamp
                 generation: generation, pose: pose, capturedAt: capturedAt,
                 position: position, rotationAngle: rotationAngle
             ))
+            #if DEBUG
+            let metadata = ExperimentFrameMetadata(
+                identity: ExperimentFrameIdentity(generation: generation, sequence: state.frameSequence),
+                timestamp: CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer)),
+                receivedAt: capturedAt, position: position, rotationAngle: rotationAngle,
+                orientation: PoseGeometry.visionOrientation.rawValue, inputMirrored: false, depthDataProvided: false
+            )
+            state.experiment?.submit(
+                sampleBuffer: sampleBuffer, pose: pose, metadata: metadata,
+                planarLatency: capturedAt.duration(to: .now).experimentSeconds
+            )
+            #endif
         }
     }
 }
 
 actor CameraCapture: CameraCapturing {
+    #if DEBUG
+    nonisolated let experiment: PoseExperimentCapture? = PoseExperimentCapture()
+    #endif
     nonisolated let frames: AsyncStream<CameraFrame>
     nonisolated let events: AsyncStream<CameraSessionEvent>
     nonisolated let previewSource: CameraPreviewSource?
@@ -219,6 +261,12 @@ actor CameraCapture: CameraCapturing {
                 continuation: frameContinuation
             )
             self.processor = processor
+            #if DEBUG
+            if let experiment {
+                experiment.configure(generation: generation, position: position, rotationAngle: rotationAngle)
+                processor.attachExperiment(experiment)
+            }
+            #endif
             output?.setSampleBufferDelegate(processor, queue: frameQueue)
             try Task.checkCancellation()
             return CameraConfiguration(position: position, rotationAngle: rotationAngle)
@@ -238,12 +286,18 @@ actor CameraCapture: CameraCapturing {
         guard !isShutdown else { return }
         isShutdown = true
         stopSession()
+        #if DEBUG
+        experiment?.shutdown()
+        #endif
         notifications.stop()
         frameContinuation.finish()
         eventContinuation.finish()
     }
 
     private func stopSession() {
+        #if DEBUG
+        experiment?.suspend()
+        #endif
         processor?.invalidate()
         output?.setSampleBufferDelegate(nil, queue: nil)
         processor = nil
