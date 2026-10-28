@@ -1,6 +1,6 @@
 # Architecture Decision Record — RepsCounter v0.1
 
-**Status:** In Development. Updated 27 October 2026. Camera lifecycle and file-header/warning changes are merged through PR #4/#5 (`main` at `6c2b82d`); front/rear switching is in `feature/camera-switching` awaiting review.
+**Status:** In Development. Updated 27 October 2026. Camera lifecycle, file-header changes and front/rear switching are merged through PR #6 (`main` at `5d3eb1d`). Squat diagnostics and continuity fixes are in `feature/squat-diagnostics` awaiting review.
 
 ## 1. Decision
 
@@ -58,17 +58,29 @@ Backgrounding, capture interruption and runtime errors now call the same idempot
 
 Camera: front or rear, vertical iPhone, 2D sagittal/side angle. Front capture is the default; body-angle thresholds are unchanged.
 
-Use visible hip, knee and ankle joint landmarks. Require confidence >= 0.5 on all three landmarks. Compute knee angle with the dot-product formula and clamp the cosine to [-1,1]. Smooth with exponential moving average alpha = 0.35.
+Use visible hip, knee and ankle joint landmarks. Require finite confidence in [0.5,1] on all three landmarks. Initially select the valid leg with the higher minimum joint confidence; retain it while valid instead of alternating with confidence fluctuations. A fallback leg starts a new filter and requires fresh standing. Compute the aspect-corrected knee angle with the dot-product formula, reject nonfinite/degenerate geometry and clamp the cosine to [-1,1]. Smooth the selected leg with exponential moving average alpha = 0.35.
 
 Finite-state machine:
 
 ```text
-SEEKING_STANDING --3 frames angle >=160--> STANDING
-STANDING         --3 frames angle <=105--> LOWERED
-LOWERED          --3 frames angle >=160--> STANDING + 1 repetition
+SEEKING_STANDING --3 consecutive raw >=160 AND current EMA >=160--> STANDING
+STANDING         --3 consecutive raw <=105 AND current EMA <=105--> LOWERED
+LOWERED          --3 consecutive raw >=160 AND current EMA >=160--> STANDING + 1 repetition
 ```
 
-Angles between thresholds do not transition the machine. Missing joints suspend counting and, after 12 missed observations, force re-acquisition of a standing posture. Thresholds and stability rules are prototype-only and need calibration with data.
+Angles between thresholds break the current confirmation sequence. A missing/invalid measurement immediately clears unfinished movement while preserving completed repetitions. A change of analyzed leg also resets EMA and movement; observations from different legs cannot complete one repetition. Thresholds, confidence cutoff, EMA coefficient and three-frame confirmation are unchanged and remain prototype assumptions.
+
+Following user-reported iPhone 15 Pro confidence/angle checkpoints, raw stability and current EMA are evaluated together. The counter accumulates three reliable raw observations while EMA catches up, without waiting for another three filtered observations afterwards. Current raw must still satisfy the threshold, preventing an EMA tail from confirming a position that is no longer observed. Invalid raw or EMA resets movement; there is no low-confidence grace period. Synthetic before/after probes reproduce both a delayed missed cycle and a false cycle from only two raw outliers. Hardware precision/recall of the revised temporal criterion remains unverified.
+
+Subsequent user footage confirms FP-001: a manually partial movement supplies sustained accepted 2D depth and a valid return, so the FSM emits one event without violating its input contract. A knee-angle proxy does not establish physical squat depth; 2D projection is not injective, and confidence does not bound landmark error. The screen overlay hides the selected hip, so Vision error cannot be isolated from feature/semantic limitations. No production workaround is added. The strict expected-failure regression and [paired 2D/3D evaluation proposal](SQUAT_DEPTH_VALIDATION.md) keep the limitation open; 3D is not implemented.
+
+The ViewModel uses the existing injected monotonic clock to check continuity before processing a pose and during time refresh. A gap over 250 ms between valid delivered poses clears tracking and requires standing again. This is a conservative continuity policy, not a biomechanical threshold. Its duration matches the camera's existing age budget, but frame age and delivery interval are distinct checks. Low effective frame rates can increase missed repetitions and require hardware evaluation. Workout duration/rest and immutable save summaries are unchanged.
+
+### Debug diagnostics
+
+`SquatDiagnostics` is a MainActor-published value assembled from analyzer/counter state. `SquatDiagnosticsView` renders both raw leg angles, six confidence values, selected leg, EMA, phase, separate raw/EMA threshold conditions, consecutive raw observations and a decision/reset reason. The controller subscribes weakly and renders only while the panel is enabled. Debug-only layout reserves a scrollable right column and separate space for workout metrics/controls; disabling it restores the normal layout. The panel, controls, snapshot and callback compile only under `#if DEBUG`; the project sets the condition only for Debug.
+
+No camera images, video, pose time series or diagnostic files are stored. Missing data is displayed explicitly rather than treated as depth. Unit tests use synthetic points and controlled time; they do not measure real Vision accuracy. Front-facing body depth is not generally observable from the current 2D angle, even with a correct overlay. A separately proposed `VNDetectHumanBodyPose3DRequest` experiment is documented but not implemented in [SQUAT_DIAGNOSTICS.md](SQUAT_DIAGNOSTICS.md).
 
 ## 6. Camera switching, orientation and overlay alignment
 
@@ -94,7 +106,7 @@ The finished workout snapshot is retained separately from `.notSaved`, `.saving`
 - No push-up recognition or multi-person tracking.
 - No background workout mode; foreground camera only.
 - An unsaved finished summary exists only in the current process; no draft recovery after force quitting.
-- Confidence threshold is heuristic and the first sufficiently visible leg is selected.
-- Temporary camera occlusion can invalidate a partially completed squat.
+- Confidence is not an anatomical-angle accuracy estimate; 2D projection can hide depth or accept a manually partial movement. FP-001 is confirmed and unresolved.
+- Any unreliable measurement, leg change or observation gap over 250 ms intentionally invalidates a partially completed squat; low frame rates may reduce recall.
 - Camera/overlay transform and sensor thermal performance are unverified.
 - Unit tests cover pure counting logic but no automated video-fixture integration tests yet.

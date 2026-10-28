@@ -62,11 +62,23 @@ One small `@unchecked Sendable` preview bridge is explicitly justified: it hides
 
 ## Front and rear camera switching — 27 October 2026
 
-The `feature/camera-switching` branch starts from `main` after PR #5 (`6c2b82d`). The workout starts with the front camera. The top-right `arrow.triangle.2.circlepath.camera` button switches front → back → front in the existing capture session. Repeated taps during an operation are ignored. Switching freezes active time/rest and clears only unfinished movement; counted repetitions, sets and the frozen save/retry summary are preserved. An active workout resumes after successful camera readiness, while a paused workout stays paused. Backgrounding, interruption or failure cancels automatic continuation.
+Camera switching merged through [PR #6](https://github.com/Alexander6Shevtsov/RepsCounter/pull/6) (`main` at `5d3eb1d`). The workout starts with the front camera. The top-right `arrow.triangle.2.circlepath.camera` button switches front → back → front in the existing capture session. Repeated taps during an operation are ignored. Switching freezes active time/rest and clears only unfinished movement; counted repetitions, sets and the frozen save/retry summary are preserved. An active workout resumes after successful camera readiness, while a paused workout stays paused. Backgrounding, interruption or failure cancels automatic continuation.
 
 Capture and preview use the selected sensor's actual portrait rotation. Vision receives upright, unmirrored buffers; only the front preview is mirrored. Pose values carry the actual rotation, and overlay conversion delegates mirroring/aspect fill to AVFoundation once. On iOS 17–26, a narrow legacy portrait compatibility helper is required to obtain the device-specific angle; iOS 27 uses the static RotationCoordinator API. Its intentional deprecation warning and the reason a fixed 90° angle is insufficient are documented in [camera lifecycle and switching](Docs/CAMERA_LIFECYCLE.md).
 
-Debug/unsigned Release builds and a Swift 6 diagnostic build-for-testing succeeded with Xcode 27.1 / SDK 27.1. All **133 XCTest passed on each iOS Simulator 18.6, 26.5, 27.0 and 27.1**: 90 existing plus 26 switching/state/UIKit and 17 geometry tests. XCTest execution used project Swift language mode 5. The new tests cover switching, timing, repetition preservation, interruptions, cancellation, UIKit controls and geometry. Physical switching, Vision alignment and performance still require the [iPhone 15 Pro checklist](Docs/CAMERA_LIFECYCLE.md#проверка-pr6-на-iphone-15-pro). No physical-device success is claimed. Status remains **In Development**; the branch awaits review.
+Debug/unsigned Release builds and a Swift 6 diagnostic build-for-testing succeeded with Xcode 27.1 / SDK 27.1. All **133 XCTest passed on each iOS Simulator 18.6, 26.5, 27.0 and 27.1**: 90 existing plus 26 switching/state/UIKit and 17 geometry tests. XCTest execution used project Swift language mode 5. The new tests cover switching, timing, repetition preservation, interruptions, cancellation, UIKit controls and geometry. Physical switching, Vision alignment and performance still require the [iPhone 15 Pro checklist](Docs/CAMERA_LIFECYCLE.md#проверка-pr6-на-iphone-15-pro). These are historical PR #6 results; no physical-device success is claimed. Status remains **In Development**.
+
+## Squat diagnostics and continuity — PR #7
+
+The `feature/squat-diagnostics` branch adds a user-toggleable **Debug-only** panel with both knee angles, joint confidence, selected leg, raw/EMA values, counter phase, thresholds, consecutive observations and the reason a repetition is waiting or rejected. Release excludes the panel and controls; no workout images, video or pose logs are retained.
+
+Initial leg selection uses the weakest joint confidence and retains that leg while valid. A leg change resets EMA and unfinished movement. Missing/invalid measurements or a delivery gap over 250 ms require fresh standing confirmation while preserving counted repetitions. Thresholds 105°/160°, confidence 0.5, EMA alpha 0.35 and three-frame confirmation are unchanged. The continuity timeout is conservative and may reduce recall at low frame rates.
+
+Follow-up within PR #7 uses three consecutive reliable raw observations plus the current EMA threshold, replacing the extra three-frame wait after EMA crosses. This also prevents an EMA tail alone from confirming depth. Hip-confidence dips 0.39/0.44 or 0.49/0.48 still invalidate the cycle; no gap bridging or lower thresholds are introduced. The reported device checkpoints are sparse observations, not a reconstructed frame trace. Revised hardware accuracy requires retesting.
+
+**Known unresolved false positive FP-001:** the user's iPhone 15 Pro screen recording shows a manually partial movement satisfying the 2D depth proxy and producing one event. The FSM matches its numerical rules; physical full/partial correctness is not established. Production code and thresholds are unchanged in this analysis update. A strict expected-failure regression keeps the mismatch visible. See [video analysis and the proposed paired Vision 2D/3D evaluation](Docs/SQUAT_DEPTH_VALIDATION.md); 3D is not implemented.
+
+A correct 2D skeleton cannot establish physical squat depth from every viewpoint; FP-001 confirms a full/partial classification failure. Historical checks of `208c4049` passed 189 XCTest per iOS Simulator 18.6/26.5/27.0/27.1. The subsequent depth-validation suite explicitly tracks the known expected failure instead of declaring it fixed; [current results and the 2D/3D evaluation plan](Docs/SQUAT_DEPTH_VALIDATION.md) distinguish code checks from physical correctness. Status remains **In Development**.
 
 ![RepsCounter interface — design concept, not a working application screenshot](Docs/Concept.png)
 
@@ -108,10 +120,10 @@ The main engineering challenge is translating noisy, low-confidence 2D joint mea
 2. Vision returns a set of joint points with confidence values.
 3. Geometry computes the knee angle from hip, knee, and ankle (side view).
 4. Exponential smoothing stabilizes the angle estimate.
-5. The deterministic counter transitions: `seekingStanding` → `standing` → `lowered` → `standing`.
+5. Each transition requires three consecutive reliable raw angles and the current EMA to satisfy the same threshold. The deterministic counter transitions: `seekingStanding` → `standing` → `lowered` → `standing`.
 6. Only the last transition counts one complete repetition.
 
-Prototype thresholds: standing ≥160°, lowered ≤105°, with 3 consecutive frames per phase. The thresholds are **initial assumptions**, not validated biomechanical criteria. After 12 missing-pose samples, the state machine requires reacquiring standing position.
+Prototype thresholds: standing ≥160°, lowered ≤105°, with 3 consecutive frames per phase. The thresholds are **initial assumptions**, not validated biomechanical criteria. Any missing/invalid measurement or change of analyzed leg resets unfinished movement; standing must be confirmed again. The ViewModel also resets tracking after a delivery gap over 250 ms.
 
 ## Run locally
 
