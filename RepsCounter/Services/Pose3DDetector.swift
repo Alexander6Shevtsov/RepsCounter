@@ -36,21 +36,25 @@ final class Pose3DDetector: Pose3DDetecting {
                 detail: "Vision 3D revision \(request.revision) unavailable; supported: \(VNDetectHumanBodyPose3DRequest.supportedRevisions)"
             )
         }
-        let registered = state.withLockUnchecked { current in
-            guard !current.isCancelled else { return false }
-            current.request = request
-            return true
-        }
-        guard registered else { return Pose3DDetection(pose: nil, issue: .cancelled, detail: nil) }
-        defer { state.withLock { $0.request = nil } }
         do {
             _ = try request.supportedJointNames
+            let registered = state.withLockUnchecked { current in
+                guard !current.isCancelled else { return false }
+                current.request = request
+                return true
+            }
+            guard registered else { return Pose3DDetection(pose: nil, issue: .cancelled, detail: nil) }
+            defer { state.withLock { $0.request = nil } }
             let handler = VNImageRequestHandler(cmSampleBuffer: sampleBuffer, orientation: orientation, options: [:])
             try handler.perform([request])
+            let observation = state.withLockUnchecked { current in
+                current.request = nil
+                return current.isCancelled ? nil : request.results?.first
+            }
             guard !state.withLock({ $0.isCancelled }) else {
                 return Pose3DDetection(pose: nil, issue: .cancelled, detail: nil)
             }
-            guard let observation = request.results?.first else {
+            guard let observation else {
                 return Pose3DDetection(pose: nil, issue: .noBody, detail: nil)
             }
             let mappings: [(BodyJoint, VNHumanBodyPose3DObservation.JointName)] = [
