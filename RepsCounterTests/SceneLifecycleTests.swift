@@ -10,6 +10,13 @@ import XCTest
 @testable import RepsCounter
 
 final class SceneLifecycleTests: XCTestCase {
+    func testBuiltApplicationDefinesLaunchScreenWithoutStoryboard() throws {
+        let applicationBundle = Bundle(for: AppDelegate.self)
+        XCTAssertNotNil(applicationBundle.object(forInfoDictionaryKey: "UILaunchScreen") as? [String: Any])
+        XCTAssertNil(applicationBundle.object(forInfoDictionaryKey: "UILaunchStoryboardName"))
+        XCTAssertNil(applicationBundle.object(forInfoDictionaryKey: "UILaunchStoryboards"))
+    }
+
     func testBuiltApplicationRegistersProgrammaticScene() throws {
         let applicationBundle = Bundle(for: AppDelegate.self)
         let sceneManifest = try XCTUnwrap(

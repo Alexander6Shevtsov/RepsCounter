@@ -17,11 +17,13 @@ final class PoseOverlayView: UIView {
         isUserInteractionEnabled = false
         backgroundColor = .clear
         skeletonLayer.strokeColor = UIColor.systemBlue.cgColor
-        skeletonLayer.lineWidth = 2.5
+        skeletonLayer.lineWidth = 2
+        skeletonLayer.lineCap = .round
+        skeletonLayer.lineJoin = .round
         skeletonLayer.fillColor = UIColor.clear.cgColor
         skeletonLayer.shadowColor = UIColor.systemBlue.cgColor
-        skeletonLayer.shadowOpacity = 0.8
-        skeletonLayer.shadowRadius = 4
+        skeletonLayer.shadowOpacity = 0.5
+        skeletonLayer.shadowRadius = 3
         jointLayer.fillColor = UIColor.white.cgColor
         jointLayer.strokeColor = UIColor.systemBlue.cgColor
         jointLayer.lineWidth = 2

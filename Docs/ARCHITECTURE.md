@@ -1,6 +1,6 @@
 # Architecture Decision Record — RepsCounter v0.1
 
-**Status:** In Development. Updated 27 October 2026. Camera lifecycle, file-header changes and front/rear switching are merged through PR #6 (`main` at `5d3eb1d`). Squat diagnostics and continuity fixes are in `feature/squat-diagnostics` awaiting review.
+**Status:** In Development. Updated 28 October 2026. Camera lifecycle, front/rear switching and squat diagnostics are merged through PR #7 (`main` at `7db6c77`). The `feature/portfolio-ui` branch changes UIKit presentation only. The separate Vision 3D experiment in PR #9 is not part of this branch.
 
 ## 1. Decision
 
@@ -10,7 +10,8 @@ Use UIKit + MVVM, with isolated domain logic and constructor injection. Do not i
 
 ```text
 SceneDelegate (window composition and lifecycle forwarding)
-  ├── WorkoutViewController (UIKit and pose overlay)
+  ├── WorkoutViewController (UIKit composition and pose overlay)
+  │     ├── WorkoutDashboardView (state rendering and UI actions)
   │     ├── WorkoutCameraCoordinator (MainActor lifecycle agreement)
   │     └── WorkoutViewModel (MainActor workout and UI state)
   │            ├── PoseAnalyzer / SquatCounter
@@ -78,7 +79,7 @@ The ViewModel uses the existing injected monotonic clock to check continuity bef
 
 ### Debug diagnostics
 
-`SquatDiagnostics` is a MainActor-published value assembled from analyzer/counter state. `SquatDiagnosticsView` renders both raw leg angles, six confidence values, selected leg, EMA, phase, separate raw/EMA threshold conditions, consecutive raw observations and a decision/reset reason. The controller subscribes weakly and renders only while the panel is enabled. Debug-only layout reserves a scrollable right column and separate space for workout metrics/controls; disabling it restores the normal layout. The panel, controls, snapshot and callback compile only under `#if DEBUG`; the project sets the condition only for Debug.
+`SquatDiagnostics` is a MainActor-published value assembled from analyzer/counter state. `SquatDiagnosticsView` renders both raw leg angles, six confidence values, selected leg, EMA, phase, separate raw/EMA threshold conditions, consecutive raw observations and a decision/reset reason. The controller subscribes weakly and renders only while the panel is enabled. The portfolio layout displays the existing scrollable panel between the toolbar and workout actions, temporarily hiding the dashboard's metric body. The toolbar and pause/finish controls stay available. Disabling diagnostics restores the same dashboard state. The panel, controls, snapshot and callback compile only under `#if DEBUG`; the project sets the condition only for Debug.
 
 No camera images, video, pose time series or diagnostic files are stored. Missing data is displayed explicitly rather than treated as depth. Unit tests use synthetic points and controlled time; they do not measure real Vision accuracy. Front-facing body depth is not generally observable from the current 2D angle, even with a correct overlay. A separately proposed `VNDetectHumanBodyPose3DRequest` experiment is documented but not implemented in [SQUAT_DIAGNOSTICS.md](SQUAT_DIAGNOSTICS.md).
 
@@ -110,3 +111,15 @@ The finished workout snapshot is retained separately from `.notSaved`, `.saving`
 - Any unreliable measurement, leg change or observation gap over 250 ms intentionally invalidates a partially completed squat; low frame rates may reduce recall.
 - Camera/overlay transform and sensor thermal performance are unverified.
 - Unit tests cover pure counting logic but no automated video-fixture integration tests yet.
+
+## 9. UIKit presentation — portfolio UI
+
+`WorkoutDashboardView` renders the supplied `WorkoutViewState` and `CameraState`; it owns no clock, camera session, storage or repetition logic. Its closures forward history, camera switching, pause/resume and finish/retry to the controller's existing handlers. `WorkoutAppearance` shares MainActor-isolated colors and surface/label construction with history. The controller retains dependency assembly, camera coordinator callbacks, pending save alerts and preview configuration.
+
+The preview, a noninteractive gradient backdrop and the skeleton share the full screen bounds. The gradient is below the skeleton; pose geometry, mirroring and preview conversion are unchanged. The dashboard adds a large current-set counter, left-aligned translucent cards, separate elapsed-time/total-repetition summaries and fixed bottom actions. Values come from the model, including frozen rest on pause and success only after `.saved`. The final polish narrows the default metric column from 64% to 50% of the content width and reduces card padding, decorative icon size and corner radius without reducing text size. The full-frame gradient now uses black alpha 0.30/0.06/0.34 instead of 0.68/0.52/0.72; local shadows protect the exposed white heading labels.
+
+An empty `UILaunchScreen` dictionary in the existing plist supplies the system launch screen without a storyboard, following [Apple's launch-screen configuration](https://developer.apple.com/documentation/bundleresources/information-property-list/uilaunchscreen). A fresh iPhone 15 Pro / iOS 18.6 Simulator launch exposed the missing configuration as a letterboxed app viewport. This minimal launch metadata change enables the full portrait viewport; scene registration, orientation and deployment settings remain unchanged. A built-plist regression verifies the dictionary and absence of launch storyboard keys.
+
+Auto Layout constrains the metric scroll view's content width to its frame. A low-priority collapsible spacer keeps the summary near the bottom when space permits, leaving the center of the camera unobscured. The toolbar retains its 48 pt height. Only the body scrolls vertically when necessary. At accessibility text sizes, cards become full width, summaries and actions stack vertically, and the redundant toolbar title is hidden to preserve space. Text scales with Dynamic Type; symbol sizes stay within their touch targets. Toolbar and workout actions remain outside the scroll view. History uses automatic-height card cells and native iOS 17 empty/error content, preserving the injected store and its record order.
+
+Layout tests cover 375×667, 393×852 and 430×932 pt and all twelve content-size categories, actual font growth, text height, icon bounds, minimum touch targets and horizontal overflow. These checks do not replace VoiceOver, bright/dark live-camera readability or physical-device tests. Native permission and save alerts remain system UI. See [the concept mapping, validation and iPhone checklist](PORTFOLIO_UI.md).
