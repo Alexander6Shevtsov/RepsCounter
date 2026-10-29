@@ -1,6 +1,6 @@
 # Architecture Decision Record — RepsCounter v0.1
 
-**Status:** In Development. Updated 28 October 2026. Camera lifecycle, front/rear switching and squat diagnostics are merged through PR #7 (`main` at `7db6c77`). The `feature/portfolio-ui` branch changes UIKit presentation only. The separate Vision 3D experiment in PR #9 is not part of this branch.
+**Статус:** In Development / Portfolio Preview. Актуализировано 29 октября 2026 года: `main` после объединения PR №10 (`8e1aebf`). UIKit-редизайн уже включён; открытый эксперимент Vision 3D из PR №9 остаётся отдельно. Ниже сохранены архитектурные решения и исторические результаты этапов. Текущее краткое описание и схема — в [README](../README.md#архитектура-и-разделение-ответственности).
 
 ## 1. Decision
 
