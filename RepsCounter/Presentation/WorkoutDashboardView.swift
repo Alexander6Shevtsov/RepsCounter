@@ -101,12 +101,13 @@ final class WorkoutDashboardView: UIView {
         switch state.saveState {
         case .notSaved: finishTitle = "Завершить"
         case .saving: finishTitle = "Сохранение…"
-        case .saved: finishTitle = "Завершено"
+        case .saved: finishTitle = "Новая тренировка"
         case .failed: finishTitle = "Повторить"
         }
-        setButton(finishButton, title: finishTitle, symbol: state.saveState == .saved ? "checkmark" : "stop.fill", primary: false)
+        setButton(finishButton, title: finishTitle, symbol: state.saveState == .saved ? "arrow.clockwise" : "stop.fill", primary: false)
         finishButton.isEnabled = !state.isFinished
         if case .failed = state.saveState { finishButton.isEnabled = true }
+        if state.saveState == .saved { finishButton.isEnabled = true }
     }
 
     func updateCameraControl(canSwitch: Bool, position: CameraPosition) {

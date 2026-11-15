@@ -183,6 +183,35 @@ final class WorkoutViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testNewSessionUsesFreshIdentityAndZeroStateWhilePreservingHistory() throws {
+        let persistence = WorkoutStoreMock()
+        let previousViewModel = WorkoutViewModel(persistence: persistence)
+        processRepetition(using: previousViewModel)
+        previousViewModel.finish()
+        let previousSummary = try XCTUnwrap(previousViewModel.finishedSummary)
+        var newState: WorkoutViewState?
+        let newViewModel = WorkoutViewModel(persistence: persistence, cameraReady: false)
+        newViewModel.onChange = { newState = $0 }
+
+        newViewModel.setCameraReady(false)
+
+        XCTAssertEqual(newState?.repetitions, 0)
+        XCTAssertEqual(newState?.totalRepetitions, 0)
+        XCTAssertEqual(newState?.currentSet, 1)
+        XCTAssertEqual(newState?.targetSets, 4)
+        XCTAssertEqual(newState?.targetRepetitions, 12)
+        XCTAssertEqual(newState?.elapsedSeconds, 0)
+        XCTAssertEqual(newState?.remainingRestSeconds, 0)
+        XCTAssertEqual(newState?.isResting, false)
+        XCTAssertEqual(try persistence.history(), [previousSummary])
+
+        newViewModel.finish()
+        let newSummary = try XCTUnwrap(newViewModel.finishedSummary)
+        XCTAssertNotEqual(newSummary.id, previousSummary.id)
+        XCTAssertEqual(Set(try persistence.history().map(\.id)), [previousSummary.id, newSummary.id])
+    }
+
+    @MainActor
     private func processRepetition(using viewModel: WorkoutViewModel) {
         for _ in 0..<20 { viewModel.process(pose(isStanding: true)) }
         for _ in 0..<20 { viewModel.process(pose(isStanding: false)) }

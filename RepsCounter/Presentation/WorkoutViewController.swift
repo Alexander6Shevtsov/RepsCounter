@@ -9,6 +9,7 @@ import AVFoundation
 import UIKit
 
 final class WorkoutViewController: UIViewController, UIAdaptivePresentationControllerDelegate {
+    var onNewWorkout: (() -> Void)?
     private let viewModel: WorkoutViewModel
     private let camera: CameraService
     let cameraCoordinator: WorkoutCameraCoordinator
@@ -245,7 +246,9 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
     @objc private func togglePause() { cameraCoordinator.togglePause() }
 
     @objc private func finishWorkout() {
-        if lastState?.isFinished == true {
+        if lastState?.saveState == .saved {
+            onNewWorkout?()
+        } else if lastState?.isFinished == true {
             viewModel.retrySave()
         } else {
             cameraCoordinator.finish()
