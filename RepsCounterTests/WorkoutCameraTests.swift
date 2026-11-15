@@ -223,6 +223,73 @@ final class WorkoutCameraTests: XCTestCase {
     }
 
     @MainActor
+    func testNewWorkoutActionIsAvailableOnlyAfterSuccessfulSave() throws {
+        let successfulCamera = CameraFixture()
+        let successfulStore = CameraWorkoutStore()
+        let successfulModel = WorkoutViewModel(persistence: successfulStore, cameraReady: false)
+        let successfulController = WorkoutViewController(
+            viewModel: successfulModel,
+            camera: successfulCamera.camera,
+            persistence: successfulStore
+        )
+        var successfulRequests = 0
+        successfulController.onNewWorkout = { successfulRequests += 1 }
+        successfulController.loadViewIfNeeded()
+        successfulController.cameraCoordinator.finish()
+        let successfulButton = try XCTUnwrap(allSubviews(including: successfulController.view)
+            .compactMap { $0 as? UIButton }
+            .first { $0.accessibilityIdentifier == "workoutFinishButton" })
+        XCTAssertEqual(successfulButton.currentTitle, "Новая тренировка")
+        XCTAssertTrue(successfulButton.isEnabled)
+        successfulButton.sendActions(for: .touchUpInside)
+        XCTAssertEqual(successfulRequests, 1)
+
+        let failedCamera = CameraFixture()
+        let failedStore = CameraWorkoutStore()
+        failedStore.shouldFail = true
+        let failedModel = WorkoutViewModel(persistence: failedStore, cameraReady: false)
+        let failedController = WorkoutViewController(
+            viewModel: failedModel,
+            camera: failedCamera.camera,
+            persistence: failedStore
+        )
+        var failedRequests = 0
+        failedController.onNewWorkout = { failedRequests += 1 }
+        failedController.loadViewIfNeeded()
+        failedController.cameraCoordinator.finish()
+        let failedButton = try XCTUnwrap(allSubviews(including: failedController.view)
+            .compactMap { $0 as? UIButton }
+            .first { $0.accessibilityIdentifier == "workoutFinishButton" })
+        XCTAssertEqual(failedButton.currentTitle, "Повторить")
+        failedButton.sendActions(for: .touchUpInside)
+        XCTAssertEqual(failedRequests, 0)
+    }
+
+    @MainActor
+    func testDisconnectedCameraEventsDoNotAffectNewSession() async {
+        let store = CameraWorkoutStore()
+        let previousCamera = CameraFixture()
+        let previousModel = WorkoutViewModel(persistence: store, cameraReady: false)
+        let previousCoordinator = WorkoutCameraCoordinator(viewModel: previousModel, camera: previousCamera.camera)
+        previousCoordinator.disconnect()
+
+        let newCamera = CameraFixture()
+        let newModel = WorkoutViewModel(persistence: store, cameraReady: false)
+        let newCoordinator = WorkoutCameraCoordinator(viewModel: newModel, camera: newCamera.camera)
+        var newState: WorkoutViewState?
+        newModel.onChange = { newState = $0 }
+        newModel.setCameraReady(false)
+
+        previousCamera.camera.receive(.runtimeError("Late old-session event"))
+        await Task.yield()
+
+        XCTAssertEqual(newState?.totalRepetitions, 0)
+        XCTAssertTrue(newModel.isPaused)
+        XCTAssertEqual(newCamera.camera.state, .idle)
+        newCoordinator.disconnect()
+    }
+
+    @MainActor
     private func allSubviews(including rootView: UIView) -> [UIView] {
         [rootView] + rootView.subviews.flatMap { allSubviews(including: $0) }
     }

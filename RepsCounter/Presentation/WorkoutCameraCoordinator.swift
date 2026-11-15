@@ -82,12 +82,14 @@ final class WorkoutCameraCoordinator {
         camera.finish()
     }
 
-    func disconnect() {
+    @discardableResult
+    func disconnect() -> Task<Void, Never> {
         shouldResumeWhenReady = false
         viewModel.setCameraReady(false)
-        camera.finish()
+        let shutdownTask = camera.finish()
         onPose = nil
         onCameraStateChange = nil
+        return shutdownTask
     }
 
     private func requestResume() {

@@ -88,8 +88,8 @@ final class PortfolioUITests: XCTestCase {
         XCTAssertTrue(try button("workoutFinishButton", in: dashboard).isEnabled)
         XCTAssertTrue(try label("workoutGuidance", in: dashboard).text?.contains("Controlled storage failure") == true)
         dashboard.render(state(finished: true, saveState: .saved), cameraState: .finished)
-        XCTAssertEqual(try button("workoutFinishButton", in: dashboard).currentTitle, "Завершено")
-        XCTAssertFalse(try button("workoutFinishButton", in: dashboard).isEnabled)
+        XCTAssertEqual(try button("workoutFinishButton", in: dashboard).currentTitle, "Новая тренировка")
+        XCTAssertTrue(try button("workoutFinishButton", in: dashboard).isEnabled)
         XCTAssertEqual(try label("workoutCount", in: dashboard).text, "7")
         XCTAssertTrue(try label("workoutTime", in: dashboard).text?.contains("02:05") == true)
     }
