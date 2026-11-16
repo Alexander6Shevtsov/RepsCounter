@@ -221,6 +221,7 @@ final class SquatDiagnosticsTests: XCTestCase {
         XCTAssertTrue(label.text?.contains("confidence 0.90") == true)
         XCTAssertTrue(label.text?.contains("raw 165.0°") == true)
         XCTAssertTrue(label.text?.contains("EMA 165.0°") == true)
+        XCTAssertTrue(label.text?.contains("Таз−колено: +0.97 бедра") == true)
         XCTAssertTrue(label.text?.contains("Фаза: seekingStanding · кадры 1/3") == true)
         XCTAssertTrue(label.adjustsFontForContentSizeCategory)
     }
