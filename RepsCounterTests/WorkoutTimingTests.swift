@@ -58,7 +58,6 @@ final class WorkoutTimingTests: XCTestCase {
     }
 
     @MainActor
-    func test    @MainActor
     func testPauseFreezesElapsedTimeAndPreservesFractionalProgress() {
         let fixture = WorkoutTimingFixture()
         defer { fixture.viewModel.finish() }
