@@ -112,6 +112,7 @@ final class SquatDiagnosticsView: UIVisualEffectView {
         case .awaitingStandingSmoothing: return "raw стоя подтверждено; EMA ещё <160°"
         case .standingConfirmed: return "стоя подтверждено; ожидается полный присед"
         case .awaitingDepth: return "глубина ≤105° не достигнута"
+        case .awaitingHipKneeDepth: return "таз слишком высоко: глубина не подтверждена (порог +0.35)"
         case .confirmingDepth: return "недостаточно raw-кадров глубины ≤105°"
         case .awaitingDepthSmoothing: return "raw глубина подтверждена; EMA ещё >105°"
         case .loweredConfirmed: return "глубина подтверждена; нужно вернуться стоя"
