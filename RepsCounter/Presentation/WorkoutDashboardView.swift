@@ -95,7 +95,8 @@ final class WorkoutDashboardView: UIView {
         statusLabel.text = message.status
         guidanceLabel.text = message.detail
         guidanceCard.isHidden = message.detail.isEmpty
-        setButton(pauseButton, title: state.isPaused ? "Продолжить" : "Пауза", symbol: state.isPaused ? "play.fill" : "pause.fill", primary: true)
+        let primaryTitle = !state.hasStarted ? "Старт" : (state.isPaused ? "Продолжить" : "Пауза")
+        setButton(pauseButton, title: primaryTitle, symbol: state.isPaused ? "play.fill" : "pause.fill", primary: true)
         pauseButton.isEnabled = !state.isFinished && cameraState != .requestingPermission && cameraState != .starting && cameraState != .switching
         let finishTitle: String
         switch state.saveState {
@@ -105,7 +106,7 @@ final class WorkoutDashboardView: UIView {
         case .failed: finishTitle = "Повторить"
         }
         setButton(finishButton, title: finishTitle, symbol: state.saveState == .saved ? "arrow.clockwise" : "stop.fill", primary: false)
-        finishButton.isEnabled = !state.isFinished
+        finishButton.isEnabled = state.hasStarted && !state.isFinished
         if case .failed = state.saveState { finishButton.isEnabled = true }
         if state.saveState == .saved { finishButton.isEnabled = true }
     }
@@ -313,17 +314,23 @@ final class WorkoutDashboardView: UIView {
             case .notSaved: return ("Завершена", "Результат тренировки готов к сохранению.")
             }
         }
+        let startAction = state.hasStarted ? "Продолжить" : "Старт"
         switch cameraState {
         case .requestingPermission: return ("Доступ к камере", "Разрешите доступ к камере для начала тренировки.")
-        case .permissionDenied: return ("Нет доступа", "Разрешите доступ к камере в настройках iPhone, вернитесь и нажмите «Продолжить».")
+        case .permissionDenied: return ("Нет доступа", "Разрешите доступ к камере в настройках iPhone, вернитесь и нажмите «\(startAction)».")
         case .idle, .starting: return ("Подготовка", "Подготовка камеры…")
         case .switching: return ("Смена камеры", "Переключение камеры…")
         case .interrupted: return ("Камера недоступна", "Камера временно недоступна. Тренировка на паузе.")
-        case .failed: return ("Ошибка камеры", "Камера временно недоступна. Нажмите «Продолжить» для повтора.")
-        case .stopped: return ("Пауза", "Тренировка на паузе. Нажмите «Продолжить».")
+        case .failed: return ("Ошибка камеры", "Камера временно недоступна. Нажмите «\(startAction)» для повтора.")
+        case .stopped: return ("Камера остановлена", "Нажмите «\(startAction)», чтобы включить камеру.")
         case .running, .finished: break
         }
-        if state.isPaused { return ("Пауза", "Подсчёт и активное время приостановлены.") }
+        if !state.hasStarted {
+            return state.poseDetected
+                ? ("Готов к старту", "Тело обнаружено. Проверьте, что ноги полностью видны, и нажмите «Старт».")
+                : ("Выбор ракурса", "Встаньте полностью в кадр, чтобы настроить положение перед тренировкой.")
+        }
+        if state.isPaused { return ("Пауза", "Подсчёт и активное время приостановлены. Камера продолжает распознавать позу.") }
         if state.isResting { return (String(format: "Отдых %02d:%02d", state.remainingRestSeconds / 60, state.remainingRestSeconds % 60), "Следующий подход начнётся после отдыха.") }
         return ("Идёт подход", state.poseDetected ? "" : "Встаньте боком к камере так, чтобы ноги были видны полностью")
     }
