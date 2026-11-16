@@ -70,7 +70,9 @@ final class SquatDiagnosticsView: UIVisualEffectView {
             "raw \(angleText(analysis?.measuredAngle)) · EMA \(angleText(analysis?.smoothedAngle))",
             "Таз−колено: \(hipKneeText(analysis?.hipKneeHeightRatio)) бедра",
             "Фаза: \(phaseName) · кадры \(diagnostics.consecutiveFrames)/\(diagnostics.requiredFrames)",
-            "Результат: \(decisionText(diagnostics))"
+            "Результат: \(decisionText(diagnostics))",
+            "Сбросы: измерение \(diagnostics.measurementLossCount), нога \(diagnostics.legChangeCount), интервал \(diagnostics.observationGapCount)",
+            "Последняя потеря: \(measurementIssueText(diagnostics.latestMeasurementIssue))"
         ]
         textLabel.text = lines.joined(separator: "\n")
     }
@@ -83,6 +85,15 @@ final class SquatDiagnosticsView: UIVisualEffectView {
     private func hipKneeText(_ ratio: Double?) -> String {
         guard let ratio, ratio.isFinite else { return "—" }
         return String(format: "%+.2f", ratio)
+    }
+
+    private func measurementIssueText(_ issue: LegMeasurementIssue?) -> String {
+        switch issue {
+        case .missingJoint: return "не найден сустав"
+        case .lowConfidence: return "низкая достоверность"
+        case .invalidGeometry: return "некорректная геометрия"
+        case nil: return "—"
+        }
     }
 
     private func minimumConfidenceText(_ measurement: LegMeasurement?) -> String {
