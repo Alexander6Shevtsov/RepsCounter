@@ -98,6 +98,10 @@ final class WorkoutViewModel {
     private let maximumPoseInterval: TimeInterval = 0.25
     private var saveState: WorkoutSaveState = .notSaved
 
+    #if !DEBUG
+    private var lastReleaseDiagnosticTime: TimeInterval = -.infinity
+    #endif
+
     let targetRepetitions = 12
     let targetSets = 4
     let restDuration = 60
@@ -124,6 +128,10 @@ final class WorkoutViewModel {
         advanceRest(at: activeTime)
         guard restDeadline == nil else { return }
         expireTracking(at: currentTime)
+        #if !DEBUG
+        let previousPhase = counter.phase
+        let previousDecision = counter.decision
+        #endif
         let analysis = analyzer.analyze(pose)
         hasPose = analysis.smoothedAngle != nil
         lastPoseTime = hasPose ? currentTime : nil
@@ -152,6 +160,15 @@ final class WorkoutViewModel {
         )
         #if DEBUG
         if counter.phase != .seekingStanding { trackingReset = nil }
+        #endif
+        #if !DEBUG
+        logReleaseDiagnostics(
+            time: activeTime,
+            analysis: analysis,
+            previousPhase: previousPhase,
+            previousDecision: previousDecision,
+            counted: counted
+        )
         #endif
         if counted {
             totalRepetitions += 1
@@ -253,6 +270,10 @@ final class WorkoutViewModel {
 
     private func expireTracking(at currentTime: TimeInterval) {
         guard let lastPoseTime, currentTime - lastPoseTime > maximumPoseInterval else { return }
+        #if !DEBUG
+        let gapMilliseconds = Int((currentTime - lastPoseTime) * 1000)
+        print("REPS_FP001 gap=\(gapMilliseconds)ms oldPhase=\(counter.phase)")
+        #endif
         #if DEBUG
         if counter.phase != .seekingStanding { observationGapCount += 1 }
         #endif
@@ -269,6 +290,46 @@ final class WorkoutViewModel {
         if issues.contains(.invalidGeometry) { return .invalidGeometry }
         if issues.contains(.missingJoint) { return .missingJoint }
         return nil
+    }
+    #endif
+
+    #if !DEBUG
+    private func logReleaseDiagnostics(
+        time: TimeInterval,
+        analysis: PoseAnalysis,
+        previousPhase: SquatPhase,
+        previousDecision: SquatDecision,
+        counted: Bool
+    ) {
+        let stateChanged = previousPhase != counter.phase || previousDecision != counter.decision
+        guard stateChanged || counted || time - lastReleaseDiagnosticTime >= 0.25 else { return }
+        lastReleaseDiagnosticTime = time
+        let selectedSide: String
+        let selectedConfidence: Float
+        switch analysis.selectedLeg {
+        case .left:
+            selectedSide = "left"
+            selectedConfidence = analysis.leftMeasurement.confidence
+        case .right:
+            selectedSide = "right"
+            selectedConfidence = analysis.rightMeasurement.confidence
+        case nil:
+            selectedSide = "none"
+            selectedConfidence = 0
+        }
+        let raw = releaseDiagnosticValue(analysis.measuredAngle)
+        let smoothed = releaseDiagnosticValue(analysis.smoothedAngle)
+        let heightRatio = releaseDiagnosticValue(analysis.hipKneeHeightRatio)
+        let confidence = String(format: "%.2f", Double(selectedConfidence))
+        let issue = selectedSide == "none"
+            ? "left:\(String(describing: analysis.leftMeasurement.issue)),right:\(String(describing: analysis.rightMeasurement.issue))"
+            : "none"
+        print("REPS_FP001 t=\(Int(time * 1000))ms phase=\(counter.phase) decision=\(counter.decision) frames=\(counter.consecutiveFrames) leg=\(selectedSide) conf=\(confidence) raw=\(raw) ema=\(smoothed) hipKnee=\(heightRatio) reset=\(analysis.requiresMovementReset) issue=\(issue) counted=\(counted)")
+    }
+
+    private func releaseDiagnosticValue(_ value: Double?) -> String {
+        guard let value, value.isFinite else { return "nil" }
+        return String(format: "%.2f", value)
     }
     #endif
 
