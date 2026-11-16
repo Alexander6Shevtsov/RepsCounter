@@ -212,6 +212,50 @@ final class WorkoutViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testWorkoutDepthGateCountsThreeDeepAndRejectsThreeNearDepthSquats() {
+        let persistence = WorkoutStoreMock()
+        let viewModel = WorkoutViewModel(persistence: persistence)
+        defer { viewModel.finish() }
+        var latestState: WorkoutViewState?
+        viewModel.onChange = { latestState = $0 }
+
+        for movement in 0..<6 {
+            let isPartial = movement >= 3
+            let standingPose = depthPose(kneeAngle: 170, hipKneeHeightRatio: 0.98)
+            let loweredPose = depthPose(
+                kneeAngle: isPartial ? 99 : 70,
+                hipKneeHeightRatio: isPartial ? 0.48 : 0.08
+            )
+            for _ in 0..<20 { viewModel.process(standingPose) }
+            for _ in 0..<20 { viewModel.process(loweredPose) }
+            for _ in 0..<20 { viewModel.process(standingPose) }
+            XCTAssertEqual(latestState?.totalRepetitions, min(movement + 1, 3))
+        }
+    }
+
+    private func depthPose(kneeAngle: Double, hipKneeHeightRatio: Double) -> BodyPose {
+        let thighLength = 0.2
+        let verticalOffset = thighLength * hipKneeHeightRatio
+        let horizontalOffset = thighLength * sqrt(1 - hipKneeHeightRatio * hipKneeHeightRatio)
+        let thighAngle = atan2(verticalOffset, horizontalOffset)
+        let shinAngle = thighAngle - kneeAngle * .pi / 180
+        return BodyPose(
+            joints: [
+                .leftHip: JointPoint(
+                    location: CGPoint(x: 0.5 + horizontalOffset, y: 0.5 + verticalOffset),
+                    confidence: 1
+                ),
+                .leftKnee: JointPoint(location: CGPoint(x: 0.5, y: 0.5), confidence: 1),
+                .leftAnkle: JointPoint(
+                    location: CGPoint(x: 0.5 + thighLength * cos(shinAngle), y: 0.5 + thighLength * sin(shinAngle)),
+                    confidence: 1
+                )
+            ],
+            aspectRatio: 1
+        )
+    }
+
+    @MainActor
     private func processRepetition(using viewModel: WorkoutViewModel) {
         for _ in 0..<20 { viewModel.process(pose(isStanding: true)) }
         for _ in 0..<20 { viewModel.process(pose(isStanding: false)) }

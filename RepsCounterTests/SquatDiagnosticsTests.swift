@@ -221,6 +221,7 @@ final class SquatDiagnosticsTests: XCTestCase {
         XCTAssertTrue(label.text?.contains("confidence 0.90") == true)
         XCTAssertTrue(label.text?.contains("raw 165.0°") == true)
         XCTAssertTrue(label.text?.contains("EMA 165.0°") == true)
+        XCTAssertTrue(label.text?.contains("Таз−колено: +0.97 бедра") == true)
         XCTAssertTrue(label.text?.contains("Фаза: seekingStanding · кадры 1/3") == true)
         XCTAssertTrue(label.adjustsFontForContentSizeCategory)
     }
@@ -292,6 +293,70 @@ final class SquatDiagnosticsTests: XCTestCase {
         XCTAssertEqual(fixture.state?.totalRepetitions, 12)
     }
     @MainActor
+    func testDebugResetCountersTrackDistinctLossesLegChangesAndGaps() throws {
+        let fixture = SquatTrackingFixture()
+        defer { fixture.viewModel.finish() }
+        let standingPose = SquatPoseFixture.pose(leftAngle: 170)
+        fixture.feed(standingPose)
+        XCTAssertEqual(fixture.viewModel.latestDiagnostics?.phase, .standing)
+
+        let lowConfidence = SquatPoseFixture.replacing(standingPose, joint: .leftHip, confidence: 0.49)
+        fixture.feed(lowConfidence, frames: 3)
+        XCTAssertEqual(fixture.viewModel.latestDiagnostics?.measurementLossCount, 1)
+        XCTAssertEqual(fixture.viewModel.latestDiagnostics?.latestMeasurementIssue, .lowConfidence)
+        XCTAssertEqual(fixture.viewModel.latestDiagnostics?.phase, .seekingStanding)
+
+        fixture.feed(standingPose)
+        XCTAssertEqual(fixture.viewModel.latestDiagnostics?.phase, .standing)
+        let rightLegPose = SquatPoseFixture.pose(
+            leftAngle: 170,
+            rightAngle: 170,
+            leftConfidence: 0.49,
+            rightConfidence: 0.9
+        )
+        fixture.feed(rightLegPose, frames: 1)
+        XCTAssertEqual(fixture.viewModel.latestDiagnostics?.legChangeCount, 1)
+        fixture.feed(rightLegPose)
+        XCTAssertEqual(fixture.viewModel.latestDiagnostics?.phase, .standing)
+
+        fixture.clock.currentTime += 0.3
+        fixture.viewModel.refreshTime()
+        let diagnostics = try XCTUnwrap(fixture.viewModel.latestDiagnostics)
+        XCTAssertEqual(diagnostics.observationGapCount, 1)
+        XCTAssertEqual(diagnostics.measurementLossCount, 1)
+        XCTAssertEqual(diagnostics.legChangeCount, 1)
+        XCTAssertEqual(diagnostics.resetReason, .observationGap)
+
+        let panel = SquatDiagnosticsView()
+        panel.render(diagnostics)
+        let label = try XCTUnwrap(allSubviews(in: panel).first {
+            $0.accessibilityIdentifier == "squatDiagnosticsText"
+        } as? UILabel)
+        XCTAssertTrue(label.text?.contains("Сбросы И:1 Н:1 Г:1") == true)
+        XCTAssertTrue(label.text?.contains("Последняя потеря: низкая достоверность") == true)
+    }
+
+    @MainActor
+    func testExperimentalWorkoutCountsDeepAndRejectsNearDepthPoses() {
+        let fixture = SquatTrackingFixture()
+        defer { fixture.viewModel.finish() }
+        let standingPose = syntheticSquatPose(kneeAngle: 170, hipKneeHeightRatio: 0.98)
+        let deepPose = syntheticSquatPose(kneeAngle: 70, hipKneeHeightRatio: 0.08)
+        let partialPose = syntheticSquatPose(kneeAngle: 99, hipKneeHeightRatio: 0.48)
+
+        for movement in 0..<6 {
+            fixture.feed(standingPose)
+            fixture.feed(movement < 3 ? deepPose : partialPose)
+            if movement >= 3 {
+                XCTAssertEqual(fixture.viewModel.latestDiagnostics?.decision, .awaitingHipKneeDepth)
+                XCTAssertEqual(fixture.viewModel.latestDiagnostics?.phase, .standing)
+            }
+            fixture.feed(standingPose)
+            XCTAssertEqual(fixture.state?.totalRepetitions, min(movement + 1, 3))
+        }
+    }
+
+    @MainActor
     func testDiagnosticsSeparateRawConfirmationFromEMADelay() throws {
         let fixture = SquatTrackingFixture()
         defer { fixture.viewModel.finish() }
@@ -309,6 +374,28 @@ final class SquatDiagnosticsTests: XCTestCase {
         XCTAssertTrue(label.text?.contains("EMA ещё >105°") == true)
     }
     #endif
+
+    private func syntheticSquatPose(kneeAngle: Double, hipKneeHeightRatio: Double) -> BodyPose {
+        let thighLength = 0.2
+        let verticalOffset = hipKneeHeightRatio * thighLength
+        let horizontalOffset = sqrt(1 - hipKneeHeightRatio * hipKneeHeightRatio) * thighLength
+        let thighAngle = atan2(verticalOffset, horizontalOffset)
+        let shinAngle = thighAngle - kneeAngle * .pi / 180
+        return BodyPose(
+            joints: [
+                .leftHip: JointPoint(
+                    location: CGPoint(x: 0.5 + horizontalOffset, y: 0.5 + verticalOffset),
+                    confidence: 1
+                ),
+                .leftKnee: JointPoint(location: CGPoint(x: 0.5, y: 0.5), confidence: 1),
+                .leftAnkle: JointPoint(
+                    location: CGPoint(x: 0.5 + thighLength * cos(shinAngle), y: 0.5 + thighLength * sin(shinAngle)),
+                    confidence: 1
+                )
+            ],
+            aspectRatio: 1
+        )
+    }
 
     @MainActor
     private func allSubviews(in parent: UIView) -> [UIView] {

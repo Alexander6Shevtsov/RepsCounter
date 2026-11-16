@@ -54,6 +54,10 @@ struct SquatDiagnostics {
     let loweredThreshold: Double
     let status: SquatTrackingStatus
     let resetReason: SquatTrackingReset?
+    let measurementLossCount: Int
+    let legChangeCount: Int
+    let observationGapCount: Int
+    let latestMeasurementIssue: LegMeasurementIssue?
 }
 
 #endif
@@ -68,12 +72,16 @@ final class WorkoutViewModel {
     private(set) var latestDiagnostics: SquatDiagnostics?
     private var latestAnalysis: PoseAnalysis?
     private var trackingReset: SquatTrackingReset?
+    private var measurementLossCount = 0
+    private var legChangeCount = 0
+    private var observationGapCount = 0
+    private var latestMeasurementIssue: LegMeasurementIssue?
     #endif
 
     private let persistence: any WorkoutStoring
     private let timeSource: any WorkoutTimeSource
     private let analyzer = PoseAnalyzer()
-    private var counter = SquatCounter()
+    private var counter = SquatCounter(maximumHipKneeHeightRatio: 0.35)
     private var updateTask: Task<Void, Never>?
     private let startedAt: Date
     private var activeStartedAt: TimeInterval?
@@ -119,6 +127,16 @@ final class WorkoutViewModel {
         let analysis = analyzer.analyze(pose)
         hasPose = analysis.smoothedAngle != nil
         lastPoseTime = hasPose ? currentTime : nil
+        #if DEBUG
+        if analysis.requiresMovementReset, counter.phase != .seekingStanding {
+            if analysis.selectedLeg == nil {
+                measurementLossCount += 1
+                latestMeasurementIssue = trackingIssue(for: analysis)
+            } else {
+                legChangeCount += 1
+            }
+        }
+        #endif
         if analysis.requiresMovementReset { counter.resetMovement() }
         #if DEBUG
         latestAnalysis = analysis
@@ -127,7 +145,11 @@ final class WorkoutViewModel {
         }
         #endif
 
-        let counted = counter.process(measuredAngle: analysis.measuredAngle, smoothedAngle: analysis.smoothedAngle)
+        let counted = counter.process(
+            measuredAngle: analysis.measuredAngle,
+            smoothedAngle: analysis.smoothedAngle,
+            hipKneeHeightRatio: analysis.hipKneeHeightRatio
+        )
         #if DEBUG
         if counter.phase != .seekingStanding { trackingReset = nil }
         #endif
@@ -231,11 +253,24 @@ final class WorkoutViewModel {
 
     private func expireTracking(at currentTime: TimeInterval) {
         guard let lastPoseTime, currentTime - lastPoseTime > maximumPoseInterval else { return }
+        #if DEBUG
+        if counter.phase != .seekingStanding { observationGapCount += 1 }
+        #endif
         resetTracking()
         #if DEBUG
         trackingReset = .observationGap
         #endif
     }
+
+    #if DEBUG
+    private func trackingIssue(for analysis: PoseAnalysis) -> LegMeasurementIssue? {
+        let issues = [analysis.leftMeasurement.issue, analysis.rightMeasurement.issue]
+        if issues.contains(.lowConfidence) { return .lowConfidence }
+        if issues.contains(.invalidGeometry) { return .invalidGeometry }
+        if issues.contains(.missingJoint) { return .missingJoint }
+        return nil
+    }
+    #endif
 
     private func resetTracking() {
         counter.resetMovement()
@@ -293,7 +328,11 @@ final class WorkoutViewModel {
             standingThreshold: counter.standingThreshold,
             loweredThreshold: counter.loweredThreshold,
             status: isFinished ? .finished : (!isCameraReady ? .waitingForCamera : (isPaused ? .paused : (restDeadline != nil ? .resting : .tracking))),
-            resetReason: trackingReset
+            resetReason: trackingReset,
+            measurementLossCount: measurementLossCount,
+            legChangeCount: legChangeCount,
+            observationGapCount: observationGapCount,
+            latestMeasurementIssue: latestMeasurementIssue
         )
         latestDiagnostics = diagnostics
         onDiagnosticsChange?(diagnostics)

@@ -113,6 +113,62 @@ final class PoseAnalyzerTests: XCTestCase {
         XCTAssertEqual(restored.smoothedAngle ?? 0, 160, accuracy: 0.001)
     }
 
+    func testHipKneeHeightRatioHasPositiveZeroAndNegativeValues() {
+        let samples: [(CGFloat, Double)] = [
+            (0.6, sqrt(0.5)),
+            (0.5, 0),
+            (0.4, -sqrt(0.5))
+        ]
+        for sample in samples {
+            let pose = SquatPoseFixture.replacing(
+                SquatPoseFixture.pose(),
+                joint: .leftHip,
+                location: CGPoint(x: 0.6, y: sample.0)
+            )
+            let analysis = PoseAnalyzer().analyze(pose)
+            XCTAssertEqual(analysis.selectedLeg, .left)
+            XCTAssertEqual(analysis.hipKneeHeightRatio ?? -2, sample.1, accuracy: 0.001)
+        }
+    }
+
+    func testHipKneeHeightRatioAccountsForImageAspectRatio() {
+        let pose = SquatPoseFixture.replacing(
+            SquatPoseFixture.pose(aspectRatio: 0.5),
+            joint: .leftHip,
+            location: CGPoint(x: 0.9, y: 0.7)
+        )
+        let analysis = PoseAnalyzer().analyze(pose)
+        XCTAssertEqual(analysis.hipKneeHeightRatio ?? -2, sqrt(0.5), accuracy: 0.001)
+    }
+
+    func testHipKneeHeightRatioUsesSelectedReliableLeg() {
+        var pose = SquatPoseFixture.pose(
+            leftAngle: 170,
+            rightAngle: 165,
+            leftConfidence: 0.6,
+            rightConfidence: 0.9
+        )
+        pose = SquatPoseFixture.replacing(pose, joint: .rightHip, location: CGPoint(x: 0.6, y: 0.4))
+        let analysis = PoseAnalyzer().analyze(pose)
+        XCTAssertEqual(analysis.selectedLeg, .right)
+        XCTAssertEqual(analysis.hipKneeHeightRatio ?? 2, -sqrt(0.5), accuracy: 0.001)
+    }
+
+    func testHipKneeHeightRatioIsUnavailableForUnreliableGeometry() {
+        let source = SquatPoseFixture.pose()
+        let lowConfidence = SquatPoseFixture.replacing(source, joint: .leftKnee, confidence: 0.49)
+        XCTAssertNil(PoseAnalyzer().analyze(lowConfidence).hipKneeHeightRatio)
+        let coincident = SquatPoseFixture.replacing(
+            source,
+            joint: .leftHip,
+            location: CGPoint(x: 0.5, y: 0.5)
+        )
+        XCTAssertNil(PoseAnalyzer().analyze(coincident).hipKneeHeightRatio)
+        let invalidRatio = SquatPoseFixture.pose(aspectRatio: .nan)
+        XCTAssertNil(PoseAnalyzer().analyze(invalidRatio).hipKneeHeightRatio)
+        XCTAssertNil(PoseAnalyzer().analyze(nil).hipKneeHeightRatio)
+    }
+
     func testAngleUsesImageAspectRatio() {
         let analysis = PoseAnalyzer().analyze(SquatPoseFixture.pose(leftAngle: 100, aspectRatio: 9.0 / 16.0))
         XCTAssertEqual(analysis.measuredAngle ?? 0, 100, accuracy: 0.001)

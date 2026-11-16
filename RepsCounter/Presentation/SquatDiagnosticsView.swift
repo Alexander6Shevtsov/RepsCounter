@@ -66,10 +66,13 @@ final class SquatDiagnosticsView: UIVisualEffectView {
         case .lowered: phaseName = "lowered"
         }
         let lines = [
+            "Сбросы И:\(diagnostics.measurementLossCount) Н:\(diagnostics.legChangeCount) Г:\(diagnostics.observationGapCount)",
             "Нога: \(selectedName) · confidence \(minimumConfidenceText(selectedMeasurement))",
             "raw \(angleText(analysis?.measuredAngle)) · EMA \(angleText(analysis?.smoothedAngle))",
+            "Таз−колено: \(hipKneeText(analysis?.hipKneeHeightRatio)) бедра",
             "Фаза: \(phaseName) · кадры \(diagnostics.consecutiveFrames)/\(diagnostics.requiredFrames)",
-            "Результат: \(decisionText(diagnostics))"
+            "Результат: \(decisionText(diagnostics))",
+            "Последняя потеря: \(measurementIssueText(diagnostics.latestMeasurementIssue))"
         ]
         textLabel.text = lines.joined(separator: "\n")
     }
@@ -77,6 +80,20 @@ final class SquatDiagnosticsView: UIVisualEffectView {
     private func angleText(_ angle: Double?) -> String {
         guard let angle, angle.isFinite else { return "—" }
         return String(format: "%.1f°", angle)
+    }
+
+    private func hipKneeText(_ ratio: Double?) -> String {
+        guard let ratio, ratio.isFinite else { return "—" }
+        return String(format: "%+.2f", ratio)
+    }
+
+    private func measurementIssueText(_ issue: LegMeasurementIssue?) -> String {
+        switch issue {
+        case .missingJoint: return "не найден сустав"
+        case .lowConfidence: return "низкая достоверность"
+        case .invalidGeometry: return "некорректная геометрия"
+        case nil: return "—"
+        }
     }
 
     private func minimumConfidenceText(_ measurement: LegMeasurement?) -> String {
@@ -106,6 +123,7 @@ final class SquatDiagnosticsView: UIVisualEffectView {
         case .awaitingStandingSmoothing: return "raw стоя подтверждено; EMA ещё <160°"
         case .standingConfirmed: return "стоя подтверждено; ожидается полный присед"
         case .awaitingDepth: return "глубина ≤105° не достигнута"
+        case .awaitingHipKneeDepth: return "таз слишком высоко: глубина не подтверждена (порог +0.35)"
         case .confirmingDepth: return "недостаточно raw-кадров глубины ≤105°"
         case .awaitingDepthSmoothing: return "raw глубина подтверждена; EMA ещё >105°"
         case .loweredConfirmed: return "глубина подтверждена; нужно вернуться стоя"

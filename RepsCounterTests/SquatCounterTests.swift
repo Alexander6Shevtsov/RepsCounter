@@ -202,6 +202,84 @@ final class SquatCounterTests: XCTestCase {
         XCTAssertEqual(counter.phase, .standing)
     }
 
+
+    func testExperimentalDepthGateCountsThreeDeepAndRejectsThreeAlmostDeepMovements() {
+        var counter = SquatCounter(maximumHipKneeHeightRatio: 0.35)
+        for movement in 0..<6 {
+            for _ in 0..<4 {
+                _ = counter.process(measuredAngle: 170, smoothedAngle: 170, hipKneeHeightRatio: 0.98)
+            }
+            let isPartial = movement >= 3
+            for _ in 0..<4 {
+                XCTAssertFalse(counter.process(
+                    measuredAngle: isPartial ? 99 : 70,
+                    smoothedAngle: isPartial ? 99 : 70,
+                    hipKneeHeightRatio: isPartial ? 0.48 : 0.08
+                ))
+            }
+            XCTAssertEqual(counter.phase, isPartial ? .standing : .lowered)
+            if isPartial { XCTAssertEqual(counter.decision, .awaitingHipKneeDepth) }
+            for _ in 0..<4 {
+                _ = counter.process(measuredAngle: 170, smoothedAngle: 170, hipKneeHeightRatio: 0.98)
+            }
+            XCTAssertEqual(counter.repetitions, min(movement + 1, 3))
+        }
+    }
+
+    func testExperimentalDepthGateRequiresConsecutiveAngleAndHeightConfirmation() {
+        var counter = SquatCounter(maximumHipKneeHeightRatio: 0.35)
+        for _ in 0..<3 {
+            _ = counter.process(measuredAngle: 170, smoothedAngle: 170, hipKneeHeightRatio: 0.98)
+        }
+        for _ in 0..<2 {
+            XCTAssertFalse(counter.process(measuredAngle: 99, smoothedAngle: 99, hipKneeHeightRatio: 0.30))
+        }
+        XCTAssertEqual(counter.consecutiveFrames, 2)
+        XCTAssertFalse(counter.process(measuredAngle: 99, smoothedAngle: 99, hipKneeHeightRatio: 0.48))
+        XCTAssertEqual(counter.consecutiveFrames, 0)
+        XCTAssertEqual(counter.decision, .awaitingHipKneeDepth)
+        for _ in 0..<2 {
+            XCTAssertFalse(counter.process(measuredAngle: 99, smoothedAngle: 99, hipKneeHeightRatio: 0.35))
+        }
+        XCTAssertEqual(counter.phase, .standing)
+        XCTAssertFalse(counter.process(measuredAngle: 99, smoothedAngle: 99, hipKneeHeightRatio: 0.35))
+        XCTAssertEqual(counter.phase, .lowered)
+    }
+
+    func testExperimentalDepthGateResetsOnMissingOrInvalidHeight() {
+        for invalidHeight in [Optional<Double>.none, .some(.nan), .some(.infinity), .some(1.1)] {
+            var counter = SquatCounter(maximumHipKneeHeightRatio: 0.35)
+            for _ in 0..<3 {
+                _ = counter.process(measuredAngle: 170, smoothedAngle: 170, hipKneeHeightRatio: 0.98)
+            }
+            for _ in 0..<3 {
+                _ = counter.process(measuredAngle: 70, smoothedAngle: 70, hipKneeHeightRatio: 0.08)
+            }
+            XCTAssertEqual(counter.phase, .lowered)
+            XCTAssertFalse(counter.process(measuredAngle: 170, smoothedAngle: 170, hipKneeHeightRatio: invalidHeight))
+            XCTAssertEqual(counter.phase, .seekingStanding)
+            XCTAssertEqual(counter.decision, .invalidMeasurement)
+            for _ in 0..<3 {
+                XCTAssertFalse(counter.process(measuredAngle: 170, smoothedAngle: 170, hipKneeHeightRatio: 0.98))
+            }
+            XCTAssertEqual(counter.repetitions, 0)
+        }
+    }
+
+    func testExperimentalDepthGateKeepsLegacyCounterBehaviorWithoutConfiguration() {
+        var counter = SquatCounter()
+        for _ in 0..<3 {
+            _ = counter.process(measuredAngle: 170, smoothedAngle: 170)
+        }
+        for _ in 0..<3 {
+            _ = counter.process(measuredAngle: 99, smoothedAngle: 99)
+        }
+        for _ in 0..<3 {
+            _ = counter.process(measuredAngle: 170, smoothedAngle: 170)
+        }
+        XCTAssertEqual(counter.repetitions, 1)
+    }
+
     private func makeCounterAfterOneRepetition() -> SquatCounter {
         var counter = SquatCounter()
         for angle in [170.0, 170, 170, 95, 95, 95, 170, 170, 170] {

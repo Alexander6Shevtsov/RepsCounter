@@ -19,6 +19,7 @@ enum SquatDecision: Equatable {
     case awaitingStandingSmoothing
     case standingConfirmed
     case awaitingDepth
+    case awaitingHipKneeDepth
     case confirmingDepth
     case awaitingDepthSmoothing
     case loweredConfirmed
@@ -39,24 +40,34 @@ struct SquatCounter {
     let standingThreshold: Double
     let loweredThreshold: Double
     let requiredStableFrames: Int
+    let maximumHipKneeHeightRatio: Double?
 
-    init(standingThreshold: Double = 160, loweredThreshold: Double = 105, requiredStableFrames: Int = 3) {
+    init(standingThreshold: Double = 160, loweredThreshold: Double = 105, requiredStableFrames: Int = 3, maximumHipKneeHeightRatio: Double? = nil) {
         self.standingThreshold = standingThreshold
         self.loweredThreshold = loweredThreshold
         self.requiredStableFrames = max(1, requiredStableFrames)
+        self.maximumHipKneeHeightRatio = maximumHipKneeHeightRatio
     }
 
     mutating func process(angle: Double?) -> Bool {
         process(measuredAngle: angle, smoothedAngle: angle)
     }
 
-    mutating func process(measuredAngle: Double?, smoothedAngle: Double?) -> Bool {
+    mutating func process(measuredAngle: Double?, smoothedAngle: Double?, hipKneeHeightRatio: Double? = nil) -> Bool {
         guard let measuredAngle, let smoothedAngle,
               measuredAngle.isFinite, smoothedAngle.isFinite,
               (0...180).contains(measuredAngle), (0...180).contains(smoothedAngle) else {
             resetMovement()
             decision = .invalidMeasurement
             return false
+        }
+        if maximumHipKneeHeightRatio != nil {
+            guard let hipKneeHeightRatio, hipKneeHeightRatio.isFinite,
+                  (-1.0...1.0).contains(hipKneeHeightRatio) else {
+                resetMovement()
+                decision = .invalidMeasurement
+                return false
+            }
         }
 
         switch phase {
@@ -71,9 +82,14 @@ struct SquatCounter {
             phase = .standing
             decision = .standingConfirmed
         case .standing:
-            let measuredSatisfied = measuredAngle <= loweredThreshold
+            let angleSatisfied = measuredAngle <= loweredThreshold
+            let heightSatisfied = maximumHipKneeHeightRatio.map { threshold in
+                hipKneeHeightRatio.map { $0 <= threshold } ?? false
+            } ?? true
+            let measuredSatisfied = angleSatisfied && heightSatisfied
             guard confirm(measured: measuredSatisfied, smoothed: smoothedAngle <= loweredThreshold) else {
-                if !measuredSatisfied { decision = .awaitingDepth }
+                if !angleSatisfied { decision = .awaitingDepth }
+                else if !heightSatisfied { decision = .awaitingHipKneeDepth }
                 else if consecutiveFrames == requiredStableFrames { decision = .awaitingDepthSmoothing }
                 else { decision = .confirmingDepth }
                 return false

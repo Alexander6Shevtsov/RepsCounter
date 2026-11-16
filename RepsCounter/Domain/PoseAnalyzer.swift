@@ -39,6 +39,7 @@ struct PoseAnalysis {
     let selectedLeg: BodyLeg?
     let measuredAngle: Double?
     let smoothedAngle: Double?
+    let hipKneeHeightRatio: Double?
     let requiresMovementReset: Bool
 }
 
@@ -63,12 +64,14 @@ final class PoseAnalyzer {
         if let measuredAngle {
             smoothedAngle = smoothedAngle.map { 0.35 * measuredAngle + 0.65 * $0 } ?? measuredAngle
         }
+        let hipKneeHeightRatio = measureHipKneeHeight(pose, selectedLeg: nextLeg)
         return PoseAnalysis(
             leftMeasurement: leftMeasurement,
             rightMeasurement: rightMeasurement,
             selectedLeg: nextLeg,
             measuredAngle: measuredAngle,
             smoothedAngle: smoothedAngle,
+            hipKneeHeightRatio: hipKneeHeightRatio,
             requiresMovementReset: requiresReset
         )
     }
@@ -87,6 +90,28 @@ final class PoseAnalyzer {
         if left.isReliable { return .left }
         if right.isReliable { return .right }
         return nil
+    }
+
+    private func measureHipKneeHeight(_ pose: BodyPose?, selectedLeg: BodyLeg?) -> Double? {
+        guard let pose, let selectedLeg, pose.aspectRatio.isFinite, pose.aspectRatio > 0 else { return nil }
+        let hipJoint: BodyJoint
+        let kneeJoint: BodyJoint
+        switch selectedLeg {
+        case .left:
+            hipJoint = .leftHip
+            kneeJoint = .leftKnee
+        case .right:
+            hipJoint = .rightHip
+            kneeJoint = .rightKnee
+        }
+        guard let hipPoint = pose.joints[hipJoint], let kneePoint = pose.joints[kneeJoint] else { return nil }
+        let horizontalDifference = Double(hipPoint.location.x - kneePoint.location.x) * Double(pose.aspectRatio)
+        let verticalDifference = Double(hipPoint.location.y - kneePoint.location.y)
+        guard horizontalDifference.isFinite, verticalDifference.isFinite else { return nil }
+        let projectedThighLength = hypot(horizontalDifference, verticalDifference)
+        guard projectedThighLength.isFinite, projectedThighLength > 0.000_001 else { return nil }
+        let heightRatio = verticalDifference / projectedThighLength
+        return heightRatio.isFinite ? heightRatio : nil
     }
 
     private func measure(_ pose: BodyPose?, joints: [BodyJoint]) -> LegMeasurement {
