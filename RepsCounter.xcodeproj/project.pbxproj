@@ -1,124 +1,550 @@
 // !$*UTF8*$!
 {
-archiveVersion = 1;
-classes = {};
-objectVersion = 56;
-objects = {
-    A10DA0000000000000000003 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutHistoryUITests.swift; sourceTree = "<group>"; };
-    A10DB0000000000000000003 = { isa = PBXBuildFile; fileRef = A10DA0000000000000000003; };
-    A10DA0000000000000000002 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PortfolioUITests.swift; sourceTree = "<group>"; };
-    A10DB0000000000000000002 = { isa = PBXBuildFile; fileRef = A10DA0000000000000000002; };
-    A10DA0000000000000000001 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutDashboardView.swift; sourceTree = "<group>"; };
-    A10DB0000000000000000001 = { isa = PBXBuildFile; fileRef = A10DA0000000000000000001; };
-    9EA436FD543949D9BA67AD1F = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SquatDepthValidationTests.swift; sourceTree = "<group>"; };
-    5A680AD01F16472A9CE9C86D = { isa = PBXBuildFile; fileRef = 9EA436FD543949D9BA67AD1F; };
-    2BEA99FF162F4CF4A9A454D3 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SquatObservationTests.swift; sourceTree = "<group>"; };
-    03AE83AB4B0D430FBBDB5918 = { isa = PBXBuildFile; fileRef = 2BEA99FF162F4CF4A9A454D3; };
-    6A064275C5674B5AA4151381 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SquatDiagnosticsTests.swift; sourceTree = "<group>"; };
-    24F4904B022A49BA9C044BA5 = { isa = PBXBuildFile; fileRef = 6A064275C5674B5AA4151381; };
-    1E95EE8FFAA44C00808E9868 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PoseAnalyzerTests.swift; sourceTree = "<group>"; };
-    93A05246BDF641B6BDF1EB94 = { isa = PBXBuildFile; fileRef = 1E95EE8FFAA44C00808E9868; };
-    4F5CAA09158A4903AB1870A5 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SquatDiagnosticsView.swift; sourceTree = "<group>"; };
-    2B43C42D23E244CB8E6F54ED = { isa = PBXBuildFile; fileRef = 4F5CAA09158A4903AB1870A5; };
-    F0CD6D819AB342E584CA1B72 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PoseGeometryTests.swift; sourceTree = "<group>"; };
-    93EDEDB783324D05823EB3BF = { isa = PBXBuildFile; fileRef = F0CD6D819AB342E584CA1B72; };
-    E3B92F89AF8C4BEB8D861716 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraSwitchingTests.swift; sourceTree = "<group>"; };
-    BD034665816F429781575D7A = { isa = PBXBuildFile; fileRef = E3B92F89AF8C4BEB8D861716; };
-    FB22EC1FE0724AD29195D698 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PoseGeometry.swift; sourceTree = "<group>"; };
-    9387C8B674574492BB99618A = { isa = PBXBuildFile; fileRef = FB22EC1FE0724AD29195D698; };
-    9FB0C521967141EC88880471 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraPosition.swift; sourceTree = "<group>"; };
-    3669909E44C24E8A8B9A6523 = { isa = PBXBuildFile; fileRef = 9FB0C521967141EC88880471; };
-    A05CA0000000000000000004 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutCameraTests.swift; sourceTree = "<group>"; };
-    A05CB0000000000000000004 = { isa = PBXBuildFile; fileRef = A05CA0000000000000000004; };
-    A05CA0000000000000000003 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraLifecycleTests.swift; sourceTree = "<group>"; };
-    A05CB0000000000000000003 = { isa = PBXBuildFile; fileRef = A05CA0000000000000000003; };
-    A05CA0000000000000000002 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutCameraCoordinator.swift; sourceTree = "<group>"; };
-    A05CB0000000000000000002 = { isa = PBXBuildFile; fileRef = A05CA0000000000000000002; };
-    A05CA0000000000000000001 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraCapture.swift; sourceTree = "<group>"; };
-    A05CB0000000000000000001 = { isa = PBXBuildFile; fileRef = A05CA0000000000000000001; };
-    CDDF3981CF977D20F7C8C2BD = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
-    48317B4382D640E46AE12E85 = { isa = PBXBuildFile; fileRef = CDDF3981CF977D20F7C8C2BD; };
-    D7F2C8B0987244D2A5B16301 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
-    D7F2C8B0987244D2A5B16302 = { isa = PBXBuildFile; fileRef = D7F2C8B0987244D2A5B16301; };
-    D7F2C8B0987244D2A5B16303 = { isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-    D7F2C8B0987244D2A5B16304 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneLifecycleTests.swift; sourceTree = "<group>"; };
-    D7F2C8B0987244D2A5B16305 = { isa = PBXBuildFile; fileRef = D7F2C8B0987244D2A5B16304; };
-    E8A3C9D1098355E3B6C27401 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutSummary.swift; sourceTree = "<group>"; };
-    E8A3C9D1098355E3B6C27402 = { isa = PBXBuildFile; fileRef = E8A3C9D1098355E3B6C27401; };
-    E8A3C9D1098355E3B6C27403 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutViewModelTests.swift; sourceTree = "<group>"; };
-    E8A3C9D1098355E3B6C27404 = { isa = PBXBuildFile; fileRef = E8A3C9D1098355E3B6C27403; };
-    F9B4DAE21A9466F4C7D38501 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutTimeSource.swift; sourceTree = "<group>"; };
-    F9B4DAE21A9466F4C7D38502 = { isa = PBXBuildFile; fileRef = F9B4DAE21A9466F4C7D38501; };
-    F9B4DAE21A9466F4C7D38503 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutTimingTests.swift; sourceTree = "<group>"; };
-    F9B4DAE21A9466F4C7D38504 = { isa = PBXBuildFile; fileRef = F9B4DAE21A9466F4C7D38503; };
-    2BBC466B1B168F85AB8B5F30 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BodyPose.swift; sourceTree = "<group>"; };
-    240E30981A73335B6FA7EA3E = { isa = PBXBuildFile; fileRef = 2BBC466B1B168F85AB8B5F30; };
-    AB5CCD47F29DE3E65ED0A282 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JointAngleCalculator.swift; sourceTree = "<group>"; };
-    F24966A18EBE0D245097C4D1 = { isa = PBXBuildFile; fileRef = AB5CCD47F29DE3E65ED0A282; };
-    0C1D9030A183E961C8846F11 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PoseAnalyzer.swift; sourceTree = "<group>"; };
-    E211AA1A93D61AD6A9173309 = { isa = PBXBuildFile; fileRef = 0C1D9030A183E961C8846F11; };
-    32F232DBF0781617121E18A9 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SquatCounter.swift; sourceTree = "<group>"; };
-    F117A360A71C4D52A28B11AA = { isa = PBXBuildFile; fileRef = 32F232DBF0781617121E18A9; };
-    9D0E1F40C20F8918DEC41937 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraPreviewView.swift; sourceTree = "<group>"; };
-    AD9374468C095AFA1B1C4B83 = { isa = PBXBuildFile; fileRef = 9D0E1F40C20F8918DEC41937; };
-    05232313959416543EB6E7D5 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PoseOverlayView.swift; sourceTree = "<group>"; };
-    D6FD2959225B3D20D9C7C193 = { isa = PBXBuildFile; fileRef = 05232313959416543EB6E7D5; };
-    AB4ABF811DE0C4702C4F1C99 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutHistoryViewController.swift; sourceTree = "<group>"; };
-    6D58F4635B53FF3C44BB5A5D = { isa = PBXBuildFile; fileRef = AB4ABF811DE0C4702C4F1C99; };
-    F0B70DEA209DCA87DBEA2931 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutViewController.swift; sourceTree = "<group>"; };
-    2F8145DDC21E9BB488E72303 = { isa = PBXBuildFile; fileRef = F0B70DEA209DCA87DBEA2931; };
-    2E6E481B53FA12300A4783A9 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutViewModel.swift; sourceTree = "<group>"; };
-    74DEF6F67715D06F11F25854 = { isa = PBXBuildFile; fileRef = 2E6E481B53FA12300A4783A9; };
-    5E5C2A8244469619E1EF61B4 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraService.swift; sourceTree = "<group>"; };
-    D5C04715B74ED4B1671BB8C9 = { isa = PBXBuildFile; fileRef = 5E5C2A8244469619E1EF61B4; };
-    7A6A8D6A7E7077C4EEFD00F4 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PoseDetector.swift; sourceTree = "<group>"; };
-    AF28304F4246EAE54213D7FC = { isa = PBXBuildFile; fileRef = 7A6A8D6A7E7077C4EEFD00F4; };
-    ACCEACDCB09FE048E916C5BF = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutPersistence.swift; sourceTree = "<group>"; };
-    DA74B9571072FDB1B83CBBFF = { isa = PBXBuildFile; fileRef = ACCEACDCB09FE048E916C5BF; };
-    C994DEE4E31E70958E6E1331 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JointAngleCalculatorTests.swift; sourceTree = "<group>"; };
-    1980374DFEF2F4E0B9D0EC3B = { isa = PBXBuildFile; fileRef = C994DEE4E31E70958E6E1331; };
-    D137D266EB2C31C6D8096A1B = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SquatCounterTests.swift; sourceTree = "<group>"; };
-    591420647406FAB794E6FE6C = { isa = PBXBuildFile; fileRef = D137D266EB2C31C6D8096A1B; };
-    85AC0BD245E4BBB93839731C = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutPersistenceTests.swift; sourceTree = "<group>"; };
-    AB22F8BC01FDC30C4B375E99 = { isa = PBXBuildFile; fileRef = 85AC0BD245E4BBB93839731C; };
-    AD5916A20AAAA65C63A7441D = { isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = RepsCounter.app; sourceTree = BUILT_PRODUCTS_DIR; };
-    DFEC2E5ADA67C0398F8FC40B = { isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = RepsCounterTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-    C0A1B2C3D4E5F60718293041 = { isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-    C0A1B2C3D4E5F60718293042 = { isa = PBXBuildFile; fileRef = C0A1B2C3D4E5F60718293041; };
-    C0A1B2C3D4E5F60718293043 = { isa = PBXGroup; children = (C0A1B2C3D4E5F60718293041, ); path = Resources; sourceTree = "<group>"; };
-    A2FF9BC57277E9FA2AA21C75 = { isa = PBXGroup; children = (CDDF3981CF977D20F7C8C2BD, D7F2C8B0987244D2A5B16301, D7F2C8B0987244D2A5B16303, ); path = App; sourceTree = "<group>"; };
-    33D2AA1A2357EE31DDFD408E = { isa = PBXGroup; children = (9FB0C521967141EC88880471, 2BBC466B1B168F85AB8B5F30, AB5CCD47F29DE3E65ED0A282, 0C1D9030A183E961C8846F11, 32F232DBF0781617121E18A9, E8A3C9D1098355E3B6C27401, F9B4DAE21A9466F4C7D38501, ); path = Domain; sourceTree = "<group>"; };
-    A1AF5AD3088A36FFF1D48418 = { isa = PBXGroup; children = (FB22EC1FE0724AD29195D698, A05CA0000000000000000001, 5E5C2A8244469619E1EF61B4, 7A6A8D6A7E7077C4EEFD00F4, ACCEACDCB09FE048E916C5BF, ); path = Services; sourceTree = "<group>"; };
-    F1931DE9F5D5D2D421C3E687 = { isa = PBXGroup; children = (A10DA0000000000000000001, 4F5CAA09158A4903AB1870A5, A05CA0000000000000000002, 9D0E1F40C20F8918DEC41937, 05232313959416543EB6E7D5, AB4ABF811DE0C4702C4F1C99, F0B70DEA209DCA87DBEA2931, 2E6E481B53FA12300A4783A9, ); path = Presentation; sourceTree = "<group>"; };
-    062D7FA4B32E7D6303565415 = { isa = PBXGroup; children = (A2FF9BC57277E9FA2AA21C75, 33D2AA1A2357EE31DDFD408E, A1AF5AD3088A36FFF1D48418, F1931DE9F5D5D2D421C3E687, C0A1B2C3D4E5F60718293043, ); path = RepsCounter; sourceTree = "<group>"; };
-    E1F97BA8A1EBCC74BB0E0AFC = { isa = PBXGroup; children = (A10DA0000000000000000003, A10DA0000000000000000002, 9EA436FD543949D9BA67AD1F, 2BEA99FF162F4CF4A9A454D3, 6A064275C5674B5AA4151381, 1E95EE8FFAA44C00808E9868, F0CD6D819AB342E584CA1B72, E3B92F89AF8C4BEB8D861716, A05CA0000000000000000004, A05CA0000000000000000003, C994DEE4E31E70958E6E1331, D137D266EB2C31C6D8096A1B, 85AC0BD245E4BBB93839731C, D7F2C8B0987244D2A5B16304, E8A3C9D1098355E3B6C27403, F9B4DAE21A9466F4C7D38503, ); path = RepsCounterTests; sourceTree = "<group>"; };
-    4FDE57E4B72FFCEE306CEB0F = { isa = PBXGroup; children = (AD5916A20AAAA65C63A7441D, DFEC2E5ADA67C0398F8FC40B, ); name = Products; sourceTree = "<group>"; };
-    BDE88D77EBDC01774960BE71 = { isa = PBXGroup; children = (062D7FA4B32E7D6303565415, E1F97BA8A1EBCC74BB0E0AFC, 4FDE57E4B72FFCEE306CEB0F, ); sourceTree = "<group>"; };
-    B10AE85C2BE731B98F629ADE = { isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A10DB0000000000000000001, 2B43C42D23E244CB8E6F54ED, 9387C8B674574492BB99618A, 3669909E44C24E8A8B9A6523, A05CB0000000000000000002, A05CB0000000000000000001, 48317B4382D640E46AE12E85, F9B4DAE21A9466F4C7D38502, E8A3C9D1098355E3B6C27402, D7F2C8B0987244D2A5B16302, 240E30981A73335B6FA7EA3E, F24966A18EBE0D245097C4D1, E211AA1A93D61AD6A9173309, F117A360A71C4D52A28B11AA, AD9374468C095AFA1B1C4B83, D6FD2959225B3D20D9C7C193, 6D58F4635B53FF3C44BB5A5D, 2F8145DDC21E9BB488E72303, 74DEF6F67715D06F11F25854, D5C04715B74ED4B1671BB8C9, AF28304F4246EAE54213D7FC, DA74B9571072FDB1B83CBBFF, ); runOnlyForDeploymentPostprocessing = 0; };
-    C304A304F4DC54B885442429 = { isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A10DB0000000000000000003, A10DB0000000000000000002, 5A680AD01F16472A9CE9C86D, 03AE83AB4B0D430FBBDB5918, 24F4904B022A49BA9C044BA5, 93A05246BDF641B6BDF1EB94, 93EDEDB783324D05823EB3BF, BD034665816F429781575D7A, A05CB0000000000000000004, A05CB0000000000000000003, 1980374DFEF2F4E0B9D0EC3B, F9B4DAE21A9466F4C7D38504, E8A3C9D1098355E3B6C27404, D7F2C8B0987244D2A5B16305, 591420647406FAB794E6FE6C, AB22F8BC01FDC30C4B375E99, ); runOnlyForDeploymentPostprocessing = 0; };
-    F068F8406EE9572E80CDDD46 = { isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = ( ); runOnlyForDeploymentPostprocessing = 0; };
-    2B061878ED927DE2C440D3AD = { isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = ( ); runOnlyForDeploymentPostprocessing = 0; };
-    EA0799CD6FB8985E3A9B6E32 = { isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (C0A1B2C3D4E5F60718293042, ); runOnlyForDeploymentPostprocessing = 0; };
-    10BDD868B09B991950A722E4 = { isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = ( ); runOnlyForDeploymentPostprocessing = 0; };
-    75C5D97A8AE392B664E832E8 = { isa = PBXContainerItemProxy; containerPortal = 98F54143AB4E86B28C3AFEE0; proxyType = 1; remoteGlobalIDString = 2FE3FBD7A51C361D063370C7; remoteInfo = RepsCounter; };
-    1CDB748041E91E7307CF2537 = { isa = PBXTargetDependency; target = 2FE3FBD7A51C361D063370C7; targetProxy = 75C5D97A8AE392B664E832E8; };
-    2FE3FBD7A51C361D063370C7 = { isa = PBXNativeTarget; buildConfigurationList = 1216B4E9C40D309E3D17B430; buildPhases = (B10AE85C2BE731B98F629ADE, F068F8406EE9572E80CDDD46, EA0799CD6FB8985E3A9B6E32, ); buildRules = ( ); dependencies = ( ); name = RepsCounter; productName = RepsCounter; productReference = AD5916A20AAAA65C63A7441D; productType = "com.apple.product-type.application"; };
-    45C98D5FCE3016A4889B25F4 = { isa = PBXNativeTarget; buildConfigurationList = D82283EFFE6805CACFCBD2C6; buildPhases = (C304A304F4DC54B885442429, 2B061878ED927DE2C440D3AD, 10BDD868B09B991950A722E4, ); buildRules = ( ); dependencies = (1CDB748041E91E7307CF2537, ); name = RepsCounterTests; productName = RepsCounterTests; productReference = DFEC2E5ADA67C0398F8FC40B; productType = "com.apple.product-type.bundle.unit-test"; };
-    2A1E782C07D4DF3E5A397B81 = { isa = XCBuildConfiguration; buildSettings = { ALWAYS_SEARCH_USER_PATHS = NO; CLANG_ENABLE_MODULES = YES; CLANG_ENABLE_OBJC_ARC = YES; CLANG_WARN_BOOL_CONVERSION = YES; CLANG_WARN_CONSTANT_CONVERSION = YES; CLANG_WARN_UNREACHABLE_CODE = YES; COPY_PHASE_STRIP = NO; GCC_C_LANGUAGE_STANDARD = gnu17; IPHONEOS_DEPLOYMENT_TARGET = 17.0; SDKROOT = iphoneos; SWIFT_VERSION = 5.0; GCC_OPTIMIZATION_LEVEL = 0; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; DEBUG_INFORMATION_FORMAT = dwarf; ENABLE_TESTABILITY = YES; SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) DEBUG"; }; name = Debug; };
-    57E96AC422CF3CCA2FABBE1D = { isa = XCBuildConfiguration; buildSettings = { ALWAYS_SEARCH_USER_PATHS = NO; CLANG_ENABLE_MODULES = YES; CLANG_ENABLE_OBJC_ARC = YES; CLANG_WARN_BOOL_CONVERSION = YES; CLANG_WARN_CONSTANT_CONVERSION = YES; CLANG_WARN_UNREACHABLE_CODE = YES; COPY_PHASE_STRIP = NO; GCC_C_LANGUAGE_STANDARD = gnu17; IPHONEOS_DEPLOYMENT_TARGET = 17.0; SDKROOT = iphoneos; SWIFT_VERSION = 5.0; SWIFT_COMPILATION_MODE = wholemodule; SWIFT_OPTIMIZATION_LEVEL = "-O"; DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym"; }; name = Release; };
-    42E7369FDEA3F84FEAE4D866 = { isa = XCBuildConfiguration; buildSettings = { ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; ENABLE_PREVIEWS = YES; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_FILE = RepsCounter/App/Info.plist; INFOPLIST_KEY_CFBundleDisplayName = RepsCounter; INFOPLIST_KEY_NSCameraUsageDescription = "Камера необходима для распознавания упражнений на устройстве без записи видео."; INFOPLIST_KEY_UIApplicationSceneManifest_Generation = NO; INFOPLIST_KEY_UIUserInterfaceStyle = Dark; IPHONEOS_DEPLOYMENT_TARGET = 17.0; MARKETING_VERSION = 0.1.0; PRODUCT_BUNDLE_IDENTIFIER = com.alexandershevtsov.RepsCounter; PRODUCT_NAME = "$(TARGET_NAME)"; SUPPORTS_MACCATALYST = NO; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = 1; }; name = Debug; };
-    0C14E55FE03688C40C72CF6F = { isa = XCBuildConfiguration; buildSettings = { BUNDLE_LOADER = "$(TEST_HOST)"; CODE_SIGN_STYLE = Automatic; GENERATE_INFOPLIST_FILE = YES; IPHONEOS_DEPLOYMENT_TARGET = 17.0; PRODUCT_BUNDLE_IDENTIFIER = com.alexandershevtsov.RepsCounterTests; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = 1; TEST_HOST = "$(BUILT_PRODUCTS_DIR)/RepsCounter.app/RepsCounter"; }; name = Debug; };
-    DCCE05528F429AEC680A6966 = { isa = XCBuildConfiguration; buildSettings = { ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; ENABLE_PREVIEWS = YES; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_FILE = RepsCounter/App/Info.plist; INFOPLIST_KEY_CFBundleDisplayName = RepsCounter; INFOPLIST_KEY_NSCameraUsageDescription = "Камера необходима для распознавания упражнений на устройстве без записи видео."; INFOPLIST_KEY_UIApplicationSceneManifest_Generation = NO; INFOPLIST_KEY_UIUserInterfaceStyle = Dark; IPHONEOS_DEPLOYMENT_TARGET = 17.0; MARKETING_VERSION = 0.1.0; PRODUCT_BUNDLE_IDENTIFIER = com.alexandershevtsov.RepsCounter; PRODUCT_NAME = "$(TARGET_NAME)"; SUPPORTS_MACCATALYST = NO; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = 1; }; name = Release; };
-    16463B2066F5CD30D9964E46 = { isa = XCBuildConfiguration; buildSettings = { BUNDLE_LOADER = "$(TEST_HOST)"; CODE_SIGN_STYLE = Automatic; GENERATE_INFOPLIST_FILE = YES; IPHONEOS_DEPLOYMENT_TARGET = 17.0; PRODUCT_BUNDLE_IDENTIFIER = com.alexandershevtsov.RepsCounterTests; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = 1; TEST_HOST = "$(BUILT_PRODUCTS_DIR)/RepsCounter.app/RepsCounter"; }; name = Release; };
-    F9250358FBC0C44833E430B9 = { isa = XCConfigurationList; buildConfigurations = (2A1E782C07D4DF3E5A397B81, 57E96AC422CF3CCA2FABBE1D, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
-    1216B4E9C40D309E3D17B430 = { isa = XCConfigurationList; buildConfigurations = (42E7369FDEA3F84FEAE4D866, DCCE05528F429AEC680A6966, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
-    D82283EFFE6805CACFCBD2C6 = { isa = XCConfigurationList; buildConfigurations = (0C14E55FE03688C40C72CF6F, 16463B2066F5CD30D9964E46, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
-    98F54143AB4E86B28C3AFEE0 = { isa = PBXProject;
- attributes = { BuildIndependentTargetsInParallel = YES; LastUpgradeCheck = 2600; TargetAttributes = { 2FE3FBD7A51C361D063370C7 = { CreatedOnToolsVersion = 26.0; }; 45C98D5FCE3016A4889B25F4 = { CreatedOnToolsVersion = 26.0; TestTargetID = 2FE3FBD7A51C361D063370C7; }; }; };
- buildConfigurationList = F9250358FBC0C44833E430B9; compatibilityVersion = "Xcode 14.0"; developmentRegion = en;
- hasScannedForEncodings = 0; knownRegions = (en, Base, ); mainGroup = BDE88D77EBDC01774960BE71;
- productRefGroup = 4FDE57E4B72FFCEE306CEB0F; projectDirPath = ""; projectRoot = "";
- targets = (2FE3FBD7A51C361D063370C7, 45C98D5FCE3016A4889B25F4, ); };
-};
-rootObject = 98F54143AB4E86B28C3AFEE0;
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		03AE83AB4B0D430FBBDB5918 /* SquatObservationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2BEA99FF162F4CF4A9A454D3 /* SquatObservationTests.swift */; };
+		1980374DFEF2F4E0B9D0EC3B /* JointAngleCalculatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C994DEE4E31E70958E6E1331 /* JointAngleCalculatorTests.swift */; };
+		240E30981A73335B6FA7EA3E /* BodyPose.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2BBC466B1B168F85AB8B5F30 /* BodyPose.swift */; };
+		24F4904B022A49BA9C044BA5 /* SquatDiagnosticsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A064275C5674B5AA4151381 /* SquatDiagnosticsTests.swift */; };
+		2B43C42D23E244CB8E6F54ED /* SquatDiagnosticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F5CAA09158A4903AB1870A5 /* SquatDiagnosticsView.swift */; };
+		2F8145DDC21E9BB488E72303 /* WorkoutViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0B70DEA209DCA87DBEA2931 /* WorkoutViewController.swift */; };
+		3669909E44C24E8A8B9A6523 /* CameraPosition.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FB0C521967141EC88880471 /* CameraPosition.swift */; };
+		48317B4382D640E46AE12E85 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDDF3981CF977D20F7C8C2BD /* AppDelegate.swift */; };
+		591420647406FAB794E6FE6C /* SquatCounterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D137D266EB2C31C6D8096A1B /* SquatCounterTests.swift */; };
+		5A680AD01F16472A9CE9C86D /* SquatDepthValidationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EA436FD543949D9BA67AD1F /* SquatDepthValidationTests.swift */; };
+		6D58F4635B53FF3C44BB5A5D /* WorkoutHistoryViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB4ABF811DE0C4702C4F1C99 /* WorkoutHistoryViewController.swift */; };
+		74DEF6F67715D06F11F25854 /* WorkoutViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E6E481B53FA12300A4783A9 /* WorkoutViewModel.swift */; };
+		9387C8B674574492BB99618A /* PoseGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB22EC1FE0724AD29195D698 /* PoseGeometry.swift */; };
+		93A05246BDF641B6BDF1EB94 /* PoseAnalyzerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E95EE8FFAA44C00808E9868 /* PoseAnalyzerTests.swift */; };
+		93EDEDB783324D05823EB3BF /* PoseGeometryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0CD6D819AB342E584CA1B72 /* PoseGeometryTests.swift */; };
+		A05CB0000000000000000001 /* CameraCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = A05CA0000000000000000001 /* CameraCapture.swift */; };
+		A05CB0000000000000000002 /* WorkoutCameraCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A05CA0000000000000000002 /* WorkoutCameraCoordinator.swift */; };
+		A05CB0000000000000000003 /* CameraLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A05CA0000000000000000003 /* CameraLifecycleTests.swift */; };
+		A05CB0000000000000000004 /* WorkoutCameraTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A05CA0000000000000000004 /* WorkoutCameraTests.swift */; };
+		A10DB0000000000000000001 /* WorkoutDashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10DA0000000000000000001 /* WorkoutDashboardView.swift */; };
+		A10DB0000000000000000002 /* PortfolioUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10DA0000000000000000002 /* PortfolioUITests.swift */; };
+		A10DB0000000000000000003 /* WorkoutHistoryUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10DA0000000000000000003 /* WorkoutHistoryUITests.swift */; };
+		AB22F8BC01FDC30C4B375E99 /* WorkoutPersistenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85AC0BD245E4BBB93839731C /* WorkoutPersistenceTests.swift */; };
+		AD9374468C095AFA1B1C4B83 /* CameraPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D0E1F40C20F8918DEC41937 /* CameraPreviewView.swift */; };
+		AF28304F4246EAE54213D7FC /* PoseDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A6A8D6A7E7077C4EEFD00F4 /* PoseDetector.swift */; };
+		BD034665816F429781575D7A /* CameraSwitchingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3B92F89AF8C4BEB8D861716 /* CameraSwitchingTests.swift */; };
+		C0A1B2C3D4E5F60718293042 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C0A1B2C3D4E5F60718293041 /* Assets.xcassets */; };
+		D5C04715B74ED4B1671BB8C9 /* CameraService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E5C2A8244469619E1EF61B4 /* CameraService.swift */; };
+		D6FD2959225B3D20D9C7C193 /* PoseOverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05232313959416543EB6E7D5 /* PoseOverlayView.swift */; };
+		D7F2C8B0987244D2A5B16302 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7F2C8B0987244D2A5B16301 /* SceneDelegate.swift */; };
+		D7F2C8B0987244D2A5B16305 /* SceneLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7F2C8B0987244D2A5B16304 /* SceneLifecycleTests.swift */; };
+		DA74B9571072FDB1B83CBBFF /* WorkoutPersistence.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACCEACDCB09FE048E916C5BF /* WorkoutPersistence.swift */; };
+		E211AA1A93D61AD6A9173309 /* PoseAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C1D9030A183E961C8846F11 /* PoseAnalyzer.swift */; };
+		E8A3C9D1098355E3B6C27402 /* WorkoutSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8A3C9D1098355E3B6C27401 /* WorkoutSummary.swift */; };
+		E8A3C9D1098355E3B6C27404 /* WorkoutViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8A3C9D1098355E3B6C27403 /* WorkoutViewModelTests.swift */; };
+		F117A360A71C4D52A28B11AA /* SquatCounter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32F232DBF0781617121E18A9 /* SquatCounter.swift */; };
+		F24966A18EBE0D245097C4D1 /* JointAngleCalculator.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB5CCD47F29DE3E65ED0A282 /* JointAngleCalculator.swift */; };
+		F9B4DAE21A9466F4C7D38502 /* WorkoutTimeSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9B4DAE21A9466F4C7D38501 /* WorkoutTimeSource.swift */; };
+		F9B4DAE21A9466F4C7D38504 /* WorkoutTimingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9B4DAE21A9466F4C7D38503 /* WorkoutTimingTests.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		75C5D97A8AE392B664E832E8 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 98F54143AB4E86B28C3AFEE0 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 2FE3FBD7A51C361D063370C7;
+			remoteInfo = RepsCounter;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		05232313959416543EB6E7D5 /* PoseOverlayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PoseOverlayView.swift; sourceTree = "<group>"; };
+		0C1D9030A183E961C8846F11 /* PoseAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PoseAnalyzer.swift; sourceTree = "<group>"; };
+		1E95EE8FFAA44C00808E9868 /* PoseAnalyzerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PoseAnalyzerTests.swift; sourceTree = "<group>"; };
+		2BBC466B1B168F85AB8B5F30 /* BodyPose.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BodyPose.swift; sourceTree = "<group>"; };
+		2BEA99FF162F4CF4A9A454D3 /* SquatObservationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SquatObservationTests.swift; sourceTree = "<group>"; };
+		2E6E481B53FA12300A4783A9 /* WorkoutViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutViewModel.swift; sourceTree = "<group>"; };
+		32F232DBF0781617121E18A9 /* SquatCounter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SquatCounter.swift; sourceTree = "<group>"; };
+		4F5CAA09158A4903AB1870A5 /* SquatDiagnosticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SquatDiagnosticsView.swift; sourceTree = "<group>"; };
+		5E5C2A8244469619E1EF61B4 /* CameraService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraService.swift; sourceTree = "<group>"; };
+		6A064275C5674B5AA4151381 /* SquatDiagnosticsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SquatDiagnosticsTests.swift; sourceTree = "<group>"; };
+		7A6A8D6A7E7077C4EEFD00F4 /* PoseDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PoseDetector.swift; sourceTree = "<group>"; };
+		85AC0BD245E4BBB93839731C /* WorkoutPersistenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutPersistenceTests.swift; sourceTree = "<group>"; };
+		9D0E1F40C20F8918DEC41937 /* CameraPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraPreviewView.swift; sourceTree = "<group>"; };
+		9EA436FD543949D9BA67AD1F /* SquatDepthValidationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SquatDepthValidationTests.swift; sourceTree = "<group>"; };
+		9FB0C521967141EC88880471 /* CameraPosition.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraPosition.swift; sourceTree = "<group>"; };
+		A05CA0000000000000000001 /* CameraCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraCapture.swift; sourceTree = "<group>"; };
+		A05CA0000000000000000002 /* WorkoutCameraCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutCameraCoordinator.swift; sourceTree = "<group>"; };
+		A05CA0000000000000000003 /* CameraLifecycleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraLifecycleTests.swift; sourceTree = "<group>"; };
+		A05CA0000000000000000004 /* WorkoutCameraTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutCameraTests.swift; sourceTree = "<group>"; };
+		A10DA0000000000000000001 /* WorkoutDashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutDashboardView.swift; sourceTree = "<group>"; };
+		A10DA0000000000000000002 /* PortfolioUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PortfolioUITests.swift; sourceTree = "<group>"; };
+		A10DA0000000000000000003 /* WorkoutHistoryUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutHistoryUITests.swift; sourceTree = "<group>"; };
+		AB4ABF811DE0C4702C4F1C99 /* WorkoutHistoryViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutHistoryViewController.swift; sourceTree = "<group>"; };
+		AB5CCD47F29DE3E65ED0A282 /* JointAngleCalculator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JointAngleCalculator.swift; sourceTree = "<group>"; };
+		ACCEACDCB09FE048E916C5BF /* WorkoutPersistence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutPersistence.swift; sourceTree = "<group>"; };
+		AD5916A20AAAA65C63A7441D /* RepsCounter.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = RepsCounter.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		C0A1B2C3D4E5F60718293041 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		C994DEE4E31E70958E6E1331 /* JointAngleCalculatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JointAngleCalculatorTests.swift; sourceTree = "<group>"; };
+		CDDF3981CF977D20F7C8C2BD /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		D137D266EB2C31C6D8096A1B /* SquatCounterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SquatCounterTests.swift; sourceTree = "<group>"; };
+		D7F2C8B0987244D2A5B16301 /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
+		D7F2C8B0987244D2A5B16303 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		D7F2C8B0987244D2A5B16304 /* SceneLifecycleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneLifecycleTests.swift; sourceTree = "<group>"; };
+		DFEC2E5ADA67C0398F8FC40B /* RepsCounterTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = RepsCounterTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		E3B92F89AF8C4BEB8D861716 /* CameraSwitchingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraSwitchingTests.swift; sourceTree = "<group>"; };
+		E8A3C9D1098355E3B6C27401 /* WorkoutSummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutSummary.swift; sourceTree = "<group>"; };
+		E8A3C9D1098355E3B6C27403 /* WorkoutViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutViewModelTests.swift; sourceTree = "<group>"; };
+		F0B70DEA209DCA87DBEA2931 /* WorkoutViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutViewController.swift; sourceTree = "<group>"; };
+		F0CD6D819AB342E584CA1B72 /* PoseGeometryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PoseGeometryTests.swift; sourceTree = "<group>"; };
+		F9B4DAE21A9466F4C7D38501 /* WorkoutTimeSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutTimeSource.swift; sourceTree = "<group>"; };
+		F9B4DAE21A9466F4C7D38503 /* WorkoutTimingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutTimingTests.swift; sourceTree = "<group>"; };
+		FB22EC1FE0724AD29195D698 /* PoseGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PoseGeometry.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		2B061878ED927DE2C440D3AD /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F068F8406EE9572E80CDDD46 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		062D7FA4B32E7D6303565415 /* RepsCounter */ = {
+			isa = PBXGroup;
+			children = (
+				A2FF9BC57277E9FA2AA21C75 /* App */,
+				33D2AA1A2357EE31DDFD408E /* Domain */,
+				A1AF5AD3088A36FFF1D48418 /* Services */,
+				F1931DE9F5D5D2D421C3E687 /* Presentation */,
+				C0A1B2C3D4E5F60718293043 /* Resources */,
+			);
+			path = RepsCounter;
+			sourceTree = "<group>";
+		};
+		33D2AA1A2357EE31DDFD408E /* Domain */ = {
+			isa = PBXGroup;
+			children = (
+				9FB0C521967141EC88880471 /* CameraPosition.swift */,
+				2BBC466B1B168F85AB8B5F30 /* BodyPose.swift */,
+				AB5CCD47F29DE3E65ED0A282 /* JointAngleCalculator.swift */,
+				0C1D9030A183E961C8846F11 /* PoseAnalyzer.swift */,
+				32F232DBF0781617121E18A9 /* SquatCounter.swift */,
+				E8A3C9D1098355E3B6C27401 /* WorkoutSummary.swift */,
+				F9B4DAE21A9466F4C7D38501 /* WorkoutTimeSource.swift */,
+			);
+			path = Domain;
+			sourceTree = "<group>";
+		};
+		4FDE57E4B72FFCEE306CEB0F /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				AD5916A20AAAA65C63A7441D /* RepsCounter.app */,
+				DFEC2E5ADA67C0398F8FC40B /* RepsCounterTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		A1AF5AD3088A36FFF1D48418 /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				FB22EC1FE0724AD29195D698 /* PoseGeometry.swift */,
+				A05CA0000000000000000001 /* CameraCapture.swift */,
+				5E5C2A8244469619E1EF61B4 /* CameraService.swift */,
+				7A6A8D6A7E7077C4EEFD00F4 /* PoseDetector.swift */,
+				ACCEACDCB09FE048E916C5BF /* WorkoutPersistence.swift */,
+			);
+			path = Services;
+			sourceTree = "<group>";
+		};
+		A2FF9BC57277E9FA2AA21C75 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				CDDF3981CF977D20F7C8C2BD /* AppDelegate.swift */,
+				D7F2C8B0987244D2A5B16301 /* SceneDelegate.swift */,
+				D7F2C8B0987244D2A5B16303 /* Info.plist */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		BDE88D77EBDC01774960BE71 = {
+			isa = PBXGroup;
+			children = (
+				062D7FA4B32E7D6303565415 /* RepsCounter */,
+				E1F97BA8A1EBCC74BB0E0AFC /* RepsCounterTests */,
+				4FDE57E4B72FFCEE306CEB0F /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		C0A1B2C3D4E5F60718293043 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				C0A1B2C3D4E5F60718293041 /* Assets.xcassets */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		E1F97BA8A1EBCC74BB0E0AFC /* RepsCounterTests */ = {
+			isa = PBXGroup;
+			children = (
+				A10DA0000000000000000003 /* WorkoutHistoryUITests.swift */,
+				A10DA0000000000000000002 /* PortfolioUITests.swift */,
+				9EA436FD543949D9BA67AD1F /* SquatDepthValidationTests.swift */,
+				2BEA99FF162F4CF4A9A454D3 /* SquatObservationTests.swift */,
+				6A064275C5674B5AA4151381 /* SquatDiagnosticsTests.swift */,
+				1E95EE8FFAA44C00808E9868 /* PoseAnalyzerTests.swift */,
+				F0CD6D819AB342E584CA1B72 /* PoseGeometryTests.swift */,
+				E3B92F89AF8C4BEB8D861716 /* CameraSwitchingTests.swift */,
+				A05CA0000000000000000004 /* WorkoutCameraTests.swift */,
+				A05CA0000000000000000003 /* CameraLifecycleTests.swift */,
+				C994DEE4E31E70958E6E1331 /* JointAngleCalculatorTests.swift */,
+				D137D266EB2C31C6D8096A1B /* SquatCounterTests.swift */,
+				85AC0BD245E4BBB93839731C /* WorkoutPersistenceTests.swift */,
+				D7F2C8B0987244D2A5B16304 /* SceneLifecycleTests.swift */,
+				E8A3C9D1098355E3B6C27403 /* WorkoutViewModelTests.swift */,
+				F9B4DAE21A9466F4C7D38503 /* WorkoutTimingTests.swift */,
+			);
+			path = RepsCounterTests;
+			sourceTree = "<group>";
+		};
+		F1931DE9F5D5D2D421C3E687 /* Presentation */ = {
+			isa = PBXGroup;
+			children = (
+				A10DA0000000000000000001 /* WorkoutDashboardView.swift */,
+				4F5CAA09158A4903AB1870A5 /* SquatDiagnosticsView.swift */,
+				A05CA0000000000000000002 /* WorkoutCameraCoordinator.swift */,
+				9D0E1F40C20F8918DEC41937 /* CameraPreviewView.swift */,
+				05232313959416543EB6E7D5 /* PoseOverlayView.swift */,
+				AB4ABF811DE0C4702C4F1C99 /* WorkoutHistoryViewController.swift */,
+				F0B70DEA209DCA87DBEA2931 /* WorkoutViewController.swift */,
+				2E6E481B53FA12300A4783A9 /* WorkoutViewModel.swift */,
+			);
+			path = Presentation;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		2FE3FBD7A51C361D063370C7 /* RepsCounter */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 1216B4E9C40D309E3D17B430 /* Build configuration list for PBXNativeTarget "RepsCounter" */;
+			buildPhases = (
+				B10AE85C2BE731B98F629ADE /* Sources */,
+				F068F8406EE9572E80CDDD46 /* Frameworks */,
+				EA0799CD6FB8985E3A9B6E32 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = RepsCounter;
+			productName = RepsCounter;
+			productReference = AD5916A20AAAA65C63A7441D /* RepsCounter.app */;
+			productType = "com.apple.product-type.application";
+		};
+		45C98D5FCE3016A4889B25F4 /* RepsCounterTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D82283EFFE6805CACFCBD2C6 /* Build configuration list for PBXNativeTarget "RepsCounterTests" */;
+			buildPhases = (
+				C304A304F4DC54B885442429 /* Sources */,
+				2B061878ED927DE2C440D3AD /* Frameworks */,
+				10BDD868B09B991950A722E4 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				1CDB748041E91E7307CF2537 /* PBXTargetDependency */,
+			);
+			name = RepsCounterTests;
+			productName = RepsCounterTests;
+			productReference = DFEC2E5ADA67C0398F8FC40B /* RepsCounterTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		98F54143AB4E86B28C3AFEE0 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 2600;
+				TargetAttributes = {
+					2FE3FBD7A51C361D063370C7 = {
+						CreatedOnToolsVersion = 26.0;
+					};
+					45C98D5FCE3016A4889B25F4 = {
+						CreatedOnToolsVersion = 26.0;
+						TestTargetID = 2FE3FBD7A51C361D063370C7;
+					};
+				};
+			};
+			buildConfigurationList = F9250358FBC0C44833E430B9 /* Build configuration list for PBXProject "RepsCounter" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = BDE88D77EBDC01774960BE71;
+			productRefGroup = 4FDE57E4B72FFCEE306CEB0F /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				2FE3FBD7A51C361D063370C7 /* RepsCounter */,
+				45C98D5FCE3016A4889B25F4 /* RepsCounterTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		10BDD868B09B991950A722E4 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		EA0799CD6FB8985E3A9B6E32 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C0A1B2C3D4E5F60718293042 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		B10AE85C2BE731B98F629ADE /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10DB0000000000000000001 /* WorkoutDashboardView.swift in Sources */,
+				2B43C42D23E244CB8E6F54ED /* SquatDiagnosticsView.swift in Sources */,
+				9387C8B674574492BB99618A /* PoseGeometry.swift in Sources */,
+				3669909E44C24E8A8B9A6523 /* CameraPosition.swift in Sources */,
+				A05CB0000000000000000002 /* WorkoutCameraCoordinator.swift in Sources */,
+				A05CB0000000000000000001 /* CameraCapture.swift in Sources */,
+				48317B4382D640E46AE12E85 /* AppDelegate.swift in Sources */,
+				F9B4DAE21A9466F4C7D38502 /* WorkoutTimeSource.swift in Sources */,
+				E8A3C9D1098355E3B6C27402 /* WorkoutSummary.swift in Sources */,
+				D7F2C8B0987244D2A5B16302 /* SceneDelegate.swift in Sources */,
+				240E30981A73335B6FA7EA3E /* BodyPose.swift in Sources */,
+				F24966A18EBE0D245097C4D1 /* JointAngleCalculator.swift in Sources */,
+				E211AA1A93D61AD6A9173309 /* PoseAnalyzer.swift in Sources */,
+				F117A360A71C4D52A28B11AA /* SquatCounter.swift in Sources */,
+				AD9374468C095AFA1B1C4B83 /* CameraPreviewView.swift in Sources */,
+				D6FD2959225B3D20D9C7C193 /* PoseOverlayView.swift in Sources */,
+				6D58F4635B53FF3C44BB5A5D /* WorkoutHistoryViewController.swift in Sources */,
+				2F8145DDC21E9BB488E72303 /* WorkoutViewController.swift in Sources */,
+				74DEF6F67715D06F11F25854 /* WorkoutViewModel.swift in Sources */,
+				D5C04715B74ED4B1671BB8C9 /* CameraService.swift in Sources */,
+				AF28304F4246EAE54213D7FC /* PoseDetector.swift in Sources */,
+				DA74B9571072FDB1B83CBBFF /* WorkoutPersistence.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C304A304F4DC54B885442429 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10DB0000000000000000003 /* WorkoutHistoryUITests.swift in Sources */,
+				A10DB0000000000000000002 /* PortfolioUITests.swift in Sources */,
+				5A680AD01F16472A9CE9C86D /* SquatDepthValidationTests.swift in Sources */,
+				03AE83AB4B0D430FBBDB5918 /* SquatObservationTests.swift in Sources */,
+				24F4904B022A49BA9C044BA5 /* SquatDiagnosticsTests.swift in Sources */,
+				93A05246BDF641B6BDF1EB94 /* PoseAnalyzerTests.swift in Sources */,
+				93EDEDB783324D05823EB3BF /* PoseGeometryTests.swift in Sources */,
+				BD034665816F429781575D7A /* CameraSwitchingTests.swift in Sources */,
+				A05CB0000000000000000004 /* WorkoutCameraTests.swift in Sources */,
+				A05CB0000000000000000003 /* CameraLifecycleTests.swift in Sources */,
+				1980374DFEF2F4E0B9D0EC3B /* JointAngleCalculatorTests.swift in Sources */,
+				F9B4DAE21A9466F4C7D38504 /* WorkoutTimingTests.swift in Sources */,
+				E8A3C9D1098355E3B6C27404 /* WorkoutViewModelTests.swift in Sources */,
+				D7F2C8B0987244D2A5B16305 /* SceneLifecycleTests.swift in Sources */,
+				591420647406FAB794E6FE6C /* SquatCounterTests.swift in Sources */,
+				AB22F8BC01FDC30C4B375E99 /* WorkoutPersistenceTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		1CDB748041E91E7307CF2537 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 2FE3FBD7A51C361D063370C7 /* RepsCounter */;
+			targetProxy = 75C5D97A8AE392B664E832E8 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		0C14E55FE03688C40C72CF6F /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = Q4C935HFS8;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.alexandershevtsov.RepsCounterTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/RepsCounter.app/RepsCounter";
+			};
+			name = Debug;
+		};
+		16463B2066F5CD30D9964E46 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = Q4C935HFS8;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.alexandershevtsov.RepsCounterTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/RepsCounter.app/RepsCounter";
+			};
+			name = Release;
+		};
+		2A1E782C07D4DF3E5A397B81 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) DEBUG";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		42E7369FDEA3F84FEAE4D866 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = Q4C935HFS8;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = RepsCounter/App/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = RepsCounter;
+				INFOPLIST_KEY_NSCameraUsageDescription = "Камера необходима для распознавания упражнений на устройстве без записи видео.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = NO;
+				INFOPLIST_KEY_UIUserInterfaceStyle = Dark;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.alexandershevtsov.RepsCounter;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		57E96AC422CF3CCA2FABBE1D /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		DCCE05528F429AEC680A6966 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = Q4C935HFS8;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = RepsCounter/App/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = RepsCounter;
+				INFOPLIST_KEY_NSCameraUsageDescription = "Камера необходима для распознавания упражнений на устройстве без записи видео.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = NO;
+				INFOPLIST_KEY_UIUserInterfaceStyle = Dark;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.alexandershevtsov.RepsCounter;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		1216B4E9C40D309E3D17B430 /* Build configuration list for PBXNativeTarget "RepsCounter" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				42E7369FDEA3F84FEAE4D866 /* Debug */,
+				DCCE05528F429AEC680A6966 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		D82283EFFE6805CACFCBD2C6 /* Build configuration list for PBXNativeTarget "RepsCounterTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				0C14E55FE03688C40C72CF6F /* Debug */,
+				16463B2066F5CD30D9964E46 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		F9250358FBC0C44833E430B9 /* Build configuration list for PBXProject "RepsCounter" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				2A1E782C07D4DF3E5A397B81 /* Debug */,
+				57E96AC422CF3CCA2FABBE1D /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 98F54143AB4E86B28C3AFEE0 /* Project object */;
 }
