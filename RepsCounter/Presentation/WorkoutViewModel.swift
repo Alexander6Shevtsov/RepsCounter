@@ -33,6 +33,7 @@ struct WorkoutViewState {
 #if DEBUG
 enum SquatTrackingStatus: Equatable {
     case waitingForCamera
+    case ready
     case tracking
     case paused
     case resting
@@ -353,7 +354,7 @@ final class WorkoutViewModel {
             requiredFrames: counter.requiredStableFrames,
             standingThreshold: counter.standingThreshold,
             loweredThreshold: counter.loweredThreshold,
-            status: isFinished ? .finished : (!isCameraReady ? .waitingForCamera : (isPaused ? .paused : (restDeadline != nil ? .resting : .tracking))),
+            status: isFinished ? .finished : (!isCameraReady ? .waitingForCamera : (!hasStarted ? .ready : (isPaused ? .paused : (restDeadline != nil ? .resting : .tracking)))),
             resetReason: trackingReset,
             measurementLossCount: measurementLossCount,
             legChangeCount: legChangeCount,
