@@ -332,7 +332,7 @@ final class SquatDiagnosticsTests: XCTestCase {
         let label = try XCTUnwrap(allSubviews(in: panel).first {
             $0.accessibilityIdentifier == "squatDiagnosticsText"
         } as? UILabel)
-        XCTAssertTrue(label.text?.contains("Сбросы: измерение 1, нога 1, интервал 1") == true)
+        XCTAssertTrue(label.text?.contains("Сбросы И:1 Н:1 Г:1") == true)
         XCTAssertTrue(label.text?.contains("Последняя потеря: низкая достоверность") == true)
     }
 
