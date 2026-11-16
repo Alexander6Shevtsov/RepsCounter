@@ -251,6 +251,8 @@ final class SquatCounterTests: XCTestCase {
             var counter = SquatCounter(maximumHipKneeHeightRatio: 0.35)
             for _ in 0..<3 {
                 _ = counter.process(measuredAngle: 170, smoothedAngle: 170, hipKneeHeightRatio: 0.98)
+            }
+            for _ in 0..<3 {
                 _ = counter.process(measuredAngle: 70, smoothedAngle: 70, hipKneeHeightRatio: 0.08)
             }
             XCTAssertEqual(counter.phase, .lowered)
