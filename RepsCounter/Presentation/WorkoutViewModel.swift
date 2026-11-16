@@ -138,7 +138,6 @@ final class WorkoutViewModel {
                 latestMeasurementIssue = trackingIssue(for: analysis)
             } else {
                 legChangeCount += 1
-                latestMeasurementIssue = nil
             }
         }
         #endif
