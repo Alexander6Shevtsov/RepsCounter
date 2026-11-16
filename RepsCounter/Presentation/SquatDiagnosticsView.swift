@@ -106,6 +106,7 @@ final class SquatDiagnosticsView: UIVisualEffectView {
     private func decisionText(_ diagnostics: SquatDiagnostics) -> String {
         switch diagnostics.status {
         case .waitingForCamera: return "ожидание камеры; подсчёт остановлен"
+        case .ready: return "настройка ракурса; подсчёт ещё не начат"
         case .paused: return "пауза; подсчёт остановлен"
         case .resting: return "отдых; подсчёт остановлен"
         case .finished: return "тренировка завершена; подсчёт остановлен"
