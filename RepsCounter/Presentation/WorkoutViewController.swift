@@ -152,7 +152,7 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
             diagnosticsView.topAnchor.constraint(equalTo: dashboard.toolbar.bottomAnchor, constant: 8),
             diagnosticsView.bottomAnchor.constraint(lessThanOrEqualTo: dashboard.controls.topAnchor, constant: -12),
             diagnosticsView.widthAnchor.constraint(equalToConstant: 250),
-            diagnosticsView.heightAnchor.constraint(equalToConstant: 164)
+            diagnosticsView.heightAnchor.constraint(equalToConstant: 104)
         ])
     }
 
