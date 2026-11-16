@@ -68,6 +68,7 @@ final class SquatDiagnosticsView: UIVisualEffectView {
         let lines = [
             "Нога: \(selectedName) · confidence \(minimumConfidenceText(selectedMeasurement))",
             "raw \(angleText(analysis?.measuredAngle)) · EMA \(angleText(analysis?.smoothedAngle))",
+            "Таз−колено: \(hipKneeText(analysis?.hipKneeHeightRatio)) бедра",
             "Фаза: \(phaseName) · кадры \(diagnostics.consecutiveFrames)/\(diagnostics.requiredFrames)",
             "Результат: \(decisionText(diagnostics))"
         ]
@@ -77,6 +78,11 @@ final class SquatDiagnosticsView: UIVisualEffectView {
     private func angleText(_ angle: Double?) -> String {
         guard let angle, angle.isFinite else { return "—" }
         return String(format: "%.1f°", angle)
+    }
+
+    private func hipKneeText(_ ratio: Double?) -> String {
+        guard let ratio, ratio.isFinite else { return "—" }
+        return String(format: "%+.2f", ratio)
     }
 
     private func minimumConfidenceText(_ measurement: LegMeasurement?) -> String {
