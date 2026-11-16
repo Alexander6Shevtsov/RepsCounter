@@ -116,10 +116,6 @@ final class WorkoutDashboardView: UIView {
         switchButton.accessibilityHint = position == .front ? "Включить заднюю камеру" : "Включить фронтальную камеру"
     }
 
-    #if DEBUG
-    func setDiagnosticsVisible(_ visible: Bool) { scrollView.isHidden = visible }
-    #endif
-
     private func configureLayout() {
         iconButton(historyButton, symbol: "clock.arrow.circlepath", identifier: "workoutHistoryButton", title: "История тренировок", action: #selector(openHistory))
         iconButton(switchButton, symbol: "arrow.triangle.2.circlepath.camera", identifier: "cameraSwitchButton", title: "Переключить камеру", action: #selector(switchCamera))

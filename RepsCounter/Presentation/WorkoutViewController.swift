@@ -147,16 +147,17 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
         diagnosticsView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(diagnosticsView)
         NSLayoutConstraint.activate([
-            diagnosticsView.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 20),
-            diagnosticsView.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -20),
-            diagnosticsView.topAnchor.constraint(equalTo: dashboard.toolbar.bottomAnchor, constant: 14),
-            diagnosticsView.bottomAnchor.constraint(equalTo: dashboard.controls.topAnchor, constant: -14)
+            diagnosticsView.leadingAnchor.constraint(greaterThanOrEqualTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 12),
+            diagnosticsView.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -12),
+            diagnosticsView.topAnchor.constraint(equalTo: dashboard.toolbar.bottomAnchor, constant: 8),
+            diagnosticsView.bottomAnchor.constraint(lessThanOrEqualTo: dashboard.controls.topAnchor, constant: -12),
+            diagnosticsView.widthAnchor.constraint(equalToConstant: 250),
+            diagnosticsView.heightAnchor.constraint(equalToConstant: 100)
         ])
     }
 
     @objc private func toggleDiagnostics() {
         diagnosticsView.isHidden.toggle()
-        dashboard.setDiagnosticsVisible(!diagnosticsView.isHidden)
         diagnosticsButton.accessibilityValue = diagnosticsView.isHidden ? "Выключена" : "Включена"
         if !diagnosticsView.isHidden, let diagnostics = viewModel.latestDiagnostics {
             diagnosticsView.render(diagnostics)

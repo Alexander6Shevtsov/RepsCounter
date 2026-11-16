@@ -128,7 +128,7 @@ final class SquatDiagnosticsTests: XCTestCase {
 
     #if DEBUG
     @MainActor
-    func testDebugPanelReservesSpaceForMetricsAndControlsAtPhoneSizesAndLargeText() throws {
+    func testDebugHUDKeepsMetricsAndControlsVisibleAtPhoneSizesAndLargeText() throws {
         let fixture = SquatTrackingFixture(cameraReady: false)
         let camera = CameraService()
         let controller = WorkoutViewController(viewModel: fixture.viewModel, camera: camera, persistence: fixture.store)
@@ -150,21 +150,40 @@ final class SquatDiagnosticsTests: XCTestCase {
                 controller.view.layoutIfNeeded()
                 let panelFrame = panel.convert(panel.bounds, to: controller.view)
                 XCTAssertTrue(controller.view.bounds.contains(panelFrame))
-                func isVisible(_ element: UIView) -> Bool {
-                    var ancestor: UIView? = element
-                    while let current = ancestor {
-                        if current.isHidden { return false }
-                        ancestor = current.superview
+                XCTAssertEqual(panelFrame.width, 250, accuracy: 0.5)
+                XCTAssertEqual(panelFrame.height, 100, accuracy: 0.5)
+                XCTAssertLessThan(panelFrame.midY, controller.view.bounds.midY)
+                let metrics = try XCTUnwrap(contents.first { $0.accessibilityIdentifier == "workoutMetricsScroll" })
+                let count = try XCTUnwrap(contents.first { $0.accessibilityIdentifier == "workoutCount" })
+                let controls = try XCTUnwrap(contents.first { $0.accessibilityIdentifier == "workoutControls" })
+                XCTAssertFalse(metrics.isHidden)
+                XCTAssertFalse(count.isHidden)
+                XCTAssertFalse(controls.isHidden)
+                XCTAssertFalse(panelFrame.intersects(controls.convert(controls.bounds, to: controller.view)))
+                let protectedLabels = contents.compactMap { $0 as? UILabel }.filter { candidate in
+                    ["workoutCount", "workoutExercise"].contains(candidate.accessibilityIdentifier ?? "")
+                        || ["Повторения в подходе", "Подход"].contains(candidate.text ?? "")
+                }
+                XCTAssertEqual(protectedLabels.count, 4)
+                if !category.isAccessibilityCategory {
+                    for protectedLabel in protectedLabels {
+                        let intrinsicWidth = protectedLabel.intrinsicContentSize.width
+                        let textWidth = min(protectedLabel.bounds.width, max(0, intrinsicWidth))
+                        let textBounds = CGRect(x: 0, y: 0, width: textWidth, height: protectedLabel.bounds.height)
+                        let textFrame = protectedLabel.convert(textBounds, to: controller.view)
+                        XCTAssertFalse(panelFrame.intersects(textFrame), "Diagnostics overlap: \(protectedLabel.text ?? "label")")
                     }
-                    return true
                 }
-                let labels = contents.compactMap { $0 as? UILabel }.filter { !$0.isDescendant(of: panel) && isVisible($0) }
-                for label in labels {
-                    XCTAssertFalse(panelFrame.intersects(label.convert(label.bounds, to: controller.view)), label.text ?? "label")
-                }
-                for control in contents.compactMap({ $0 as? UIButton }) where !control.isDescendant(of: panel) && isVisible(control) {
-                    XCTAssertFalse(panelFrame.intersects(control.convert(control.bounds, to: controller.view)))
-                }
+                let firstCardLabel = try XCTUnwrap(protectedLabels.first { $0.text == "Подход" })
+                let firstCard = try XCTUnwrap(contents.first { candidate in
+                    guard candidate is UIVisualEffectView else { return false }
+                    return allSubviews(in: candidate).contains { nestedElement in nestedElement === firstCardLabel }
+                })
+                XCTAssertFalse(panelFrame.intersects(firstCard.convert(firstCard.bounds, to: controller.view)))
+                let panelScroll = try XCTUnwrap(allSubviews(in: panel).first { $0 is UIScrollView } as? UIScrollView)
+                XCTAssertTrue(panelScroll.isScrollEnabled)
+                XCTAssertGreaterThan(panelScroll.bounds.height, 0)
+                XCTAssertGreaterThan(panelScroll.contentSize.height, 0)
                 if viewport.width == 393, category == .large {
                     let image = UIGraphicsImageRenderer(size: viewport).image { context in
                         controller.view.layer.render(in: context.cgContext)
@@ -198,10 +217,11 @@ final class SquatDiagnosticsTests: XCTestCase {
         let panel = SquatDiagnosticsView()
         panel.render(diagnostics)
         let label = try XCTUnwrap(allSubviews(in: panel).first { $0.accessibilityIdentifier == "squatDiagnosticsText" } as? UILabel)
-        XCTAssertTrue(label.text?.contains("Правая: 165.0°") == true)
         XCTAssertTrue(label.text?.contains("Нога: правая") == true)
-        XCTAssertTrue(label.text?.contains("≥ 160°: да") == true)
-        XCTAssertTrue(label.text?.contains("Кадры raw подряд: 1/3") == true)
+        XCTAssertTrue(label.text?.contains("confidence 0.90") == true)
+        XCTAssertTrue(label.text?.contains("raw 165.0°") == true)
+        XCTAssertTrue(label.text?.contains("EMA 165.0°") == true)
+        XCTAssertTrue(label.text?.contains("Фаза: seekingStanding · кадры 1/3") == true)
         XCTAssertTrue(label.adjustsFontForContentSizeCategory)
     }
 
@@ -284,9 +304,8 @@ final class SquatDiagnosticsTests: XCTestCase {
         let panel = SquatDiagnosticsView()
         panel.render(diagnostics)
         let label = try XCTUnwrap(allSubviews(in: panel).first { $0.accessibilityIdentifier == "squatDiagnosticsText" } as? UILabel)
-        XCTAssertTrue(label.text?.contains("raw ≤ 105°: да") == true)
-        XCTAssertTrue(label.text?.contains("EMA ≤ 105°: нет") == true)
-        XCTAssertTrue(label.text?.contains("Кадры raw подряд: 3/3") == true)
+        XCTAssertTrue(label.text?.contains("raw 104.0°") == true)
+        XCTAssertTrue(label.text?.contains("кадры 3/3") == true)
         XCTAssertTrue(label.text?.contains("EMA ещё >105°") == true)
     }
     #endif

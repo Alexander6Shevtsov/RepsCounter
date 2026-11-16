@@ -12,12 +12,14 @@ final class SquatDiagnosticsView: UIVisualEffectView {
     private let textLabel = UILabel()
 
     init() {
-        super.init(effect: UIBlurEffect(style: .systemThickMaterialDark))
+        super.init(effect: UIBlurEffect(style: .systemThinMaterialDark))
         accessibilityIdentifier = "squatDiagnosticsPanel"
         layer.cornerRadius = 14
         clipsToBounds = true
         isHidden = true
+        contentView.backgroundColor = UIColor.black.withAlphaComponent(0.28)
         let scrollView = UIScrollView()
+        scrollView.alwaysBounceVertical = false
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(scrollView)
         textLabel.font = .preferredFont(forTextStyle: .caption1)
@@ -45,46 +47,31 @@ final class SquatDiagnosticsView: UIVisualEffectView {
     func render(_ diagnostics: SquatDiagnostics) {
         let analysis = diagnostics.analysis
         let selectedName: String
+        let selectedMeasurement: LegMeasurement?
         switch analysis?.selectedLeg {
-        case .left: selectedName = "левая"
-        case .right: selectedName = "правая"
-        case nil: selectedName = "нет надёжной ноги"
+        case .left:
+            selectedName = "левая"
+            selectedMeasurement = analysis?.leftMeasurement
+        case .right:
+            selectedName = "правая"
+            selectedMeasurement = analysis?.rightMeasurement
+        case nil:
+            selectedName = "нет данных"
+            selectedMeasurement = nil
         }
         let phaseName: String
         switch diagnostics.phase {
-        case .seekingStanding: phaseName = "seekingStanding — поиск стоя"
-        case .standing: phaseName = "standing — стоя"
-        case .lowered: phaseName = "lowered — внизу"
+        case .seekingStanding: phaseName = "seekingStanding"
+        case .standing: phaseName = "standing"
+        case .lowered: phaseName = "lowered"
         }
-        let measuredAngle = analysis?.measuredAngle
-        let smoothedAngle = analysis?.smoothedAngle
-        let loweredCondition = smoothedAngle.map { $0 <= diagnostics.loweredThreshold }
-        let standingCondition = smoothedAngle.map { $0 >= diagnostics.standingThreshold }
-        let rawLoweredCondition = measuredAngle.map { $0 <= diagnostics.loweredThreshold }
-        let rawStandingCondition = measuredAngle.map { $0 >= diagnostics.standingThreshold }
         let lines = [
-            "ДИАГНОСТИКА · DEBUG · confidence ≥ 0.50",
-            measurementText("Левая", measurement: analysis?.leftMeasurement),
-            measurementText("Правая", measurement: analysis?.rightMeasurement),
-            "Нога: \(selectedName) · raw \(angleText(analysis?.measuredAngle)) · EMA \(angleText(smoothedAngle))",
-            "Фаза: \(phaseName)",
-            "raw ≤ \(Int(diagnostics.loweredThreshold))°: \(conditionText(rawLoweredCondition)) · ≥ \(Int(diagnostics.standingThreshold))°: \(conditionText(rawStandingCondition))",
-            "EMA ≤ \(Int(diagnostics.loweredThreshold))°: \(conditionText(loweredCondition)) · ≥ \(Int(diagnostics.standingThreshold))°: \(conditionText(standingCondition))",
-            "Кадры raw подряд: \(diagnostics.consecutiveFrames)/\(diagnostics.requiredFrames)",
+            "Нога: \(selectedName) · confidence \(minimumConfidenceText(selectedMeasurement))",
+            "raw \(angleText(analysis?.measuredAngle)) · EMA \(angleText(analysis?.smoothedAngle))",
+            "Фаза: \(phaseName) · кадры \(diagnostics.consecutiveFrames)/\(diagnostics.requiredFrames)",
             "Результат: \(decisionText(diagnostics))"
         ]
         textLabel.text = lines.joined(separator: "\n")
-    }
-
-    private func measurementText(_ title: String, measurement: LegMeasurement?) -> String {
-        let issue: String
-        switch measurement?.issue {
-        case .missingJoint: issue = " · нет сустава"
-        case .lowConfidence: issue = " · низкий confidence"
-        case .invalidGeometry: issue = " · неверная геометрия"
-        case nil: issue = ""
-        }
-        return "\(title): \(angleText(measurement?.angle))\(issue)\n  confidence таз \(confidenceText(measurement?.hipConfidence)) · колено \(confidenceText(measurement?.kneeConfidence)) · голеностоп \(confidenceText(measurement?.ankleConfidence))"
     }
 
     private func angleText(_ angle: Double?) -> String {
@@ -92,14 +79,11 @@ final class SquatDiagnosticsView: UIVisualEffectView {
         return String(format: "%.1f°", angle)
     }
 
-    private func confidenceText(_ confidence: Float?) -> String {
-        guard let confidence, confidence.isFinite else { return "—" }
-        return String(format: "%.2f", confidence)
-    }
-
-    private func conditionText(_ condition: Bool?) -> String {
-        guard let condition else { return "нет данных" }
-        return condition ? "да" : "нет"
+    private func minimumConfidenceText(_ measurement: LegMeasurement?) -> String {
+        let confidences = [measurement?.hipConfidence, measurement?.kneeConfidence, measurement?.ankleConfidence]
+            .compactMap { confidence in confidence?.isFinite == true ? confidence : nil }
+        guard let minimumConfidence = confidences.min() else { return "—" }
+        return String(format: "%.2f", minimumConfidence)
     }
 
     private func decisionText(_ diagnostics: SquatDiagnostics) -> String {
