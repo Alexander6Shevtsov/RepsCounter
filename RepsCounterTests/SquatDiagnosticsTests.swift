@@ -293,6 +293,50 @@ final class SquatDiagnosticsTests: XCTestCase {
         XCTAssertEqual(fixture.state?.totalRepetitions, 12)
     }
     @MainActor
+    func testDebugResetCountersTrackDistinctLossesLegChangesAndGaps() throws {
+        let fixture = SquatTrackingFixture()
+        defer { fixture.viewModel.finish() }
+        let standingPose = SquatPoseFixture.pose(leftAngle: 170)
+        fixture.feed(standingPose)
+        XCTAssertEqual(fixture.viewModel.latestDiagnostics?.phase, .standing)
+
+        let lowConfidence = SquatPoseFixture.replacing(standingPose, joint: .leftHip, confidence: 0.49)
+        fixture.feed(lowConfidence, frames: 3)
+        XCTAssertEqual(fixture.viewModel.latestDiagnostics?.measurementLossCount, 1)
+        XCTAssertEqual(fixture.viewModel.latestDiagnostics?.latestMeasurementIssue, .lowConfidence)
+        XCTAssertEqual(fixture.viewModel.latestDiagnostics?.phase, .seekingStanding)
+
+        fixture.feed(standingPose)
+        XCTAssertEqual(fixture.viewModel.latestDiagnostics?.phase, .standing)
+        let rightLegPose = SquatPoseFixture.pose(
+            leftAngle: 170,
+            rightAngle: 170,
+            leftConfidence: 0.49,
+            rightConfidence: 0.9
+        )
+        fixture.feed(rightLegPose, frames: 1)
+        XCTAssertEqual(fixture.viewModel.latestDiagnostics?.legChangeCount, 1)
+        fixture.feed(rightLegPose)
+        XCTAssertEqual(fixture.viewModel.latestDiagnostics?.phase, .standing)
+
+        fixture.clock.currentTime += 0.3
+        fixture.viewModel.refreshTime()
+        let diagnostics = try XCTUnwrap(fixture.viewModel.latestDiagnostics)
+        XCTAssertEqual(diagnostics.observationGapCount, 1)
+        XCTAssertEqual(diagnostics.measurementLossCount, 1)
+        XCTAssertEqual(diagnostics.legChangeCount, 1)
+        XCTAssertEqual(diagnostics.resetReason, .observationGap)
+
+        let panel = SquatDiagnosticsView()
+        panel.render(diagnostics)
+        let label = try XCTUnwrap(allSubviews(in: panel).first {
+            $0.accessibilityIdentifier == "squatDiagnosticsText"
+        } as? UILabel)
+        XCTAssertTrue(label.text?.contains("Сбросы: измерение 1, нога 1, интервал 1") == true)
+        XCTAssertTrue(label.text?.contains("Последняя потеря: низкая достоверность") == true)
+    }
+
+    @MainActor
     func testExperimentalWorkoutCountsDeepAndRejectsNearDepthPoses() {
         let fixture = SquatTrackingFixture()
         defer { fixture.viewModel.finish() }
