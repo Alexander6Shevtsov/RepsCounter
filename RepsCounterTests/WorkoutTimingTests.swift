@@ -11,6 +11,54 @@ import XCTest
 
 final class WorkoutTimingTests: XCTestCase {
     @MainActor
+    func testManualStartExcludesCameraSetupAndPauseFromWorkoutDuration() throws {
+        let timeSource = MutableWorkoutTimeSource()
+        let persistence = WorkoutTimingStore(failureCount: 0)
+        let viewModel = WorkoutViewModel(
+            persistence: persistence,
+            timeSource: timeSource,
+            startsAutomatically: false
+        )
+        var latestState: WorkoutViewState?
+        viewModel.onChange = { latestState = $0 }
+
+        timeSource.advance(by: 75)
+        feedPose(isStanding: true, frames: 20, using: viewModel)
+        feedPose(isStanding: false, frames: 20, using: viewModel)
+        feedPose(isStanding: true, frames: 20, using: viewModel)
+        viewModel.observePose(BodyPose(joints: [:], aspectRatio: 1))
+        viewModel.refreshTime()
+
+        XCTAssertEqual(latestState?.hasStarted, false)
+        XCTAssertEqual(latestState?.isPaused, true)
+        XCTAssertEqual(latestState?.poseDetected, true)
+        XCTAssertEqual(latestState?.elapsedSeconds, 0)
+        XCTAssertEqual(latestState?.totalRepetitions, 0)
+        let actualStartDate = timeSource.date
+
+        viewModel.resume()
+        timeSource.advance(by: 4.75)
+        processRepetition(using: viewModel)
+        viewModel.pause()
+        timeSource.advance(by: 120)
+        viewModel.refreshTime()
+
+        XCTAssertEqual(latestState?.hasStarted, true)
+        XCTAssertEqual(latestState?.isPaused, true)
+        XCTAssertEqual(latestState?.elapsedSeconds, 4)
+        XCTAssertEqual(latestState?.totalRepetitions, 1)
+
+        viewModel.resume()
+        timeSource.advance(by: 2)
+        viewModel.finish()
+        let summary = try XCTUnwrap(viewModel.finishedSummary)
+        XCTAssertEqual(summary.duration, 6)
+        XCTAssertEqual(summary.date, actualStartDate)
+        XCTAssertEqual(summary.repetitions, 1)
+    }
+
+    @MainActor
+    func test    @MainActor
     func testPauseFreezesElapsedTimeAndPreservesFractionalProgress() {
         let fixture = WorkoutTimingFixture()
         defer { fixture.viewModel.finish() }
