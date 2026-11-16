@@ -49,7 +49,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 
     private func makeWorkoutController() -> WorkoutViewController {
         let camera = CameraService()
-        let viewModel = WorkoutViewModel(persistence: persistence, cameraReady: false)
+        let viewModel = WorkoutViewModel(persistence: persistence, cameraReady: false, startsAutomatically: false)
         let controller = WorkoutViewController(viewModel: viewModel, camera: camera, persistence: persistence)
         controller.onNewWorkout = { [weak self, weak controller] in
             guard let self, let controller, self.window?.rootViewController === controller else { return }
