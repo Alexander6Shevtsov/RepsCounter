@@ -66,12 +66,12 @@ final class SquatDiagnosticsView: UIVisualEffectView {
         case .lowered: phaseName = "lowered"
         }
         let lines = [
+            "Сбросы И:\(diagnostics.measurementLossCount) Н:\(diagnostics.legChangeCount) Г:\(diagnostics.observationGapCount)",
             "Нога: \(selectedName) · confidence \(minimumConfidenceText(selectedMeasurement))",
             "raw \(angleText(analysis?.measuredAngle)) · EMA \(angleText(analysis?.smoothedAngle))",
             "Таз−колено: \(hipKneeText(analysis?.hipKneeHeightRatio)) бедра",
             "Фаза: \(phaseName) · кадры \(diagnostics.consecutiveFrames)/\(diagnostics.requiredFrames)",
             "Результат: \(decisionText(diagnostics))",
-            "Сбросы: измерение \(diagnostics.measurementLossCount), нога \(diagnostics.legChangeCount), интервал \(diagnostics.observationGapCount)",
             "Последняя потеря: \(measurementIssueText(diagnostics.latestMeasurementIssue))"
         ]
         textLabel.text = lines.joined(separator: "\n")
