@@ -73,7 +73,11 @@ final class WorkoutViewModel {
     private let persistence: any WorkoutStoring
     private let timeSource: any WorkoutTimeSource
     private let analyzer = PoseAnalyzer()
+    #if DEBUG
+    private var counter = SquatCounter(maximumHipKneeHeightRatio: 0.35)
+    #else
     private var counter = SquatCounter()
+    #endif
     private var updateTask: Task<Void, Never>?
     private let startedAt: Date
     private var activeStartedAt: TimeInterval?
@@ -127,7 +131,11 @@ final class WorkoutViewModel {
         }
         #endif
 
-        let counted = counter.process(measuredAngle: analysis.measuredAngle, smoothedAngle: analysis.smoothedAngle)
+        let counted = counter.process(
+            measuredAngle: analysis.measuredAngle,
+            smoothedAngle: analysis.smoothedAngle,
+            hipKneeHeightRatio: analysis.hipKneeHeightRatio
+        )
         #if DEBUG
         if counter.phase != .seekingStanding { trackingReset = nil }
         #endif
