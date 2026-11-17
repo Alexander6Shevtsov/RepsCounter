@@ -63,6 +63,8 @@ struct SquatDiagnostics {
     let activeDepthAttempt: SquatDepthAttempt?
     let lastDepthAttempt: SquatDepthAttempt?
     let recentDepthAttempts: [SquatDepthAttempt]
+    let vision2DLatencyMs: Double?
+    let vision3DProbe: Vision3DProbe?
 }
 
 enum SquatDepthBreak: Equatable {
@@ -238,6 +240,8 @@ final class WorkoutViewModel {
     private var observationGapCount = 0
     private var latestMeasurementIssue: LegMeasurementIssue?
     private var depthAttemptTracker = SquatDepthAttemptTracker()
+    private var latestVision2DLatencyMs: Double?
+    private var latestVision3DProbe: Vision3DProbe?
     #endif
 
     private let persistence: any WorkoutStoring
@@ -299,6 +303,13 @@ final class WorkoutViewModel {
         #endif
         expireTracking(at: currentTime)
         let analysis = analyzer.analyze(pose)
+        #if DEBUG
+        latestVision2DLatencyMs = pose?.vision3DProbe?.twoDimensionalLatencyMs
+        if let probe = pose?.vision3DProbe,
+           probe.threeDimensionalLatencyMs != nil {
+            latestVision3DProbe = probe
+        }
+        #endif
         hasPose = analysis.smoothedAngle != nil
         lastPoseTime = hasPose ? currentTime : nil
         #if DEBUG
@@ -503,6 +514,8 @@ final class WorkoutViewModel {
         #if DEBUG
         depthAttemptTracker.interrupt(.trackingReset)
         depthAttemptTracker.resetPoseClock()
+        latestVision2DLatencyMs = nil
+        latestVision3DProbe = nil
         #endif
         counter.resetMovement()
         analyzer.reset()
@@ -566,7 +579,9 @@ final class WorkoutViewModel {
             latestMeasurementIssue: latestMeasurementIssue,
             activeDepthAttempt: depthAttemptTracker.activeAttempt,
             lastDepthAttempt: depthAttemptTracker.lastAttempt,
-            recentDepthAttempts: depthAttemptTracker.recentAttempts
+            recentDepthAttempts: depthAttemptTracker.recentAttempts,
+            vision2DLatencyMs: latestVision2DLatencyMs,
+            vision3DProbe: latestVision3DProbe
         )
         latestDiagnostics = diagnostics
         onDiagnosticsChange?(diagnostics)
