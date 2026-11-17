@@ -212,24 +212,27 @@ final class WorkoutViewModelTests: XCTestCase {
     }
 
     @MainActor
-    func testWorkoutDepthGateCountsThreeDeepAndRejectsThreeNearDepthSquats() {
+    func testWorkoutDepthGateRejectsFourPartialBeforeCountingThreeFullSquats() {
         let persistence = WorkoutStoreMock()
         let viewModel = WorkoutViewModel(persistence: persistence)
         defer { viewModel.finish() }
         var latestState: WorkoutViewState?
         viewModel.onChange = { latestState = $0 }
 
-        for movement in 0..<6 {
-            let isPartial = movement >= 3
+        for movement in 0..<7 {
+            let isPartial = movement < 4
+            let expectedBeforeReturn = max(0, movement - 4)
             let standingPose = depthPose(kneeAngle: 170, hipKneeHeightRatio: 0.98)
             let loweredPose = depthPose(
                 kneeAngle: isPartial ? 99 : 70,
                 hipKneeHeightRatio: isPartial ? 0.48 : 0.08
             )
             for _ in 0..<20 { viewModel.process(standingPose) }
+            XCTAssertEqual(latestState?.totalRepetitions, expectedBeforeReturn)
             for _ in 0..<20 { viewModel.process(loweredPose) }
+            XCTAssertEqual(latestState?.totalRepetitions, expectedBeforeReturn)
             for _ in 0..<20 { viewModel.process(standingPose) }
-            XCTAssertEqual(latestState?.totalRepetitions, min(movement + 1, 3))
+            XCTAssertEqual(latestState?.totalRepetitions, expectedBeforeReturn + (isPartial ? 0 : 1))
         }
     }
 
