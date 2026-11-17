@@ -37,6 +37,8 @@ struct Vision3DProbe: Sendable {
     let rightHipKneeHeightRatio: Double?
     let sampleCount: Int
     let observationAvailable: Bool
+    let twoDimensionalFramesPerSecond: Double?
+    let threeDimensionalSamplesPerSecond: Double?
 }
 #endif
 
