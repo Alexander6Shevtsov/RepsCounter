@@ -133,9 +133,14 @@ final class PoseDetector {
 
         threeDimensionalSamples += 1
         let startedAt = ContinuousClock.now
-        let operationSucceeded = (try? handler.perform([threeDimensionalRequest])) != nil
+        let observation: VNHumanBodyPose3DObservation?
+        do {
+            try handler.perform([threeDimensionalRequest])
+            observation = threeDimensionalRequest.results?.first
+        } catch {
+            observation = nil
+        }
         let durationMs = elapsedMilliseconds(since: startedAt)
-        let observation = operationSucceeded ? threeDimensionalRequest.results?.first : nil
         let leftMetrics = observation.flatMap {
             threeDimensionalMetrics(in: $0, hip: .leftHip, knee: .leftKnee, ankle: .leftAnkle)
         }
@@ -176,7 +181,7 @@ final class PoseDetector {
     }
 
     private func elapsedMilliseconds(since startedAt: ContinuousClock.Instant) -> Double {
-        let components = startedAt.duration(to: .now).components
+        let components = startedAt.duration(to: ContinuousClock.now).components
         return Double(components.seconds) * 1_000
             + Double(components.attoseconds) / 1_000_000_000_000_000
     }
