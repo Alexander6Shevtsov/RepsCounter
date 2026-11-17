@@ -34,6 +34,81 @@ enum Vision3DGeometry {
     }
 }
 
+struct Vision3DRateMeter {
+    private var samples: [ContinuousClock.Instant] = []
+    private let maximumSamples = 20
+
+    mutating func record(at timestamp: ContinuousClock.Instant) {
+        samples.append(timestamp)
+        if samples.count > maximumSamples {
+            samples.removeFirst()
+        }
+    }
+
+    mutating func reset() {
+        samples.removeAll(keepingCapacity: true)
+    }
+
+    var framesPerSecond: Double? {
+        guard samples.count > 1,
+              let firstTimestamp = samples.first,
+              let lastTimestamp = samples.last else { return nil }
+        let components = firstTimestamp.duration(to: lastTimestamp).components
+        let elapsedSeconds = Double(components.seconds)
+            + Double(components.attoseconds) / 1_000_000_000_000_000_000
+        guard elapsedSeconds > 0 else { return nil }
+        return Double(samples.count - 1) / elapsedSeconds
+    }
+}
+
+struct Vision3DSamplingController {
+    private var twoDimensionalRate = Vision3DRateMeter()
+    private var threeDimensionalRate = Vision3DRateMeter()
+    private var lastSampleTime: ContinuousClock.Instant?
+    private var lastThreeDimensionalLatencyMs = 0.0
+    private(set) var sampleCount = 0
+
+    var twoDimensionalFramesPerSecond: Double? { twoDimensionalRate.framesPerSecond }
+    var threeDimensionalSamplesPerSecond: Double? { threeDimensionalRate.framesPerSecond }
+
+    mutating func recordTwoDimensionalFrame(at timestamp: ContinuousClock.Instant) {
+        twoDimensionalRate.record(at: timestamp)
+    }
+
+    mutating func shouldSampleThreeDimensional(
+        at timestamp: ContinuousClock.Instant,
+        enabled: Bool
+    ) -> Bool {
+        guard enabled else {
+            clearThreeDimensionalHistory()
+            return false
+        }
+        let intervalMilliseconds = Int(ceil(max(125, lastThreeDimensionalLatencyMs * 2)))
+        if let lastSampleTime,
+           lastSampleTime.duration(to: timestamp) < .milliseconds(intervalMilliseconds) {
+            return false
+        }
+        lastSampleTime = timestamp
+        return true
+    }
+
+    mutating func recordThreeDimensionalSample(
+        at timestamp: ContinuousClock.Instant,
+        latencyMilliseconds: Double
+    ) {
+        sampleCount += 1
+        lastThreeDimensionalLatencyMs = max(0, latencyMilliseconds)
+        threeDimensionalRate.record(at: timestamp)
+    }
+
+    private mutating func clearThreeDimensionalHistory() {
+        lastSampleTime = nil
+        lastThreeDimensionalLatencyMs = 0
+        sampleCount = 0
+        threeDimensionalRate.reset()
+    }
+}
+
 enum Vision3DProbeControl {
     private static let enabled = OSAllocatedUnfairLock(initialState: false)
 
@@ -55,9 +130,7 @@ final class PoseDetector {
     private let request = VNDetectHumanBodyPoseRequest()
     #if DEBUG
     private let threeDimensionalRequest = VNDetectHumanBodyPose3DRequest()
-    private var analyzedFrames = 0
-    private var threeDimensionalSamples = 0
-    private let probeStride = 6
+    private var samplingController = Vision3DSamplingController()
     #endif
 
     func detect(pixelBuffer: CVPixelBuffer, rotationAngle: CGFloat = 90) -> BodyPose? {
@@ -69,6 +142,7 @@ final class PoseDetector {
             try handler.perform([request])
             #if DEBUG
             let twoDimensionalLatencyMs = elapsedMilliseconds(since: detectionStartedAt)
+            samplingController.recordTwoDimensionalFrame(at: detectionStartedAt)
             #endif
             guard let observation = request.results?.first else { return nil }
 
@@ -116,9 +190,11 @@ final class PoseDetector {
         handler: VNImageRequestHandler,
         twoDimensionalLatencyMs: Double
     ) -> Vision3DProbe {
-        analyzedFrames += 1
-        guard Vision3DProbeControl.isEnabled,
-              analyzedFrames.isMultiple(of: probeStride) else {
+        let startedAt = ContinuousClock.now
+        guard samplingController.shouldSampleThreeDimensional(
+            at: startedAt,
+            enabled: Vision3DProbeControl.isEnabled
+        ) else {
             return Vision3DProbe(
                 twoDimensionalLatencyMs: twoDimensionalLatencyMs,
                 threeDimensionalLatencyMs: nil,
@@ -126,13 +202,12 @@ final class PoseDetector {
                 rightKneeAngle: nil,
                 leftHipKneeHeightRatio: nil,
                 rightHipKneeHeightRatio: nil,
-                sampleCount: threeDimensionalSamples,
-                observationAvailable: false
+                sampleCount: samplingController.sampleCount,
+                observationAvailable: false,
+                twoDimensionalFramesPerSecond: samplingController.twoDimensionalFramesPerSecond,
+                threeDimensionalSamplesPerSecond: samplingController.threeDimensionalSamplesPerSecond
             )
         }
-
-        threeDimensionalSamples += 1
-        let startedAt = ContinuousClock.now
         let observation: VNHumanBodyPose3DObservation?
         do {
             try handler.perform([threeDimensionalRequest])
@@ -141,6 +216,10 @@ final class PoseDetector {
             observation = nil
         }
         let durationMs = elapsedMilliseconds(since: startedAt)
+        samplingController.recordThreeDimensionalSample(
+            at: startedAt,
+            latencyMilliseconds: durationMs
+        )
         let leftMetrics = observation.flatMap {
             threeDimensionalMetrics(in: $0, hip: .leftHip, knee: .leftKnee, ankle: .leftAnkle)
         }
@@ -154,8 +233,10 @@ final class PoseDetector {
             rightKneeAngle: rightMetrics?.angle,
             leftHipKneeHeightRatio: leftMetrics?.heightRatio,
             rightHipKneeHeightRatio: rightMetrics?.heightRatio,
-            sampleCount: threeDimensionalSamples,
-            observationAvailable: observation != nil
+            sampleCount: samplingController.sampleCount,
+            observationAvailable: observation != nil,
+            twoDimensionalFramesPerSecond: samplingController.twoDimensionalFramesPerSecond,
+            threeDimensionalSamplesPerSecond: samplingController.threeDimensionalSamplesPerSecond
         )
     }
 
