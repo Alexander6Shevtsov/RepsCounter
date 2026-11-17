@@ -20,6 +20,7 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
     private let dashboard = WorkoutDashboardView()
     #if DEBUG
     private let diagnosticsButton = UIButton(type: .system)
+    private let vision3DButton = UIButton(type: .system)
     private let diagnosticsView = SquatDiagnosticsView()
     #endif
     private var lastPose: BodyPose?
@@ -144,6 +145,17 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
         diagnosticsButton.widthAnchor.constraint(equalToConstant: 44).isActive = true
         diagnosticsButton.heightAnchor.constraint(equalToConstant: 48).isActive = true
         dashboard.toolbar.insertArrangedSubview(diagnosticsButton, at: 1)
+        vision3DButton.setTitle("3D", for: .normal)
+        vision3DButton.titleLabel?.font = .systemFont(ofSize: 14, weight: .bold)
+        vision3DButton.backgroundColor = WorkoutAppearance.surface
+        vision3DButton.layer.cornerRadius = 16
+        vision3DButton.accessibilityIdentifier = "vision3DProbeButton"
+        vision3DButton.accessibilityLabel = "Эксперимент Vision 3D"
+        vision3DButton.addTarget(self, action: #selector(toggleVision3DProbe), for: .touchUpInside)
+        vision3DButton.widthAnchor.constraint(equalToConstant: 36).isActive = true
+        vision3DButton.heightAnchor.constraint(equalToConstant: 48).isActive = true
+        dashboard.toolbar.insertArrangedSubview(vision3DButton, at: 2)
+        updateVision3DButton()
         diagnosticsView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(diagnosticsView)
         NSLayoutConstraint.activate([
@@ -162,6 +174,20 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
         if !diagnosticsView.isHidden, let diagnostics = viewModel.latestDiagnostics {
             diagnosticsView.render(diagnostics)
         }
+    }
+
+    @objc private func toggleVision3DProbe() {
+        Vision3DProbeControl.toggle()
+        updateVision3DButton()
+        if !diagnosticsView.isHidden, let diagnostics = viewModel.latestDiagnostics {
+            diagnosticsView.render(diagnostics)
+        }
+    }
+
+    private func updateVision3DButton() {
+        let enabled = Vision3DProbeControl.isEnabled
+        vision3DButton.tintColor = enabled ? WorkoutAppearance.accent : .white
+        vision3DButton.accessibilityValue = enabled ? "Включён" : "Выключен"
     }
     #endif
 
