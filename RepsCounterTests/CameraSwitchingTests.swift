@@ -353,13 +353,13 @@ final class CameraSwitchingTests: XCTestCase {
         await fixture.cameraFixture.capture.releaseStart()
         await operation.value
         fixture.coordinator.sceneDidBecomeActive()
-        XCTAssertEqual(fixture.cameraFixture.camera.state, .stopped)
+        await fixture.cameraFixture.camera.start().value
+        XCTAssertEqual(fixture.cameraFixture.camera.state, .running)
         XCTAssertEqual(fixture.cameraFixture.camera.position, .front)
         XCTAssertTrue(fixture.viewModel.isPaused)
         XCTAssertEqual(fixture.viewModel.elapsedSeconds, 8)
         XCTAssertEqual(fixture.state?.totalRepetitions, 1)
         fixture.coordinator.togglePause()
-        await fixture.cameraFixture.camera.start().value
         XCTAssertFalse(fixture.viewModel.isPaused)
         XCTAssertEqual(fixture.cameraFixture.camera.position, .front)
         await fixture.close()
@@ -564,6 +564,8 @@ final class CameraSwitchingTests: XCTestCase {
         controller.cameraCoordinator.sceneDidEnterBackground()
         XCTAssertFalse(control.isEnabled)
         controller.cameraCoordinator.sceneDidBecomeActive()
+        await fixture.camera.start().value
+        XCTAssertEqual(fixture.camera.state, .running)
         XCTAssertTrue(control.isEnabled)
         XCTAssertTrue(viewModel.isPaused)
         controller.cameraCoordinator.finish()
