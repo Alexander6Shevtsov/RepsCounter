@@ -22,6 +22,16 @@ final class WorkoutHistoryUITests: XCTestCase {
         XCTAssertEqual(store.historyReads, 1)
         XCTAssertTrue(store.savedSummaries.isEmpty)
         XCTAssertEqual(controller.navigationItem.rightBarButtonItem?.title, "Готово")
+        XCTAssertEqual(controller.navigationItem.leftBarButtonItem?.title, "Политика")
+        XCTAssertEqual(controller.navigationItem.leftBarButtonItem?.accessibilityLabel, "Политика конфиденциальности")
+    }
+
+    @MainActor
+    func testPrivacyPolicyLinkUsesPublicHTTPSAddress() throws {
+        let address = try XCTUnwrap(WorkoutHistoryViewController.privacyPolicyURL)
+        XCTAssertEqual(address.scheme, "https")
+        XCTAssertEqual(address.host, "github.com")
+        XCTAssertEqual(address.path, "/Alexander6Shevtsov/RepsCounter/blob/main/Docs/PRIVACY_POLICY.md")
     }
 
     @MainActor
