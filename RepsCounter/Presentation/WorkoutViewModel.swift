@@ -46,6 +46,15 @@ enum SquatTrackingReset: Equatable {
     case observationGap
 }
 
+struct Vision3DSynchronizedPair {
+    let sampleNumber: Int
+    let selectedLeg: BodyLeg?
+    let twoDimensionalLeftAngle: Double?
+    let twoDimensionalRightAngle: Double?
+    let twoDimensionalSelectedHeightRatio: Double?
+    let probe: Vision3DProbe
+}
+
 struct SquatDiagnostics {
     let analysis: PoseAnalysis?
     let phase: SquatPhase
@@ -65,6 +74,7 @@ struct SquatDiagnostics {
     let recentDepthAttempts: [SquatDepthAttempt]
     let vision2DLatencyMs: Double?
     let vision3DProbe: Vision3DProbe?
+    let vision3DSynchronizedPair: Vision3DSynchronizedPair?
 }
 
 enum SquatDepthBreak: Equatable {
@@ -242,6 +252,7 @@ final class WorkoutViewModel {
     private var depthAttemptTracker = SquatDepthAttemptTracker()
     private var latestVision2DLatencyMs: Double?
     private var latestVision3DProbe: Vision3DProbe?
+    private var latestVision3DSynchronizedPair: Vision3DSynchronizedPair?
     #endif
 
     private let persistence: any WorkoutStoring
@@ -292,6 +303,14 @@ final class WorkoutViewModel {
         updateTask?.cancel()
     }
 
+    #if DEBUG
+    func clearVision3DComparison() {
+        latestVision3DProbe = nil
+        latestVision3DSynchronizedPair = nil
+        publish()
+    }
+    #endif
+
     func process(_ pose: BodyPose?) {
         guard !isPaused, !isFinished else { return }
         let currentTime = timeSource.currentTime
@@ -305,9 +324,19 @@ final class WorkoutViewModel {
         let analysis = analyzer.analyze(pose)
         #if DEBUG
         latestVision2DLatencyMs = pose?.vision3DProbe?.twoDimensionalLatencyMs
+        latestVision3DProbe = pose?.vision3DProbe
         if let probe = pose?.vision3DProbe,
            probe.threeDimensionalLatencyMs != nil {
-            latestVision3DProbe = probe
+            latestVision3DSynchronizedPair = Vision3DSynchronizedPair(
+                sampleNumber: probe.sampleCount,
+                selectedLeg: analysis.selectedLeg,
+                twoDimensionalLeftAngle: analysis.leftMeasurement.isReliable
+                    ? analysis.leftMeasurement.angle : nil,
+                twoDimensionalRightAngle: analysis.rightMeasurement.isReliable
+                    ? analysis.rightMeasurement.angle : nil,
+                twoDimensionalSelectedHeightRatio: analysis.hipKneeHeightRatio,
+                probe: probe
+            )
         }
         #endif
         hasPose = analysis.smoothedAngle != nil
@@ -516,6 +545,7 @@ final class WorkoutViewModel {
         depthAttemptTracker.resetPoseClock()
         latestVision2DLatencyMs = nil
         latestVision3DProbe = nil
+        latestVision3DSynchronizedPair = nil
         #endif
         counter.resetMovement()
         analyzer.reset()
@@ -581,7 +611,8 @@ final class WorkoutViewModel {
             lastDepthAttempt: depthAttemptTracker.lastAttempt,
             recentDepthAttempts: depthAttemptTracker.recentAttempts,
             vision2DLatencyMs: latestVision2DLatencyMs,
-            vision3DProbe: latestVision3DProbe
+            vision3DProbe: latestVision3DProbe,
+            vision3DSynchronizedPair: latestVision3DSynchronizedPair
         )
         latestDiagnostics = diagnostics
         onDiagnosticsChange?(diagnostics)
