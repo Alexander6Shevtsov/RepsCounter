@@ -24,6 +24,28 @@ final class SquatDiagnosticsTests: XCTestCase {
     }
 
     @MainActor
+    func testSwitchAfterUnreliableMovementCannotFinishOldSquat() {
+        let fixture = SquatTrackingFixture()
+        defer { fixture.viewModel.finish() }
+        let leftStanding = SquatPoseFixture.pose(leftAngle: 170, rightAngle: 170, leftConfidence: 0.9, rightConfidence: 0.8)
+        let bothLowered = SquatPoseFixture.pose(leftAngle: 90, rightAngle: 90, leftConfidence: 0.9, rightConfidence: 0.8)
+        let rightLowered = SquatPoseFixture.pose(leftAngle: 90, rightAngle: 90, leftConfidence: 0.49, rightConfidence: 0.8)
+        let rightStanding = SquatPoseFixture.pose(leftAngle: 90, rightAngle: 170, leftConfidence: 0.49, rightConfidence: 0.8)
+        fixture.feed(leftStanding)
+        fixture.feed(bothLowered)
+        fixture.feed(rightLowered, frames: 12)
+        XCTAssertEqual(fixture.viewModel.latestDiagnostics?.legChangeCount, 0)
+        XCTAssertEqual(fixture.viewModel.latestDiagnostics?.measurementLossCount, 1)
+        XCTAssertEqual(fixture.state?.totalRepetitions, 0)
+        fixture.feed(rightStanding)
+        XCTAssertEqual(fixture.viewModel.latestDiagnostics?.legChangeCount, 1)
+        XCTAssertEqual(fixture.state?.totalRepetitions, 0)
+        fixture.feed(rightLowered)
+        fixture.feed(rightStanding)
+        XCTAssertEqual(fixture.state?.totalRepetitions, 1)
+    }
+
+    @MainActor
     func testSingleJointLossPreservesCompletedCountAndRequiresNewStanding() {
         let fixture = SquatTrackingFixture()
         defer { fixture.viewModel.finish() }
@@ -304,7 +326,12 @@ final class SquatDiagnosticsTests: XCTestCase {
             rightConfidence: 0.9
         )
         fixture.feed(rightLegPose, frames: 1)
+        XCTAssertEqual(fixture.viewModel.latestDiagnostics?.legChangeCount, 0)
+        XCTAssertEqual(fixture.viewModel.latestDiagnostics?.measurementLossCount, 2)
+        XCTAssertNil(fixture.viewModel.latestDiagnostics?.analysis?.selectedLeg)
+        fixture.feed(rightLegPose, frames: 2)
         XCTAssertEqual(fixture.viewModel.latestDiagnostics?.legChangeCount, 1)
+        XCTAssertEqual(fixture.viewModel.latestDiagnostics?.analysis?.selectedLeg, .right)
         fixture.feed(rightLegPose)
         XCTAssertEqual(fixture.viewModel.latestDiagnostics?.phase, .standing)
 
@@ -312,7 +339,7 @@ final class SquatDiagnosticsTests: XCTestCase {
         fixture.viewModel.refreshTime()
         let diagnostics = try XCTUnwrap(fixture.viewModel.latestDiagnostics)
         XCTAssertEqual(diagnostics.observationGapCount, 1)
-        XCTAssertEqual(diagnostics.measurementLossCount, 1)
+        XCTAssertEqual(diagnostics.measurementLossCount, 2)
         XCTAssertEqual(diagnostics.legChangeCount, 1)
         XCTAssertEqual(diagnostics.resetReason, .observationGap)
 
@@ -321,7 +348,7 @@ final class SquatDiagnosticsTests: XCTestCase {
         let label = try XCTUnwrap(allSubviews(in: panel).first {
             $0.accessibilityIdentifier == "squatDiagnosticsText"
         } as? UILabel)
-        XCTAssertTrue(label.text?.contains("Сбросы И:1 Н:1 Г:1") == true)
+        XCTAssertTrue(label.text?.contains("Сбросы И:2 Н:1 Г:1") == true)
         XCTAssertTrue(label.text?.contains("Последняя потеря: низкая достоверность") == true)
     }
 
