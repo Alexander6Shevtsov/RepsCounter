@@ -5,9 +5,12 @@
 //  Maintainer: Alexander Shevtsov
 //  Copyright © 2026 Alexander Shevtsov.
 
+import SafariServices
 import UIKit
 
 final class WorkoutHistoryViewController: UITableViewController {
+    static let privacyPolicyURL = URL(string: "https://github.com/Alexander6Shevtsov/RepsCounter/blob/main/Docs/PRIVACY_POLICY.md")
+
     var onDismiss: (() -> Void)?
 
     private let persistence: any WorkoutStoring
@@ -43,6 +46,10 @@ final class WorkoutHistoryViewController: UITableViewController {
             title: "Готово", style: .done, target: self, action: #selector(close)
         )
         navigationItem.rightBarButtonItem?.tintColor = WorkoutAppearance.accent
+        let privacyButton = UIBarButtonItem(title: "Политика", style: .plain, target: self, action: #selector(openPrivacyPolicy))
+        privacyButton.accessibilityLabel = "Политика конфиденциальности"
+        privacyButton.tintColor = WorkoutAppearance.accent
+        navigationItem.leftBarButtonItem = privacyButton
         do {
             workouts = try persistence.history()
             if workouts.isEmpty {
@@ -84,6 +91,11 @@ final class WorkoutHistoryViewController: UITableViewController {
         configuration.secondaryTextProperties.font = .preferredFont(forTextStyle: .body)
         configuration.secondaryTextProperties.numberOfLines = 0
         contentUnavailableConfiguration = configuration
+    }
+
+    @objc private func openPrivacyPolicy() {
+        guard let address = Self.privacyPolicyURL else { return }
+        present(SFSafariViewController(url: address), animated: true)
     }
 
     @objc private func close() { dismiss(animated: true, completion: onDismiss) }
