@@ -24,6 +24,7 @@ struct WorkoutViewState {
     let remainingRestSeconds: Int
     let isResting: Bool
     let isPaused: Bool
+    let hasStarted: Bool
     let isFinished: Bool
     let poseDetected: Bool
     let saveState: WorkoutSaveState
@@ -32,6 +33,7 @@ struct WorkoutViewState {
 #if DEBUG
 enum SquatTrackingStatus: Equatable {
     case waitingForCamera
+    case ready
     case tracking
     case paused
     case resting
@@ -83,7 +85,7 @@ final class WorkoutViewModel {
     private let analyzer = PoseAnalyzer()
     private var counter = SquatCounter(maximumHipKneeHeightRatio: 0.35)
     private var updateTask: Task<Void, Never>?
-    private let startedAt: Date
+    private var startedAt: Date
     private var activeStartedAt: TimeInterval?
     private var accumulatedActiveTime: TimeInterval = 0
     private var restDeadline: TimeInterval?
@@ -91,6 +93,8 @@ final class WorkoutViewModel {
     private var totalRepetitions = 0
     private var currentSet = 1
     private(set) var isPaused = false
+    private(set) var hasStarted = false
+    let startsAutomatically: Bool
     private var isCameraReady: Bool
     private var isFinished = false
     private var hasPose = false
@@ -102,14 +106,21 @@ final class WorkoutViewModel {
     let targetSets = 4
     let restDuration = 60
 
-    init(persistence: any WorkoutStoring, timeSource: (any WorkoutTimeSource)? = nil, cameraReady: Bool = true) {
+    init(
+        persistence: any WorkoutStoring,
+        timeSource: (any WorkoutTimeSource)? = nil,
+        cameraReady: Bool = true,
+        startsAutomatically: Bool = true
+    ) {
         let source = timeSource ?? SystemWorkoutTimeSource()
         self.persistence = persistence
         self.timeSource = source
+        self.startsAutomatically = startsAutomatically
         startedAt = source.date
         isCameraReady = cameraReady
-        isPaused = !cameraReady
-        activeStartedAt = cameraReady ? source.currentTime : nil
+        hasStarted = startsAutomatically && cameraReady
+        isPaused = !hasStarted
+        activeStartedAt = hasStarted ? source.currentTime : nil
         startUpdates()
     }
 
@@ -174,9 +185,20 @@ final class WorkoutViewModel {
         else { pause() }
     }
 
+    func observePose(_ pose: BodyPose?) {
+        guard isPaused, !isFinished else { return }
+        let detected = pose != nil
+        guard hasPose != detected else { return }
+        hasPose = detected
+        publish()
+    }
+
     func setCameraReady(_ ready: Bool) {
         isCameraReady = ready
-        if !ready { pause() }
+        if !ready {
+            pause()
+            resetTracking()
+        }
         publish()
     }
 
@@ -194,6 +216,11 @@ final class WorkoutViewModel {
 
     func resume() {
         guard !isFinished, isPaused, isCameraReady else { return }
+        if !hasStarted {
+            startedAt = timeSource.date
+            hasStarted = true
+        }
+        resetTracking()
         activeStartedAt = timeSource.currentTime
         isPaused = false
         startUpdates()
@@ -327,7 +354,7 @@ final class WorkoutViewModel {
             requiredFrames: counter.requiredStableFrames,
             standingThreshold: counter.standingThreshold,
             loweredThreshold: counter.loweredThreshold,
-            status: isFinished ? .finished : (!isCameraReady ? .waitingForCamera : (isPaused ? .paused : (restDeadline != nil ? .resting : .tracking))),
+            status: isFinished ? .finished : (!isCameraReady ? .waitingForCamera : (!hasStarted ? .ready : (isPaused ? .paused : (restDeadline != nil ? .resting : .tracking)))),
             resetReason: trackingReset,
             measurementLossCount: measurementLossCount,
             legChangeCount: legChangeCount,
@@ -347,6 +374,7 @@ final class WorkoutViewModel {
             remainingRestSeconds: remainingRest,
             isResting: restDeadline != nil,
             isPaused: isPaused,
+            hasStarted: hasStarted,
             isFinished: isFinished,
             poseDetected: hasPose,
             saveState: saveState

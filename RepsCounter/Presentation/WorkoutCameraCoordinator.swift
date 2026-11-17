@@ -28,7 +28,8 @@ final class WorkoutCameraCoordinator {
         camera.onStateChange = { [weak self] state in self?.cameraStateChanged(state) }
         camera.onPose = { [weak self] pose in
             guard let self, self.isForeground else { return }
-            self.viewModel.process(pose)
+            if self.viewModel.isPaused { self.viewModel.observePose(pose) }
+            else { self.viewModel.process(pose) }
             if self.viewModel.finishedSummary != nil { self.camera.finish() }
             else { self.onPose?(pose) }
         }
@@ -37,7 +38,8 @@ final class WorkoutCameraCoordinator {
     func startInitially() {
         guard !hasStarted, isForeground, viewModel.finishedSummary == nil else { return }
         hasStarted = true
-        requestResume()
+        if viewModel.startsAutomatically { requestResume() }
+        else { camera.start() }
     }
 
     func togglePause() {
@@ -47,7 +49,6 @@ final class WorkoutCameraCoordinator {
         } else {
             shouldResumeWhenReady = false
             viewModel.pause()
-            camera.stop()
         }
     }
 
@@ -68,6 +69,7 @@ final class WorkoutCameraCoordinator {
     func sceneDidBecomeActive() {
         isForeground = true
         camera.refreshAuthorization()
+        if hasStarted, viewModel.finishedSummary == nil { camera.start() }
         onCameraStateChange?(camera.state)
     }
 

@@ -407,7 +407,7 @@ final class PortfolioUITests: XCTestCase {
                        finished: Bool = false, pose: Bool = true, saveState: WorkoutSaveState = .notSaved) -> WorkoutViewState {
         WorkoutViewState(repetitions: repetitions, totalRepetitions: total, currentSet: 3, targetSets: 4,
                          targetRepetitions: 12, elapsedSeconds: 125, remainingRestSeconds: resting ? 45 : 0,
-                         isResting: resting, isPaused: paused, isFinished: finished, poseDetected: pose, saveState: saveState)
+                         isResting: resting, isPaused: paused, hasStarted: true, isFinished: finished, poseDetected: pose, saveState: saveState)
     }
 
     @MainActor

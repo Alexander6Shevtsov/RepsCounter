@@ -12,6 +12,125 @@ import UIKit
 
 final class WorkoutCameraTests: XCTestCase {
     @MainActor
+    func testPreviewStartsBeforeWorkoutAndDoesNotCountUntilStart() async {
+        let fixture = WorkoutCameraFixture(startsAutomatically: false)
+        var receivedPreviews = 0
+        fixture.coordinator.onPose = { pose in
+            if pose != nil { receivedPreviews += 1 }
+        }
+        fixture.coordinator.startInitially()
+        await fixture.cameraFixture.camera.start().value
+
+        fixture.clock.advance(by: 30)
+        fixture.completeRepetition()
+        fixture.viewModel.refreshTime()
+
+        XCTAssertEqual(fixture.cameraFixture.camera.state, .running)
+        XCTAssertEqual(receivedPreviews, 60)
+        XCTAssertEqual(fixture.state?.totalRepetitions, 0)
+        XCTAssertEqual(fixture.state?.elapsedSeconds, 0)
+        XCTAssertEqual(fixture.state?.hasStarted, false)
+        XCTAssertEqual(fixture.state?.poseDetected, true)
+        XCTAssertEqual(fixture.state?.isPaused, true)
+        XCTAssertTrue(fixture.store.attempts.isEmpty)
+
+        fixture.coordinator.togglePause()
+        fixture.clock.advance(by: 2)
+        fixture.completeRepetition()
+        fixture.viewModel.refreshTime()
+
+        XCTAssertEqual(fixture.state?.hasStarted, true)
+        XCTAssertEqual(fixture.state?.isPaused, false)
+        XCTAssertEqual(fixture.state?.elapsedSeconds, 2)
+        XCTAssertEqual(fixture.state?.totalRepetitions, 1)
+        fixture.coordinator.finish()
+    }
+
+    @MainActor
+    func testPauseKeepsCameraAndPosePreviewRunningWithoutCounting() async {
+        let fixture = WorkoutCameraFixture(startsAutomatically: false)
+        fixture.coordinator.startInitially()
+        await fixture.cameraFixture.camera.start().value
+        fixture.coordinator.togglePause()
+        fixture.completeRepetition()
+
+        XCTAssertEqual(fixture.state?.totalRepetitions, 1)
+        fixture.coordinator.togglePause()
+        fixture.clock.advance(by: 35)
+        fixture.completeRepetition()
+        fixture.viewModel.refreshTime()
+
+        XCTAssertEqual(fixture.cameraFixture.camera.state, .running)
+        XCTAssertEqual(fixture.state?.isPaused, true)
+        XCTAssertEqual(fixture.state?.totalRepetitions, 1)
+        XCTAssertEqual(fixture.state?.elapsedSeconds, 0)
+        XCTAssertEqual(fixture.state?.poseDetected, true)
+
+        fixture.coordinator.togglePause()
+        fixture.completeRepetition()
+        XCTAssertEqual(fixture.state?.totalRepetitions, 2)
+        fixture.coordinator.finish()
+    }
+
+    @MainActor
+    func testReturningToForegroundRestartsPreviewWithoutResumingWorkout() async {
+        let fixture = WorkoutCameraFixture(startsAutomatically: false)
+        fixture.coordinator.startInitially()
+        await fixture.cameraFixture.camera.start().value
+        fixture.coordinator.togglePause()
+        fixture.clock.advance(by: 6)
+        fixture.coordinator.sceneDidEnterBackground()
+        await fixture.cameraFixture.camera.stop().value
+        fixture.clock.advance(by: 100)
+        fixture.coordinator.sceneDidBecomeActive()
+        await fixture.cameraFixture.camera.start().value
+        fixture.completeRepetition()
+
+        XCTAssertEqual(fixture.cameraFixture.camera.state, .running)
+        XCTAssertEqual(fixture.state?.isPaused, true)
+        XCTAssertEqual(fixture.state?.hasStarted, true)
+        XCTAssertEqual(fixture.state?.elapsedSeconds, 6)
+        XCTAssertEqual(fixture.state?.totalRepetitions, 0)
+        XCTAssertEqual(fixture.state?.poseDetected, true)
+        fixture.coordinator.finish()
+    }
+
+    @MainActor
+    func testPrimaryButtonCyclesStartPauseAndResume() async throws {
+        let cameraFixture = CameraFixture()
+        let persistence = CameraWorkoutStore()
+        let viewModel = WorkoutViewModel(
+            persistence: persistence,
+            cameraReady: false,
+            startsAutomatically: false
+        )
+        let controller = WorkoutViewController(viewModel: viewModel, camera: cameraFixture.camera, persistence: persistence)
+        controller.loadViewIfNeeded()
+        let buttons = allSubviews(including: controller.view).compactMap { $0 as? UIButton }
+        let primaryButton = try XCTUnwrap(buttons.first { $0.accessibilityIdentifier == "workoutPauseButton" })
+        let finishButton = try XCTUnwrap(buttons.first { $0.accessibilityIdentifier == "workoutFinishButton" })
+
+        controller.cameraCoordinator.startInitially()
+        await cameraFixture.camera.start().value
+        XCTAssertEqual(primaryButton.currentTitle, "Старт")
+        XCTAssertTrue(primaryButton.isEnabled)
+        XCTAssertFalse(finishButton.isEnabled)
+
+        primaryButton.sendActions(for: .touchUpInside)
+        XCTAssertEqual(primaryButton.currentTitle, "Пауза")
+        XCTAssertTrue(finishButton.isEnabled)
+
+        primaryButton.sendActions(for: .touchUpInside)
+        XCTAssertEqual(primaryButton.currentTitle, "Продолжить")
+        XCTAssertEqual(cameraFixture.camera.state, .running)
+
+        primaryButton.sendActions(for: .touchUpInside)
+        XCTAssertEqual(primaryButton.currentTitle, "Пауза")
+        controller.cameraCoordinator.disconnect()
+        await cameraFixture.camera.finish().value
+    }
+
+    @MainActor
     func testActiveTimeWaitsForCameraReadiness() async {
         let fixture = WorkoutCameraFixture(authorization: .notDetermined)
         fixture.coordinator.startInitially()
@@ -55,7 +174,8 @@ final class WorkoutCameraTests: XCTestCase {
         fixture.coordinator.sceneDidBecomeActive()
         XCTAssertEqual(fixture.viewModel.elapsedSeconds, 7)
         XCTAssertTrue(fixture.viewModel.isPaused)
-        XCTAssertEqual(fixture.cameraFixture.camera.state, .stopped)
+        await fixture.cameraFixture.camera.start().value
+        XCTAssertEqual(fixture.cameraFixture.camera.state, .running)
         fixture.coordinator.togglePause()
         await fixture.cameraFixture.camera.start().value
         fixture.clock.advance(by: 0.5)
@@ -66,7 +186,7 @@ final class WorkoutCameraTests: XCTestCase {
     }
 
     @MainActor
-    func testBackgroundDuringPermissionPreventsAutomaticStartAfterGrant() async {
+    func testBackgroundDuringPermissionRestartsPreviewWithoutResumingWorkout() async {
         let fixture = WorkoutCameraFixture(authorization: .notDetermined)
         fixture.coordinator.startInitially()
         let operation = fixture.cameraFixture.camera.start()
@@ -75,8 +195,10 @@ final class WorkoutCameraTests: XCTestCase {
         fixture.cameraFixture.permission.resolve(granted: true)
         await operation.value
         fixture.coordinator.sceneDidBecomeActive()
+        await fixture.cameraFixture.camera.start().value
         let snapshot = await fixture.cameraFixture.capture.snapshot()
-        XCTAssertTrue(snapshot.starts.isEmpty)
+        XCTAssertEqual(snapshot.starts.count, 1)
+        XCTAssertEqual(fixture.cameraFixture.camera.state, .running)
         XCTAssertTrue(fixture.viewModel.isPaused)
         XCTAssertEqual(fixture.viewModel.elapsedSeconds, 0)
         fixture.coordinator.finish()
@@ -328,9 +450,14 @@ private final class WorkoutCameraFixture {
     private(set) var state: WorkoutViewState?
     private var frameIndex = 0
 
-    init(authorization: CameraAuthorization = .authorized) {
+    init(authorization: CameraAuthorization = .authorized, startsAutomatically: Bool = true) {
         cameraFixture = CameraFixture(authorization: authorization)
-        viewModel = WorkoutViewModel(persistence: store, timeSource: clock, cameraReady: false)
+        viewModel = WorkoutViewModel(
+            persistence: store,
+            timeSource: clock,
+            cameraReady: false,
+            startsAutomatically: startsAutomatically
+        )
         coordinator = WorkoutCameraCoordinator(viewModel: viewModel, camera: cameraFixture.camera)
         viewModel.onChange = { [weak self] state in self?.state = state }
     }
