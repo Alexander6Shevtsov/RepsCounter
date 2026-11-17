@@ -178,10 +178,8 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
 
     @objc private func toggleVision3DProbe() {
         Vision3DProbeControl.toggle()
+        viewModel.clearVision3DComparison()
         updateVision3DButton()
-        if !diagnosticsView.isHidden, let diagnostics = viewModel.latestDiagnostics {
-            diagnosticsView.render(diagnostics)
-        }
     }
 
     private func updateVision3DButton() {
