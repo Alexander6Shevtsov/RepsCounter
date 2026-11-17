@@ -7,6 +7,9 @@
 
 import CoreGraphics
 import XCTest
+#if DEBUG
+import simd
+#endif
 @testable import RepsCounter
 
 final class PoseAnalyzerTests: XCTestCase {
@@ -210,6 +213,47 @@ final class PoseAnalyzerTests: XCTestCase {
         XCTAssertGreaterThan(angled.measuredAngle ?? 0, 105)
         XCTAssertLessThanOrEqual(side.measuredAngle ?? 180, 105)
     }
+
+    #if DEBUG
+    func testThreeDimensionalAngleIsStableUnderHorizontalCameraRotation() throws {
+        let kneePosition = SIMD3<Float>(0, 0, 0)
+        let anklePosition = SIMD3<Float>(0, -1, 0)
+        let yawSamples: [Float] = [0, Float.pi / 4, Float.pi / 2]
+        for yawRadians in yawSamples {
+            let hipPosition = SIMD3<Float>(cos(yawRadians), 0, sin(yawRadians))
+            let metrics = try XCTUnwrap(Vision3DGeometry.metrics(
+                hipPosition: hipPosition,
+                kneePosition: kneePosition,
+                anklePosition: anklePosition
+            ))
+            XCTAssertEqual(metrics.angle, 90, accuracy: 0.01)
+            XCTAssertEqual(metrics.heightRatio, 0, accuracy: 0.01)
+        }
+    }
+
+    func testThreeDimensionalVerticalGeometryAndInvalidJoints() throws {
+        let kneePosition = SIMD3<Float>(0, 0, 0)
+        let hipPosition = SIMD3<Float>(0, 1, 0)
+        let anklePosition = SIMD3<Float>(0, -1, 0)
+        let metrics = try XCTUnwrap(Vision3DGeometry.metrics(
+            hipPosition: hipPosition,
+            kneePosition: kneePosition,
+            anklePosition: anklePosition
+        ))
+        XCTAssertEqual(metrics.angle, 180, accuracy: 0.01)
+        XCTAssertEqual(metrics.heightRatio, 1, accuracy: 0.01)
+        XCTAssertNil(Vision3DGeometry.metrics(
+            hipPosition: kneePosition,
+            kneePosition: kneePosition,
+            anklePosition: anklePosition
+        ))
+        XCTAssertNil(Vision3DGeometry.metrics(
+            hipPosition: SIMD3<Float>(Float.nan, 0, 0),
+            kneePosition: kneePosition,
+            anklePosition: anklePosition
+        ))
+    }
+    #endif
 }
 
 enum SquatPoseFixture {
