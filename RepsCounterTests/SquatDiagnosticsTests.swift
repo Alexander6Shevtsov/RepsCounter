@@ -273,6 +273,9 @@ final class SquatDiagnosticsTests: XCTestCase {
         XCTAssertEqual(diagnostics.phase, .seekingStanding)
         XCTAssertEqual(diagnostics.resetReason, .observationGap)
         XCTAssertNil(diagnostics.analysis)
+        XCTAssertEqual(diagnostics.lastDepthAttempt?.outcome, .observationGap)
+        XCTAssertEqual(diagnostics.lastDepthAttempt?.lastBreak, .observationGap)
+        XCTAssertGreaterThanOrEqual(diagnostics.lastDepthAttempt?.maxPoseInterval ?? 0, 0.3)
         XCTAssertEqual(fixture.state?.poseDetected, false)
         XCTAssertEqual(fixture.state?.totalRepetitions, 1)
         fixture.feed(SquatPoseFixture.pose(leftAngle: 170))
@@ -373,6 +376,106 @@ final class SquatDiagnosticsTests: XCTestCase {
         XCTAssertTrue(label.text?.contains("кадры 3/3") == true)
         XCTAssertTrue(label.text?.contains("EMA ещё >105°") == true)
     }
+    @MainActor
+    func testDepthAttemptRecordsTwoFramesBeforeHeightBreakWithoutCounting() throws {
+        let fixture = SquatTrackingFixture()
+        defer { fixture.viewModel.finish() }
+        let standingPose = syntheticSquatPose(kneeAngle: 170, hipKneeHeightRatio: 0.98)
+        let deepPose = syntheticSquatPose(kneeAngle: 70, hipKneeHeightRatio: 0.08)
+        let highPose = syntheticSquatPose(kneeAngle: 99, hipKneeHeightRatio: 0.48)
+
+        fixture.feed(standingPose)
+        fixture.clock.currentTime = 0.08
+        fixture.viewModel.process(deepPose)
+        fixture.clock.currentTime = 0.16
+        fixture.viewModel.process(deepPose)
+        let pending = try XCTUnwrap(fixture.viewModel.latestDiagnostics?.activeDepthAttempt)
+        XCTAssertEqual(pending.maxDepthFrames, 2)
+        XCTAssertEqual(pending.depthBreakCount, 0)
+        XCTAssertFalse(pending.depthConfirmed)
+
+        fixture.clock.currentTime = 0.20
+        fixture.viewModel.process(highPose)
+        let interrupted = try XCTUnwrap(fixture.viewModel.latestDiagnostics?.activeDepthAttempt)
+        XCTAssertEqual(interrupted.maxDepthFrames, 2)
+        XCTAssertEqual(interrupted.depthBreakCount, 1)
+        XCTAssertEqual(interrupted.lastBreak, .hipHeight)
+        XCTAssertEqual(fixture.viewModel.latestDiagnostics?.consecutiveFrames, 0)
+
+        fixture.clock.currentTime = 0.24
+        fixture.feed(standingPose)
+        let finished = try XCTUnwrap(fixture.viewModel.latestDiagnostics?.lastDepthAttempt)
+        XCTAssertEqual(finished.outcome, .returnedWithoutDepth)
+        XCTAssertEqual(finished.maxDepthFrames, 2)
+        XCTAssertEqual(finished.minRawAngle ?? 0, 70, accuracy: 0.001)
+        XCTAssertEqual(finished.minHipKneeHeightRatio ?? 0, 0.08, accuracy: 0.001)
+        XCTAssertEqual(finished.maxPoseInterval ?? 0, 0.08, accuracy: 0.001)
+        XCTAssertEqual(fixture.viewModel.latestDiagnostics?.recentDepthAttempts.count, 1)
+        XCTAssertEqual(fixture.state?.totalRepetitions, 0)
+
+        let panel = SquatDiagnosticsView()
+        panel.render(try XCTUnwrap(fixture.viewModel.latestDiagnostics))
+        let label = try XCTUnwrap(allSubviews(in: panel).first {
+            $0.accessibilityIdentifier == "squatDiagnosticsText"
+        } as? UILabel)
+        XCTAssertTrue(label.text?.contains("Попытка #1: пик 2/3 · срывы 1") == true)
+        XCTAssertTrue(label.text?.contains("Срыв: высота таза") == true)
+        XCTAssertTrue(label.text?.contains("Макс интервал: 80 мс") == true)
+        XCTAssertTrue(label.text?.contains("возврат без глубины") == true)
+    }
+
+    @MainActor
+    func testDepthAttemptRecordsCountedMovementAndNoDuplicateEvents() throws {
+        let fixture = SquatTrackingFixture()
+        defer { fixture.viewModel.finish() }
+        let standingPose = syntheticSquatPose(kneeAngle: 170, hipKneeHeightRatio: 0.98)
+        let deepPose = syntheticSquatPose(kneeAngle: 70, hipKneeHeightRatio: 0.08)
+
+        fixture.feed(standingPose)
+        fixture.feed(deepPose)
+        fixture.feed(standingPose)
+        let counted = try XCTUnwrap(fixture.viewModel.latestDiagnostics?.lastDepthAttempt)
+        XCTAssertEqual(counted.outcome, .counted)
+        XCTAssertTrue(counted.depthConfirmed)
+        XCTAssertEqual(counted.maxDepthFrames, 3)
+        XCTAssertEqual(counted.depthBreakCount, 0)
+        XCTAssertEqual(counted.selectedLeg, .left)
+        XCTAssertEqual(fixture.state?.totalRepetitions, 1)
+
+        fixture.feed(standingPose)
+        XCTAssertEqual(fixture.viewModel.latestDiagnostics?.recentDepthAttempts.count, 1)
+        XCTAssertEqual(fixture.state?.totalRepetitions, 1)
+    }
+
+    @MainActor
+    func testDepthAttemptRecordsMeasurementLossWithoutCompletingMovement() throws {
+        let fixture = SquatTrackingFixture()
+        defer { fixture.viewModel.finish() }
+        let standingPose = syntheticSquatPose(kneeAngle: 170, hipKneeHeightRatio: 0.98)
+        let deepPose = syntheticSquatPose(kneeAngle: 70, hipKneeHeightRatio: 0.08)
+
+        fixture.feed(standingPose)
+        fixture.viewModel.process(deepPose)
+        fixture.viewModel.process(deepPose)
+        let lowConfidence = SquatPoseFixture.replacing(deepPose, joint: .leftHip, confidence: 0.49)
+        fixture.viewModel.process(lowConfidence)
+
+        let aborted = try XCTUnwrap(fixture.viewModel.latestDiagnostics?.lastDepthAttempt)
+        XCTAssertEqual(aborted.outcome, .measurementLost)
+        XCTAssertEqual(aborted.lastBreak, .measurementLost)
+        XCTAssertEqual(aborted.maxDepthFrames, 2)
+        XCTAssertEqual(aborted.depthBreakCount, 1)
+        XCTAssertNil(fixture.viewModel.latestDiagnostics?.activeDepthAttempt)
+        XCTAssertEqual(fixture.state?.totalRepetitions, 0)
+
+        fixture.feed(standingPose)
+        fixture.feed(deepPose)
+        fixture.feed(standingPose)
+        XCTAssertEqual(fixture.state?.totalRepetitions, 1)
+        XCTAssertEqual(fixture.viewModel.latestDiagnostics?.recentDepthAttempts.count, 2)
+        XCTAssertEqual(fixture.viewModel.latestDiagnostics?.lastDepthAttempt?.outcome, .counted)
+    }
+
     #endif
 
     private func syntheticSquatPose(kneeAngle: Double, hipKneeHeightRatio: Double) -> BodyPose {

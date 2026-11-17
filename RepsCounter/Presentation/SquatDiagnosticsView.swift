@@ -65,11 +65,20 @@ final class SquatDiagnosticsView: UIVisualEffectView {
         case .standing: phaseName = "standing"
         case .lowered: phaseName = "lowered"
         }
+        let attempt = diagnostics.activeDepthAttempt ?? diagnostics.lastDepthAttempt
+        let attemptStatus = diagnostics.activeDepthAttempt == nil
+            ? depthOutcomeText(attempt?.outcome)
+            : "в ходе"
+        let attemptNumber = attempt.map { "#\($0.number)" } ?? "—"
         let lines = [
             "Сбросы И:\(diagnostics.measurementLossCount) Н:\(diagnostics.legChangeCount) Г:\(diagnostics.observationGapCount)",
-            "Нога: \(selectedName) · confidence \(minimumConfidenceText(selectedMeasurement))",
             "raw \(angleText(analysis?.measuredAngle)) · EMA \(angleText(analysis?.smoothedAngle))",
             "Таз−колено: \(hipKneeText(analysis?.hipKneeHeightRatio)) бедра",
+            "Попытка \(attemptNumber): пик \(attempt?.maxDepthFrames ?? 0)/\(diagnostics.requiredFrames) · срывы \(attempt?.depthBreakCount ?? 0)",
+            "Мин raw \(angleText(attempt?.minRawAngle)) · EMA \(angleText(attempt?.minSmoothedAngle)) · ТК \(hipKneeText(attempt?.minHipKneeHeightRatio))",
+            "Макс интервал: \(poseIntervalText(attempt?.maxPoseInterval)) · итог: \(attemptStatus)",
+            "Срыв: \(depthBreakText(attempt?.lastBreak)) · нижняя фаза: \(attempt?.depthConfirmed == true ? "да" : "нет")",
+            "Нога: \(selectedName) · confidence \(minimumConfidenceText(selectedMeasurement))",
             "Фаза: \(phaseName) · кадры \(diagnostics.consecutiveFrames)/\(diagnostics.requiredFrames)",
             "Результат: \(decisionText(diagnostics))",
             "Последняя потеря: \(measurementIssueText(diagnostics.latestMeasurementIssue))"
@@ -92,6 +101,39 @@ final class SquatDiagnosticsView: UIVisualEffectView {
         case .missingJoint: return "не найден сустав"
         case .lowConfidence: return "низкая достоверность"
         case .invalidGeometry: return "некорректная геометрия"
+        case nil: return "—"
+        }
+    }
+
+    private func poseIntervalText(_ interval: TimeInterval?) -> String {
+        guard let interval, interval.isFinite else { return "—" }
+        return String(format: "%.0f мс", interval * 1000)
+    }
+
+    private func depthBreakText(_ reason: SquatDepthBreak?) -> String {
+        switch reason {
+        case .kneeAngle: return "угол колена"
+        case .hipHeight: return "высота таза"
+        case .invalidMeasurement: return "невалидное измерение"
+        case .measurementLost: return "потеря суставов"
+        case .legChanged: return "смена ноги"
+        case .observationGap: return "разрыв наблюдений"
+        case nil: return "—"
+        }
+    }
+
+    private func depthOutcomeText(_ outcome: SquatDepthOutcome?) -> String {
+        switch outcome {
+        case .counted: return "засчитано"
+        case .returnedWithoutDepth: return "возврат без глубины"
+        case .invalidMeasurement: return "сбой измерения"
+        case .measurementLost: return "потеря суставов"
+        case .legChanged: return "смена ноги"
+        case .observationGap: return "разрыв наблюдений"
+        case .paused: return "пауза"
+        case .cameraUnavailable: return "камера недоступна"
+        case .finished: return "тренировка завершена"
+        case .trackingReset: return "сброс отслеживания"
         case nil: return "—"
         }
     }

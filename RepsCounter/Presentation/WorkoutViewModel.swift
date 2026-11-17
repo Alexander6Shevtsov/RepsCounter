@@ -60,6 +60,165 @@ struct SquatDiagnostics {
     let legChangeCount: Int
     let observationGapCount: Int
     let latestMeasurementIssue: LegMeasurementIssue?
+    let activeDepthAttempt: SquatDepthAttempt?
+    let lastDepthAttempt: SquatDepthAttempt?
+    let recentDepthAttempts: [SquatDepthAttempt]
+}
+
+enum SquatDepthBreak: Equatable {
+    case kneeAngle
+    case hipHeight
+    case invalidMeasurement
+    case measurementLost
+    case legChanged
+    case observationGap
+}
+
+enum SquatDepthOutcome: Equatable {
+    case counted
+    case returnedWithoutDepth
+    case invalidMeasurement
+    case measurementLost
+    case legChanged
+    case observationGap
+    case paused
+    case cameraUnavailable
+    case finished
+    case trackingReset
+}
+
+struct SquatDepthAttempt: Equatable {
+    let number: Int
+    let selectedLeg: BodyLeg?
+    var minRawAngle: Double?
+    var minSmoothedAngle: Double?
+    var minHipKneeHeightRatio: Double?
+    var maxDepthFrames = 0
+    var depthBreakCount = 0
+    var lastBreak: SquatDepthBreak?
+    var maxPoseInterval: TimeInterval?
+    var depthConfirmed = false
+    var outcome: SquatDepthOutcome?
+}
+
+struct SquatDepthAttemptTracker {
+    private(set) var activeAttempt: SquatDepthAttempt?
+    private(set) var lastAttempt: SquatDepthAttempt?
+    private(set) var recentAttempts: [SquatDepthAttempt] = []
+    private var nextAttemptNumber = 1
+    private var returnStandingFrames = 0
+    private var previousPoseTimestamp: TimeInterval?
+    private var latestPoseInterval: TimeInterval?
+
+    mutating func recordPose(at timestamp: TimeInterval) {
+        if let previousPoseTimestamp, timestamp.isFinite, timestamp >= previousPoseTimestamp {
+            latestPoseInterval = timestamp - previousPoseTimestamp
+        } else {
+            latestPoseInterval = nil
+        }
+        self.previousPoseTimestamp = timestamp.isFinite ? timestamp : nil
+    }
+
+    mutating func resetPoseClock() {
+        previousPoseTimestamp = nil
+        latestPoseInterval = nil
+    }
+
+    mutating func observe(
+        analysis: PoseAnalysis,
+        phaseBefore: SquatPhase,
+        phaseAfter: SquatPhase,
+        framesBefore: Int,
+        framesAfter: Int,
+        decision: SquatDecision,
+        counted: Bool,
+        standingThreshold: Double
+    ) {
+        if activeAttempt == nil,
+           phaseBefore == .standing,
+           let rawAngle = analysis.measuredAngle,
+           rawAngle.isFinite,
+           rawAngle < standingThreshold {
+            activeAttempt = SquatDepthAttempt(number: nextAttemptNumber, selectedLeg: analysis.selectedLeg)
+            nextAttemptNumber += 1
+        }
+        guard var attempt = activeAttempt else { return }
+
+        if let rawAngle = analysis.measuredAngle, rawAngle.isFinite {
+            attempt.minRawAngle = min(attempt.minRawAngle ?? rawAngle, rawAngle)
+        }
+        if let smoothedAngle = analysis.smoothedAngle, smoothedAngle.isFinite {
+            attempt.minSmoothedAngle = min(attempt.minSmoothedAngle ?? smoothedAngle, smoothedAngle)
+        }
+        if let heightRatio = analysis.hipKneeHeightRatio, heightRatio.isFinite {
+            attempt.minHipKneeHeightRatio = min(attempt.minHipKneeHeightRatio ?? heightRatio, heightRatio)
+        }
+        if let latestPoseInterval, latestPoseInterval.isFinite, latestPoseInterval >= 0 {
+            attempt.maxPoseInterval = max(attempt.maxPoseInterval ?? latestPoseInterval, latestPoseInterval)
+        }
+        if phaseBefore == .standing {
+            attempt.maxDepthFrames = max(attempt.maxDepthFrames, framesAfter)
+            if phaseAfter == .standing, framesBefore > 0, framesAfter == 0 {
+                let breakReason: SquatDepthBreak?
+                switch decision {
+                case .awaitingDepth: breakReason = .kneeAngle
+                case .awaitingHipKneeDepth: breakReason = .hipHeight
+                default: breakReason = nil
+                }
+                if let breakReason {
+                    attempt.depthBreakCount += 1
+                    attempt.lastBreak = breakReason
+                }
+            }
+        }
+        if phaseAfter == .lowered { attempt.depthConfirmed = true }
+        activeAttempt = attempt
+
+        if counted {
+            complete(.counted)
+        } else if decision == .invalidMeasurement {
+            interrupt(.invalidMeasurement, breakReason: .invalidMeasurement)
+        } else if phaseBefore == .standing,
+                  phaseAfter == .standing,
+                  let rawAngle = analysis.measuredAngle,
+                  let smoothedAngle = analysis.smoothedAngle,
+                  rawAngle >= standingThreshold,
+                  smoothedAngle >= standingThreshold {
+            returnStandingFrames += 1
+            if returnStandingFrames >= 3 {
+                complete(.returnedWithoutDepth)
+            }
+        } else {
+            returnStandingFrames = 0
+        }
+    }
+
+    mutating func interrupt(
+        _ outcome: SquatDepthOutcome,
+        breakReason: SquatDepthBreak? = nil,
+        observedGap: TimeInterval? = nil
+    ) {
+        guard var attempt = activeAttempt else { return }
+        if let interval = observedGap ?? latestPoseInterval, interval.isFinite, interval >= 0 {
+            attempt.maxPoseInterval = max(attempt.maxPoseInterval ?? interval, interval)
+        }
+        if let breakReason, attempt.maxDepthFrames > 0 {
+            attempt.depthBreakCount += 1
+            attempt.lastBreak = breakReason
+        }
+        activeAttempt = attempt
+        complete(outcome)
+    }
+
+    private mutating func complete(_ outcome: SquatDepthOutcome) {
+        guard var attempt = activeAttempt else { return }
+        attempt.outcome = outcome
+        lastAttempt = attempt
+        recentAttempts.append(attempt)
+        if recentAttempts.count > 20 { recentAttempts.removeFirst() }
+        activeAttempt = nil
+        returnStandingFrames = 0
+    }
 }
 
 #endif
@@ -78,6 +237,7 @@ final class WorkoutViewModel {
     private var legChangeCount = 0
     private var observationGapCount = 0
     private var latestMeasurementIssue: LegMeasurementIssue?
+    private var depthAttemptTracker = SquatDepthAttemptTracker()
     #endif
 
     private let persistence: any WorkoutStoring
@@ -134,6 +294,9 @@ final class WorkoutViewModel {
         let activeTime = activeDuration(at: currentTime)
         advanceRest(at: activeTime)
         guard restDeadline == nil else { return }
+        #if DEBUG
+        depthAttemptTracker.recordPose(at: currentTime)
+        #endif
         expireTracking(at: currentTime)
         let analysis = analyzer.analyze(pose)
         hasPose = analysis.smoothedAngle != nil
@@ -148,6 +311,15 @@ final class WorkoutViewModel {
             }
         }
         #endif
+        #if DEBUG
+        if analysis.requiresMovementReset {
+            if analysis.selectedLeg == nil {
+                depthAttemptTracker.interrupt(.measurementLost, breakReason: .measurementLost)
+            } else {
+                depthAttemptTracker.interrupt(.legChanged, breakReason: .legChanged)
+            }
+        }
+        #endif
         if analysis.requiresMovementReset { counter.resetMovement() }
         #if DEBUG
         latestAnalysis = analysis
@@ -156,12 +328,26 @@ final class WorkoutViewModel {
         }
         #endif
 
+        #if DEBUG
+        let phaseBefore = counter.phase
+        let framesBefore = counter.consecutiveFrames
+        #endif
         let counted = counter.process(
             measuredAngle: analysis.measuredAngle,
             smoothedAngle: analysis.smoothedAngle,
             hipKneeHeightRatio: analysis.hipKneeHeightRatio
         )
         #if DEBUG
+        depthAttemptTracker.observe(
+            analysis: analysis,
+            phaseBefore: phaseBefore,
+            phaseAfter: counter.phase,
+            framesBefore: framesBefore,
+            framesAfter: counter.consecutiveFrames,
+            decision: counter.decision,
+            counted: counted,
+            standingThreshold: counter.standingThreshold
+        )
         if counter.phase != .seekingStanding { trackingReset = nil }
         #endif
         if counted {
@@ -196,6 +382,9 @@ final class WorkoutViewModel {
     func setCameraReady(_ ready: Bool) {
         isCameraReady = ready
         if !ready {
+            #if DEBUG
+            depthAttemptTracker.interrupt(.cameraUnavailable)
+            #endif
             pause()
             resetTracking()
         }
@@ -209,6 +398,9 @@ final class WorkoutViewModel {
         accumulatedActiveTime = activeTime
         activeStartedAt = nil
         isPaused = true
+        #if DEBUG
+        depthAttemptTracker.interrupt(.paused)
+        #endif
         resetTracking()
         stopUpdates()
         publish(activeTime: activeTime)
@@ -240,6 +432,9 @@ final class WorkoutViewModel {
             sets: min(targetSets, completedSets + (counter.repetitions > 0 ? 1 : 0))
         )
         isFinished = true
+        #if DEBUG
+        depthAttemptTracker.interrupt(.finished)
+        #endif
         stopUpdates()
         retrySave()
     }
@@ -282,6 +477,11 @@ final class WorkoutViewModel {
         guard let lastPoseTime, currentTime - lastPoseTime > maximumPoseInterval else { return }
         #if DEBUG
         if counter.phase != .seekingStanding { observationGapCount += 1 }
+        depthAttemptTracker.interrupt(
+            .observationGap,
+            breakReason: .observationGap,
+            observedGap: currentTime - lastPoseTime
+        )
         #endif
         resetTracking()
         #if DEBUG
@@ -300,6 +500,10 @@ final class WorkoutViewModel {
     #endif
 
     private func resetTracking() {
+        #if DEBUG
+        depthAttemptTracker.interrupt(.trackingReset)
+        depthAttemptTracker.resetPoseClock()
+        #endif
         counter.resetMovement()
         analyzer.reset()
         lastPoseTime = nil
@@ -359,7 +563,10 @@ final class WorkoutViewModel {
             measurementLossCount: measurementLossCount,
             legChangeCount: legChangeCount,
             observationGapCount: observationGapCount,
-            latestMeasurementIssue: latestMeasurementIssue
+            latestMeasurementIssue: latestMeasurementIssue,
+            activeDepthAttempt: depthAttemptTracker.activeAttempt,
+            lastDepthAttempt: depthAttemptTracker.lastAttempt,
+            recentDepthAttempts: depthAttemptTracker.recentAttempts
         )
         latestDiagnostics = diagnostics
         onDiagnosticsChange?(diagnostics)
