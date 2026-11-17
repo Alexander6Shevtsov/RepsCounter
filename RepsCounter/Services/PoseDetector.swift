@@ -13,6 +13,27 @@ import Vision
 import os
 import simd
 
+enum Vision3DGeometry {
+    static func metrics(
+        hipPosition: SIMD3<Float>,
+        kneePosition: SIMD3<Float>,
+        anklePosition: SIMD3<Float>
+    ) -> (angle: Double, heightRatio: Double)? {
+        let thighVector = hipPosition - kneePosition
+        let shinVector = anklePosition - kneePosition
+        let thighLength = simd_length(thighVector)
+        let shinLength = simd_length(shinVector)
+        let denominator = thighLength * shinLength
+        guard thighLength.isFinite, shinLength.isFinite,
+              denominator.isFinite, denominator > 0.000_001 else { return nil }
+        let cosine = max(-1.0, min(1.0, Double(simd_dot(thighVector, shinVector) / denominator)))
+        let angle = acos(cosine) * 180 / Double.pi
+        let heightRatio = Double(thighVector.y / thighLength)
+        guard angle.isFinite, heightRatio.isFinite else { return nil }
+        return (angle, heightRatio)
+    }
+}
+
 enum Vision3DProbeControl {
     private static let enabled = OSAllocatedUnfairLock(initialState: false)
 
@@ -143,21 +164,11 @@ final class PoseDetector {
               let kneeJoint = try? observation.recognizedPoint(knee),
               let ankleJoint = try? observation.recognizedPoint(ankle) else { return nil }
 
-        let hipPosition = translation(hipJoint.position)
-        let kneePosition = translation(kneeJoint.position)
-        let anklePosition = translation(ankleJoint.position)
-        let thighVector = hipPosition - kneePosition
-        let shinVector = anklePosition - kneePosition
-        let thighLength = simd_length(thighVector)
-        let shinLength = simd_length(shinVector)
-        let denominator = thighLength * shinLength
-        guard thighLength.isFinite, shinLength.isFinite,
-              denominator.isFinite, denominator > 0.000_001 else { return nil }
-        let cosine = max(-1.0, min(1.0, Double(simd_dot(thighVector, shinVector) / denominator)))
-        let angle = acos(cosine) * 180 / Double.pi
-        let heightRatio = Double(thighVector.y / thighLength)
-        guard angle.isFinite, heightRatio.isFinite else { return nil }
-        return (angle, heightRatio)
+        return Vision3DGeometry.metrics(
+            hipPosition: translation(hipJoint.position),
+            kneePosition: translation(kneeJoint.position),
+            anklePosition: translation(ankleJoint.position)
+        )
     }
 
     private func translation(_ matrix: simd_float4x4) -> SIMD3<Float> {
