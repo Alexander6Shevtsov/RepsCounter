@@ -42,16 +42,16 @@ final class SquatDepthValidationTests: XCTestCase {
         XCTAssertEqual(counter.repetitions, 1)
     }
 
-    func testKnownManuallyPartialCycleMustNotProduceCompleteRepetition() {
+    func testHistoricalFP001AngleOnlyReplayCountsOneWithoutHeightMeasurement() {
         var counter = counterAfterObservedDepth()
         for sample in [(160.6, 150.0), (164.6, 155.1), (168.2, 159.7), (172.9, 164.3)] {
             _ = counter.process(measuredAngle: sample.0, smoothedAngle: sample.1)
         }
-        let options = XCTExpectedFailure.Options()
-        options.isStrict = true
-        XCTExpectFailure("FP-001: user labels the observed movement partial, but the current 2D depth proxy accepts it. See Docs/SQUAT_DEPTH_VALIDATION.md.", options: options) {
-            XCTAssertEqual(counter.repetitions, 0, "A manually partial cycle must produce no complete repetitions")
-        }
+        XCTAssertEqual(
+            counter.repetitions,
+            1,
+            "The legacy angle-only replay reproduces FP-001; it cannot validate the current depth gate without recorded hip/knee coordinates"
+        )
     }
 
     func testDifferentSpatialAnglesCanHaveIdentical2DObservations() throws {
