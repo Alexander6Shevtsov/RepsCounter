@@ -253,6 +253,73 @@ final class PoseAnalyzerTests: XCTestCase {
             anklePosition: anklePosition
         ))
     }
+    func testThreeDimensionalSamplerTargetsFiveToTenSamplesPerSecond() {
+        var sampler = Vision3DSamplingController()
+        let timestamp = ContinuousClock.now
+        for offset in 0..<25 {
+            sampler.recordTwoDimensionalFrame(at: timestamp.advanced(by: .milliseconds(offset * 80)))
+        }
+        XCTAssertEqual(sampler.twoDimensionalFramesPerSecond ?? 0, 12.5, accuracy: 0.01)
+
+        XCTAssertTrue(sampler.shouldSampleThreeDimensional(at: timestamp, enabled: true))
+        sampler.recordThreeDimensionalSample(at: timestamp, latencyMilliseconds: 40)
+
+        XCTAssertFalse(sampler.shouldSampleThreeDimensional(
+            at: timestamp.advanced(by: .milliseconds(80)),
+            enabled: true
+        ))
+        let secondSample = timestamp.advanced(by: .milliseconds(160))
+        XCTAssertTrue(sampler.shouldSampleThreeDimensional(at: secondSample, enabled: true))
+        sampler.recordThreeDimensionalSample(at: secondSample, latencyMilliseconds: 40)
+
+        XCTAssertFalse(sampler.shouldSampleThreeDimensional(
+            at: timestamp.advanced(by: .milliseconds(240)),
+            enabled: true
+        ))
+        let thirdSample = timestamp.advanced(by: .milliseconds(320))
+        XCTAssertTrue(sampler.shouldSampleThreeDimensional(at: thirdSample, enabled: true))
+        sampler.recordThreeDimensionalSample(at: thirdSample, latencyMilliseconds: 40)
+
+        XCTAssertEqual(sampler.sampleCount, 3)
+        XCTAssertEqual(sampler.threeDimensionalSamplesPerSecond ?? 0, 6.25, accuracy: 0.01)
+    }
+
+    func testSlowVisionThreeDimensionalRequestIncreasesSamplingCooldown() {
+        var sampler = Vision3DSamplingController()
+        let timestamp = ContinuousClock.now
+        XCTAssertTrue(sampler.shouldSampleThreeDimensional(at: timestamp, enabled: true))
+        sampler.recordThreeDimensionalSample(at: timestamp, latencyMilliseconds: 130)
+
+        XCTAssertFalse(sampler.shouldSampleThreeDimensional(
+            at: timestamp.advanced(by: .milliseconds(200)),
+            enabled: true
+        ))
+        XCTAssertFalse(sampler.shouldSampleThreeDimensional(
+            at: timestamp.advanced(by: .milliseconds(259)),
+            enabled: true
+        ))
+        XCTAssertTrue(sampler.shouldSampleThreeDimensional(
+            at: timestamp.advanced(by: .milliseconds(260)),
+            enabled: true
+        ))
+        sampler.recordThreeDimensionalSample(
+            at: timestamp.advanced(by: .milliseconds(260)),
+            latencyMilliseconds: 130
+        )
+        XCTAssertEqual(sampler.threeDimensionalSamplesPerSecond ?? 0, 1 / 0.26, accuracy: 0.01)
+
+        XCTAssertFalse(sampler.shouldSampleThreeDimensional(
+            at: timestamp.advanced(by: .milliseconds(270)),
+            enabled: false
+        ))
+        XCTAssertEqual(sampler.sampleCount, 0)
+        XCTAssertNil(sampler.threeDimensionalSamplesPerSecond)
+        XCTAssertTrue(sampler.shouldSampleThreeDimensional(
+            at: timestamp.advanced(by: .milliseconds(271)),
+            enabled: true
+        ))
+    }
+
     #endif
 }
 
