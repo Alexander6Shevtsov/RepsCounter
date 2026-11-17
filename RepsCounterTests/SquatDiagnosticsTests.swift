@@ -108,7 +108,15 @@ final class SquatDiagnosticsTests: XCTestCase {
         let controls = allSubviews(in: controller.view)
         let toggle = controls.first { $0.accessibilityIdentifier == "squatDiagnosticsButton" } as? UIButton
         let panel = controls.first { $0.accessibilityIdentifier == "squatDiagnosticsPanel" }
+        let vision3DButton = controls.first { $0.accessibilityIdentifier == "vision3DProbeButton" } as? UIButton
         #if DEBUG
+        let probeButton = try XCTUnwrap(vision3DButton)
+        let wasEnabled = Vision3DProbeControl.isEnabled
+        probeButton.sendActions(for: .touchUpInside)
+        XCTAssertNotEqual(Vision3DProbeControl.isEnabled, wasEnabled)
+        XCTAssertEqual(probeButton.accessibilityValue, !wasEnabled ? "Включён" : "Выключен")
+        probeButton.sendActions(for: .touchUpInside)
+        XCTAssertEqual(Vision3DProbeControl.isEnabled, wasEnabled)
         let button = try XCTUnwrap(toggle)
         let diagnosticsPanel = try XCTUnwrap(panel)
         XCTAssertTrue(diagnosticsPanel.isHidden)
@@ -123,6 +131,7 @@ final class SquatDiagnosticsTests: XCTestCase {
         #else
         XCTAssertNil(toggle)
         XCTAssertNil(panel)
+        XCTAssertNil(vision3DButton)
         #endif
     }
 
