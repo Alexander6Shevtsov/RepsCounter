@@ -70,13 +70,24 @@ final class SquatDiagnosticsView: UIVisualEffectView {
             ? depthOutcomeText(attempt?.outcome)
             : "в ходе"
         let attemptNumber = attempt.map { "#\($0.number)" } ?? "—"
-        let threeDimensionalProbe = Vision3DProbeControl.isEnabled ? diagnostics.vision3DProbe : nil
-        let threeDimensionalStatus = !Vision3DProbeControl.isEnabled ? "выкл" : (threeDimensionalProbe == nil ? "ожидание" : (threeDimensionalProbe?.observationAvailable == true ? "есть" : "нет позы"))
+        let enabled = Vision3DProbeControl.isEnabled
+        let currentProbe = diagnostics.vision3DProbe
+        let synchronizedPair = enabled ? diagnostics.vision3DSynchronizedPair : nil
+        let pairedProbe = synchronizedPair?.probe
+        let threeDimensionalStatus = !enabled ? "выкл" : (synchronizedPair == nil ? "ожидание" : (pairedProbe?.observationAvailable == true ? "есть" : "нет позы"))
+        let pairedLeg: String
+        switch synchronizedPair?.selectedLeg {
+        case .left: pairedLeg = "Л"
+        case .right: pairedLeg = "П"
+        case nil: pairedLeg = "—"
+        }
         let lines = [
-            "Vision 3D: \(threeDimensionalStatus) · проба #\(threeDimensionalProbe?.sampleCount ?? 0)",
-            "Vision время: 2D \(latencyText(diagnostics.vision2DLatencyMs)) · 3D \(latencyText(threeDimensionalProbe?.threeDimensionalLatencyMs))",
-            "3D колено Л \(angleText(threeDimensionalProbe?.leftKneeAngle)) · П \(angleText(threeDimensionalProbe?.rightKneeAngle))",
-            "3D таз−колено Л \(hipKneeText(threeDimensionalProbe?.leftHipKneeHeightRatio)) · П \(hipKneeText(threeDimensionalProbe?.rightHipKneeHeightRatio))",
+            "Vision 3D: \(threeDimensionalStatus) · пара #\(synchronizedPair?.sampleNumber ?? 0)",
+            "Скорость: 2D \(rateText(currentProbe?.twoDimensionalFramesPerSecond)) · 3D \(rateText(enabled ? currentProbe?.threeDimensionalSamplesPerSecond : nil))",
+            "Время: 2D сейчас \(latencyText(diagnostics.vision2DLatencyMs)) · 3D пары \(latencyText(pairedProbe?.threeDimensionalLatencyMs))",
+            "Пара 2D Л \(angleText(synchronizedPair?.twoDimensionalLeftAngle)) · П \(angleText(synchronizedPair?.twoDimensionalRightAngle))",
+            "Пара 3D Л \(angleText(pairedProbe?.leftKneeAngle)) · П \(angleText(pairedProbe?.rightKneeAngle))",
+            "ТК пары: 2D[\(pairedLeg)] \(hipKneeText(synchronizedPair?.twoDimensionalSelectedHeightRatio)) · 3D Л \(hipKneeText(pairedProbe?.leftHipKneeHeightRatio)) П \(hipKneeText(pairedProbe?.rightHipKneeHeightRatio))",
             "Сбросы И:\(diagnostics.measurementLossCount) Н:\(diagnostics.legChangeCount) Г:\(diagnostics.observationGapCount)",
             "raw \(angleText(analysis?.measuredAngle)) · EMA \(angleText(analysis?.smoothedAngle))",
             "Таз−колено: \(hipKneeText(analysis?.hipKneeHeightRatio)) бедра",
@@ -90,6 +101,11 @@ final class SquatDiagnosticsView: UIVisualEffectView {
             "Последняя потеря: \(measurementIssueText(diagnostics.latestMeasurementIssue))"
         ]
         textLabel.text = lines.joined(separator: "\n")
+    }
+
+    private func rateText(_ rate: Double?) -> String {
+        guard let rate, rate.isFinite, rate >= 0 else { return "—" }
+        return String(format: "%.1f/с", rate)
     }
 
     private func latencyText(_ duration: Double?) -> String {
