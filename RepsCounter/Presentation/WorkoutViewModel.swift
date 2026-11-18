@@ -240,6 +240,7 @@ struct SquatDiagnostics {
     let vision3DProbe: Vision3DProbe?
     let vision3DSynchronizedPair: Vision3DSynchronizedPair?
     let vision3DExperimentalCounter: Vision3DExperimentalCounter
+    let vision3DReturnShadow: Vision3DReturnShadow
 }
 
 enum SquatDepthBreak: Equatable {
@@ -873,6 +874,7 @@ final class WorkoutViewModel {
     private var latestVision3DProbe: Vision3DProbe?
     private var latestVision3DSynchronizedPair: Vision3DSynchronizedPair?
     private var vision3DExperimentalCounter = Vision3DExperimentalCounter()
+    private var vision3DReturnShadow = Vision3DReturnShadow()
     #endif
 
     private let persistence: any WorkoutStoring
@@ -928,6 +930,7 @@ final class WorkoutViewModel {
         latestVision3DProbe = nil
         latestVision3DSynchronizedPair = nil
         vision3DExperimentalCounter.reset()
+        vision3DReturnShadow.reset()
         publish()
     }
     #endif
@@ -941,6 +944,7 @@ final class WorkoutViewModel {
         #if DEBUG
         depthAttemptTracker.recordPose(at: currentTime)
         vision3DExperimentalCounter.expire(at: currentTime)
+        vision3DReturnShadow.expire(at: currentTime)
         #endif
         expireTracking(at: currentTime)
         let analysis = analyzer.analyze(pose)
@@ -968,6 +972,18 @@ final class WorkoutViewModel {
                     rightTwoDimensionalConfidence: analysis.rightMeasurement.isReliable
                         ? Double(analysis.rightMeasurement.confidence) : nil,
                     preferredTwoDimensionalLeg: analysis.selectedLeg
+                )
+                vision3DReturnShadow.observe(
+                    probe,
+                    at: currentTime,
+                    threeDimensionalLeg: vision3DExperimentalCounter.selectedLeg,
+                    standingReference: vision3DExperimentalCounter.standingHipKneeRatio,
+                    twoDimensionalLeg: analysis.selectedLeg,
+                    twoDimensionalLeftAngle: analysis.leftMeasurement.isReliable
+                        ? analysis.leftMeasurement.angle : nil,
+                    twoDimensionalRightAngle: analysis.rightMeasurement.isReliable
+                        ? analysis.rightMeasurement.angle : nil,
+                    twoDimensionalSelectedHipKneeRatio: analysis.hipKneeHeightRatio
                 )
             }
         }
@@ -1144,6 +1160,7 @@ final class WorkoutViewModel {
         advanceRest(at: activeTime)
         #if DEBUG
         vision3DExperimentalCounter.expire(at: currentTime)
+        vision3DReturnShadow.expire(at: currentTime)
         #endif
         expireTracking(at: currentTime)
         publish(activeTime: activeTime)
@@ -1183,6 +1200,7 @@ final class WorkoutViewModel {
         latestVision3DProbe = nil
         latestVision3DSynchronizedPair = nil
         vision3DExperimentalCounter.resetMovement()
+        vision3DReturnShadow.reset()
         #endif
         counter.resetMovement()
         analyzer.reset()
@@ -1250,7 +1268,8 @@ final class WorkoutViewModel {
             vision2DLatencyMs: latestVision2DLatencyMs,
             vision3DProbe: latestVision3DProbe,
             vision3DSynchronizedPair: latestVision3DSynchronizedPair,
-            vision3DExperimentalCounter: vision3DExperimentalCounter
+            vision3DExperimentalCounter: vision3DExperimentalCounter,
+            vision3DReturnShadow: vision3DReturnShadow
         )
         latestDiagnostics = diagnostics
         onDiagnosticsChange?(diagnostics)
