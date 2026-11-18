@@ -307,7 +307,10 @@ final class SquatDiagnosticsTests: XCTestCase {
         fixture.viewModel.clearVision3DComparison()
         XCTAssertEqual(fixture.viewModel.latestDiagnostics?.vision3DExperimentalCounter.repetitions, 0)
         XCTAssertEqual(fixture.state?.totalRepetitions, 0)
-        XCTAssertTrue(fixture.store.history().isEmpty)
+        fixture.viewModel.finish()
+        let savedHistory = try fixture.store.history()
+        XCTAssertEqual(savedHistory.count, 1)
+        XCTAssertEqual(savedHistory.first?.repetitions, 0)
     }
 
     @MainActor
