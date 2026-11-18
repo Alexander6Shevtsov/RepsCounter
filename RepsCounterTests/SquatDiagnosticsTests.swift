@@ -108,7 +108,15 @@ final class SquatDiagnosticsTests: XCTestCase {
         let controls = allSubviews(in: controller.view)
         let toggle = controls.first { $0.accessibilityIdentifier == "squatDiagnosticsButton" } as? UIButton
         let panel = controls.first { $0.accessibilityIdentifier == "squatDiagnosticsPanel" }
+        let vision3DButton = controls.first { $0.accessibilityIdentifier == "vision3DProbeButton" } as? UIButton
         #if DEBUG
+        let probeButton = try XCTUnwrap(vision3DButton)
+        let wasEnabled = Vision3DProbeControl.isEnabled
+        probeButton.sendActions(for: .touchUpInside)
+        XCTAssertNotEqual(Vision3DProbeControl.isEnabled, wasEnabled)
+        XCTAssertEqual(probeButton.accessibilityValue, !wasEnabled ? "Включён" : "Выключен")
+        probeButton.sendActions(for: .touchUpInside)
+        XCTAssertEqual(Vision3DProbeControl.isEnabled, wasEnabled)
         let button = try XCTUnwrap(toggle)
         let diagnosticsPanel = try XCTUnwrap(panel)
         XCTAssertTrue(diagnosticsPanel.isHidden)
@@ -123,6 +131,7 @@ final class SquatDiagnosticsTests: XCTestCase {
         #else
         XCTAssertNil(toggle)
         XCTAssertNil(panel)
+        XCTAssertNil(vision3DButton)
         #endif
     }
 
@@ -151,8 +160,9 @@ final class SquatDiagnosticsTests: XCTestCase {
                 let panelFrame = panel.convert(panel.bounds, to: controller.view)
                 XCTAssertTrue(controller.view.bounds.contains(panelFrame))
                 XCTAssertEqual(panelFrame.width, 250, accuracy: 0.5)
-                XCTAssertEqual(panelFrame.height, 170, accuracy: 0.5)
-                XCTAssertLessThan(panelFrame.midY, controller.view.bounds.midY)
+                XCTAssertGreaterThan(panelFrame.height, 170)
+                XCTAssertLessThanOrEqual(panelFrame.height, 460.5)
+                XCTAssertLessThan(panelFrame.minY, controller.view.bounds.midY)
                 let metrics = try XCTUnwrap(contents.first { $0.accessibilityIdentifier == "workoutMetricsScroll" })
                 let count = try XCTUnwrap(contents.first { $0.accessibilityIdentifier == "workoutCount" })
                 let controls = try XCTUnwrap(contents.first { $0.accessibilityIdentifier == "workoutControls" })
@@ -170,6 +180,11 @@ final class SquatDiagnosticsTests: XCTestCase {
                 XCTAssertTrue(panelScroll.isScrollEnabled)
                 XCTAssertGreaterThan(panelScroll.bounds.height, 0)
                 XCTAssertGreaterThan(panelScroll.contentSize.height, 0)
+                if panelScroll.contentSize.height > panelScroll.bounds.height {
+                    let bottomOffset = panelScroll.contentSize.height - panelScroll.bounds.height
+                    panelScroll.setContentOffset(CGPoint(x: 0, y: bottomOffset), animated: false)
+                    XCTAssertEqual(panelScroll.contentOffset.y, bottomOffset, accuracy: 0.5)
+                }
                 if viewport.width == 393, category == .large {
                     let image = UIGraphicsImageRenderer(size: viewport).image { context in
                         controller.view.layer.render(in: context.cgContext)
@@ -184,6 +199,298 @@ final class SquatDiagnosticsTests: XCTestCase {
         button.sendActions(for: .touchUpInside)
         controller.view.layoutIfNeeded()
         XCTAssertTrue(panel.isHidden)
+    }
+
+    @MainActor
+    func testVision3DComparisonKeepsAnglesFromExactlyOneTwoDimensionalFrame() throws {
+        let previousProbeState = Vision3DProbeControl.isEnabled
+        if !previousProbeState { Vision3DProbeControl.toggle() }
+        defer {
+            if !previousProbeState { Vision3DProbeControl.toggle() }
+        }
+
+        let fixture = SquatTrackingFixture()
+        defer { fixture.viewModel.finish() }
+        let standing = SquatPoseFixture.pose(leftAngle: 170, rightAngle: 170)
+        fixture.feed(standing)
+        let lowered = SquatPoseFixture.pose(leftAngle: 90, rightAngle: 110)
+        let probe = Vision3DProbe(
+            twoDimensionalLatencyMs: 13,
+            threeDimensionalLatencyMs: 40,
+            leftKneeAngle: 82,
+            rightKneeAngle: 96,
+            leftHipKneeHeightRatio: 0.12,
+            rightHipKneeHeightRatio: 0.18,
+            sampleCount: 7,
+            observationAvailable: true,
+            twoDimensionalFramesPerSecond: 12.5,
+            threeDimensionalSamplesPerSecond: 6.25
+        )
+        let pairedPose = BodyPose(
+            joints: lowered.joints,
+            aspectRatio: lowered.aspectRatio,
+            rotationAngle: lowered.rotationAngle,
+            vision3DProbe: probe
+        )
+        fixture.viewModel.process(pairedPose)
+        let initialPair = try XCTUnwrap(fixture.viewModel.latestDiagnostics?.vision3DSynchronizedPair)
+        XCTAssertEqual(initialPair.sampleNumber, 7)
+        XCTAssertEqual(initialPair.twoDimensionalLeftAngle ?? 0, 90, accuracy: 0.01)
+        XCTAssertEqual(initialPair.twoDimensionalRightAngle ?? 0, 110, accuracy: 0.01)
+        XCTAssertEqual(initialPair.probe.leftKneeAngle ?? 0, 82, accuracy: 0.01)
+        XCTAssertEqual(initialPair.probe.rightKneeAngle ?? 0, 96, accuracy: 0.01)
+        XCTAssertEqual(fixture.viewModel.latestDiagnostics?.vision3DProbe?.twoDimensionalFramesPerSecond ?? 0, 12.5, accuracy: 0.01)
+
+        fixture.viewModel.process(standing)
+        let retainedPair = try XCTUnwrap(fixture.viewModel.latestDiagnostics?.vision3DSynchronizedPair)
+        XCTAssertEqual(retainedPair.twoDimensionalLeftAngle ?? 0, 90, accuracy: 0.01)
+        XCTAssertEqual(retainedPair.probe.leftKneeAngle ?? 0, 82, accuracy: 0.01)
+        XCTAssertEqual(fixture.viewModel.latestDiagnostics?.analysis?.measuredAngle ?? 0, 170, accuracy: 0.01)
+
+        let panel = SquatDiagnosticsView()
+        panel.render(try XCTUnwrap(fixture.viewModel.latestDiagnostics))
+        let label = try XCTUnwrap(allSubviews(in: panel).first {
+            $0.accessibilityIdentifier == "squatDiagnosticsText"
+        } as? UILabel)
+        XCTAssertTrue(label.text?.contains("Пара 2D Л 90.0° · П 110.0°") == true)
+        XCTAssertTrue(label.text?.contains("Пара 3D Л 82.0° · П 96.0°") == true)
+
+        fixture.viewModel.clearVision3DComparison()
+        XCTAssertNil(fixture.viewModel.latestDiagnostics?.vision3DSynchronizedPair)
+    }
+
+    @MainActor
+    func testExperimentalThreeDimensionalCountDoesNotAffectProductionCountOrHistory() throws {
+        let wasEnabled = Vision3DProbeControl.isEnabled
+        if !wasEnabled { Vision3DProbeControl.toggle() }
+        defer {
+            if !wasEnabled { Vision3DProbeControl.toggle() }
+        }
+        let fixture = SquatTrackingFixture()
+        defer { fixture.viewModel.finish() }
+        let unchangedTwoDimensionalPose = SquatPoseFixture.pose(leftAngle: 170)
+        let movements: [(TimeInterval, Double, Double)] = [
+            (0, 155, 0.96), (0.20, 155, 0.96),
+            (0.40, 70, 0.18), (0.60, 70, 0.18),
+            (0.80, 155, 0.95), (1.00, 155, 0.95)
+        ]
+        for (timestamp, angle, heightRatio) in movements {
+            fixture.clock.currentTime = timestamp
+            let probe = SquatPoseFixture.experimental3DProbe(
+                leftAngle: angle, leftHeight: heightRatio
+            )
+            let pose = BodyPose(
+                joints: unchangedTwoDimensionalPose.joints,
+                aspectRatio: unchangedTwoDimensionalPose.aspectRatio,
+                rotationAngle: unchangedTwoDimensionalPose.rotationAngle,
+                vision3DProbe: probe
+            )
+            fixture.viewModel.process(pose)
+        }
+        let diagnostics = try XCTUnwrap(fixture.viewModel.latestDiagnostics)
+        XCTAssertEqual(diagnostics.vision3DExperimentalCounter.repetitions, 1)
+        XCTAssertEqual(diagnostics.vision3DExperimentalCounter.decision, .counted)
+        XCTAssertEqual(diagnostics.vision3DExperimentalCounter.phase, .standing)
+        XCTAssertEqual(diagnostics.vision3DExperimentalCounter.lastAttempt?.outcome, .counted)
+        XCTAssertEqual(diagnostics.vision3DExperimentalCounter.recentAttempts.count, 1)
+        XCTAssertEqual(fixture.state?.totalRepetitions, 0)
+        XCTAssertEqual(fixture.state?.repetitions, 0)
+
+        let panel = SquatDiagnosticsView()
+        panel.render(diagnostics)
+        let label = try XCTUnwrap(allSubviews(in: panel).first {
+            $0.accessibilityIdentifier == "squatDiagnosticsText"
+        } as? UILabel)
+        XCTAssertTrue(label.text?.contains("3D ТЕСТ счёт: 1") == true)
+        XCTAssertTrue(label.text?.contains("3D база ТК") == true)
+        XCTAssertTrue(label.text?.contains("3D попытка #1:") == true)
+        XCTAssertTrue(label.text?.contains("итог: засчитано") == true)
+
+        fixture.viewModel.pause()
+        XCTAssertEqual(fixture.viewModel.latestDiagnostics?.vision3DExperimentalCounter.repetitions, 1)
+        XCTAssertEqual(fixture.viewModel.latestDiagnostics?.vision3DExperimentalCounter.recentAttempts.count, 1)
+        fixture.viewModel.clearVision3DComparison()
+        XCTAssertEqual(fixture.viewModel.latestDiagnostics?.vision3DExperimentalCounter.repetitions, 0)
+        XCTAssertTrue(fixture.viewModel.latestDiagnostics?.vision3DExperimentalCounter.recentAttempts.isEmpty == true)
+        XCTAssertEqual(fixture.state?.totalRepetitions, 0)
+        fixture.viewModel.finish()
+        let savedHistory = try fixture.store.history()
+        XCTAssertEqual(savedHistory.count, 1)
+        XCTAssertEqual(savedHistory.first?.repetitions, 0)
+    }
+
+    @MainActor
+    func testThreeDimensionalTrackerPrefersReliableTwoDimensionalRightLeg() throws {
+        let wasEnabled = Vision3DProbeControl.isEnabled
+        if !wasEnabled { Vision3DProbeControl.toggle() }
+        defer {
+            if !wasEnabled { Vision3DProbeControl.toggle() }
+        }
+
+        let fixture = SquatTrackingFixture()
+        defer { fixture.viewModel.finish() }
+        let standing = SquatPoseFixture.pose(
+            leftAngle: 170, rightAngle: 170,
+            leftConfidence: 0.61, rightConfidence: 0.94
+        )
+        let probe = SquatPoseFixture.experimental3DProbe(
+            leftAngle: 160, leftHeight: 0.98,
+            rightAngle: 160, rightHeight: 0.96
+        )
+        let paired = BodyPose(
+            joints: standing.joints,
+            aspectRatio: standing.aspectRatio,
+            rotationAngle: standing.rotationAngle,
+            vision3DProbe: probe
+        )
+        fixture.clock.currentTime = 0
+        fixture.viewModel.process(paired)
+        fixture.clock.currentTime = 0.20
+        fixture.viewModel.process(paired)
+
+        let diagnostics = try XCTUnwrap(fixture.viewModel.latestDiagnostics)
+        XCTAssertEqual(diagnostics.analysis?.selectedLeg, .right)
+        XCTAssertEqual(diagnostics.vision3DExperimentalCounter.selectedLeg, .right)
+        XCTAssertEqual(diagnostics.vision3DExperimentalCounter.selectionSource, .twoDimensionalConfidence)
+        XCTAssertEqual(
+            diagnostics.vision3DExperimentalCounter.rightTwoDimensionalConfidence ?? 0,
+            0.94,
+            accuracy: 0.01
+        )
+        XCTAssertEqual(fixture.state?.totalRepetitions, 0)
+
+        let panel = SquatDiagnosticsView()
+        panel.render(diagnostics)
+        let label = try XCTUnwrap(allSubviews(in: panel).first {
+            $0.accessibilityIdentifier == "squatDiagnosticsText"
+        } as? UILabel)
+        XCTAssertTrue(label.text?.contains("3D нога: П") == true)
+        XCTAssertTrue(label.text?.contains("3D выбор: 2D confidence") == true)
+        XCTAssertTrue(label.text?.contains("Л 0.61 П 0.94") == true)
+    }
+
+    @MainActor
+    func testStandingShadowShowsReliable2DReturnWithoutChangingThreeDimensionalCount() throws {
+        let wasEnabled = Vision3DProbeControl.isEnabled
+        if !wasEnabled { Vision3DProbeControl.toggle() }
+        defer {
+            if !wasEnabled { Vision3DProbeControl.toggle() }
+        }
+        let fixture = SquatTrackingFixture()
+        defer { fixture.viewModel.finish() }
+
+        let twoDimensionalStanding = SquatPoseFixture.pose(
+            leftAngle: 170, rightAngle: 170,
+            leftConfidence: 0.49, rightConfidence: 0.93
+        )
+        let samples: [(TimeInterval, Double, Double)] = [
+            (0, 160, 0.96), (0.20, 160, 0.96),
+            (0.40, 75, 0.18), (0.60, 75, 0.18),
+            (0.80, 112, 0.92), (1.00, 112, 0.92)
+        ]
+        for (timestamp, angle, heightRatio) in samples {
+            fixture.clock.currentTime = timestamp
+            let probe = SquatPoseFixture.experimental3DProbe(
+                leftAngle: nil, leftHeight: nil,
+                rightAngle: angle, rightHeight: heightRatio
+            )
+            let combinedPose = BodyPose(
+                joints: twoDimensionalStanding.joints,
+                aspectRatio: twoDimensionalStanding.aspectRatio,
+                rotationAngle: twoDimensionalStanding.rotationAngle,
+                vision3DProbe: probe
+            )
+            fixture.viewModel.process(combinedPose)
+        }
+
+        let diagnostics = try XCTUnwrap(fixture.viewModel.latestDiagnostics)
+        let comparison = diagnostics.vision3DReturnShadow
+        XCTAssertEqual(comparison.selectedLeg, .right)
+        XCTAssertEqual(comparison.agreement, .twoDimensionalStandingOnly)
+        XCTAssertTrue(comparison.isStableDisagreement)
+        XCTAssertGreaterThanOrEqual(comparison.consecutiveDisagreements, 2)
+        XCTAssertEqual(comparison.angleDifference ?? 0, 58, accuracy: 0.1)
+        XCTAssertEqual(diagnostics.vision3DExperimentalCounter.phase, .lowered)
+        XCTAssertEqual(diagnostics.vision3DExperimentalCounter.repetitions, 0)
+        XCTAssertEqual(fixture.state?.totalRepetitions, 0)
+
+        let panel = SquatDiagnosticsView()
+        panel.render(diagnostics)
+        let label = try XCTUnwrap(allSubviews(in: panel).first {
+            $0.accessibilityIdentifier == "squatDiagnosticsText"
+        } as? UILabel)
+        XCTAssertTrue(label.text?.contains("Возврат 2D/3D: 2D стоя, 3D не подтверждает") == true)
+        XCTAssertTrue(label.text?.contains("устойчивое ДА") == true)
+
+        fixture.viewModel.clearVision3DComparison()
+        XCTAssertEqual(
+            fixture.viewModel.latestDiagnostics?.vision3DReturnShadow.agreement,
+            .awaitingSelectedLeg
+        )
+        XCTAssertNil(fixture.viewModel.latestDiagnostics?.vision3DReturnShadow.selectedLeg)
+        XCTAssertEqual(fixture.state?.totalRepetitions, 0)
+    }
+
+    @MainActor
+    func testBilateral3DQualityExcludesExtremeGeometryButPreservesNormalRep() throws {
+        let wasEnabled = Vision3DProbeControl.isEnabled
+        if !wasEnabled { Vision3DProbeControl.toggle() }
+        defer {
+            if !wasEnabled { Vision3DProbeControl.toggle() }
+        }
+        let fixture = SquatTrackingFixture()
+        defer { fixture.viewModel.finish() }
+        let source2D = SquatPoseFixture.pose(
+            leftAngle: 170, rightAngle: 170,
+            leftConfidence: 0.49, rightConfidence: 0.93
+        )
+        let observations: [(TimeInterval, Double, Double)] = [
+            (0, 160, 0.96), (0.20, 160, 0.96),
+            (0.40, 25, -0.04),
+            (0.60, 75, 0.18), (0.80, 75, 0.18),
+            (1.00, 160, 0.96), (1.20, 160, 0.96)
+        ]
+        for (timestamp, angle, heightRatio) in observations {
+            fixture.clock.currentTime = timestamp
+            let probe = SquatPoseFixture.experimental3DProbe(
+                leftAngle: nil, leftHeight: nil,
+                rightAngle: angle, rightHeight: heightRatio
+            )
+            let combinedPose = BodyPose(
+                joints: source2D.joints,
+                aspectRatio: source2D.aspectRatio,
+                rotationAngle: source2D.rotationAngle,
+                vision3DProbe: probe
+            )
+            fixture.viewModel.process(combinedPose)
+            if timestamp == 0.40 {
+                let rejected = try XCTUnwrap(fixture.viewModel.latestDiagnostics)
+                XCTAssertTrue(rejected.vision3DBilateralQuality.lastSampleExcluded)
+                XCTAssertEqual(rejected.vision3DBilateralQuality.excludedExperimentalSamples, 1)
+                XCTAssertEqual(rejected.vision3DExperimentalCounter.phase, .standing)
+                XCTAssertEqual(rejected.vision3DExperimentalCounter.repetitions, 0)
+            }
+        }
+
+        let diagnostics = try XCTUnwrap(fixture.viewModel.latestDiagnostics)
+        XCTAssertEqual(diagnostics.vision3DExperimentalCounter.repetitions, 1)
+        XCTAssertEqual(diagnostics.vision3DExperimentalCounter.lastAttempt?.outcome, .counted)
+        XCTAssertEqual(diagnostics.vision3DBilateralQuality.excludedExperimentalSamples, 1)
+        XCTAssertFalse(diagnostics.vision3DBilateralQuality.lastSampleExcluded)
+        XCTAssertEqual(fixture.state?.totalRepetitions, 0)
+
+        let panel = SquatDiagnosticsView()
+        panel.render(diagnostics)
+        let label = try XCTUnwrap(allSubviews(in: panel).first {
+            $0.accessibilityIdentifier == "squatDiagnosticsText"
+        } as? UILabel)
+        XCTAssertTrue(label.text?.contains("Обе ноги 3D:") == true)
+        XCTAssertTrue(label.text?.contains("3D меж ног:") == true)
+        XCTAssertTrue(label.text?.contains("3D фильтр: нет · всего 1") == true)
+
+        fixture.viewModel.clearVision3DComparison()
+        XCTAssertEqual(fixture.viewModel.latestDiagnostics?.vision3DBilateralQuality.excludedExperimentalSamples, 0)
+        XCTAssertEqual(fixture.state?.totalRepetitions, 0)
     }
 
     @MainActor

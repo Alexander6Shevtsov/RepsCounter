@@ -70,7 +70,56 @@ final class SquatDiagnosticsView: UIVisualEffectView {
             ? depthOutcomeText(attempt?.outcome)
             : "в ходе"
         let attemptNumber = attempt.map { "#\($0.number)" } ?? "—"
+        let enabled = Vision3DProbeControl.isEnabled
+        let currentProbe = diagnostics.vision3DProbe
+        let synchronizedPair = enabled ? diagnostics.vision3DSynchronizedPair : nil
+        let pairedProbe = synchronizedPair?.probe
+        let threeDimensionalStatus = !enabled ? "выкл" : (synchronizedPair == nil ? "ожидание" : (pairedProbe?.observationAvailable == true ? "есть" : "нет позы"))
+        let experimental = diagnostics.vision3DExperimentalCounter
+        let standingShadow = diagnostics.vision3DReturnShadow
+        let bilateralQuality = diagnostics.vision3DBilateralQuality
+        let experimentalAttempt = experimental.activeAttempt ?? experimental.lastAttempt
+        let experimentalAttemptState = experimental.activeAttempt != nil
+            ? "в ходе" : experimentalOutcomeText(experimentalAttempt?.outcome)
+        let experimentalPhase: String
+        switch experimental.phase {
+        case .seekingStanding: experimentalPhase = "ожидает стоя"
+        case .standing: experimentalPhase = "стоя"
+        case .lowered: experimentalPhase = "внизу"
+        }
+        let experimentalLeg: String
+        switch experimental.selectedLeg {
+        case .left: experimentalLeg = "Л"
+        case .right: experimentalLeg = "П"
+        case nil: experimentalLeg = "—"
+        }
+        let pairedLeg: String
+        switch synchronizedPair?.selectedLeg {
+        case .left: pairedLeg = "Л"
+        case .right: pairedLeg = "П"
+        case nil: pairedLeg = "—"
+        }
         let lines = [
+            "3D ТЕСТ счёт: \(enabled ? String(experimental.repetitions) : "—") · \(experimentalPhase)",
+            "3D нога: \(experimentalLeg) · \(experimentalDecisionText(experimental.decision))",
+            "3D выбор: \(experimentalSelectionText(experimental.selectionSource)) · 2D Л \(confidenceText(experimental.leftTwoDimensionalConfidence)) П \(confidenceText(experimental.rightTwoDimensionalConfidence))",
+            "Обе ноги 3D: Л \(legQualityText(bilateralQuality.leftLeg?.status)) · П \(legQualityText(bilateralQuality.rightLeg?.status))",
+            "3D меж ног: угол \(angleText(bilateralQuality.threeDimensionalAngleDifference)) · ТК \(hipKneeText(bilateralQuality.threeDimensionalHeightDifference)) · подряд \(bilateralQuality.consecutiveBilateralDisagreements)/2",
+            "3D скачок: Л угол \(angleText(bilateralQuality.leftLeg?.previousAngleChange)) ТК \(hipKneeText(bilateralQuality.leftLeg?.previousHeightChange)) · П угол \(angleText(bilateralQuality.rightLeg?.previousAngleChange)) ТК \(hipKneeText(bilateralQuality.rightLeg?.previousHeightChange))",
+            "3D фильтр: \(bilateralQuality.lastSampleExcluded ? "отклонён кадр" : "нет") · всего \(bilateralQuality.excludedExperimentalSamples)",
+            "3D база ТК \(hipKneeText(experimental.standingHipKneeRatio)) · спуск \(hipKneeText(experimental.relativeDescent)) / 0.55 · сбросы \(experimental.interruptions)",
+            "3D попытка #\(experimentalAttempt?.number ?? 0): мин угол \(angleText(experimentalAttempt?.minimumKneeAngle)) · пик спуска \(hipKneeText(experimentalAttempt?.maximumRelativeDescent))",
+            "3D внизу: \(threeDimensionalDurationText(experimentalAttempt?.loweredDuration)) / 5 с · итог: \(experimentalAttemptState) · история \(experimental.recentAttempts.count)/20",
+            "Возврат 2D/3D: \(shadowAgreementText(standingShadow.agreement))",
+            "Расхождение стоя: \(standingShadow.consecutiveDisagreements)/2 · устойчивое \(standingShadow.isStableDisagreement ? "ДА" : "нет")",
+            "Кадр #\(standingShadow.sampleNumber): угол 2D \(angleText(standingShadow.twoDimensionalAngle)) · 3D \(angleText(standingShadow.threeDimensionalAngle)) · Δ \(angleText(standingShadow.angleDifference))",
+            "ТК: 2D \(hipKneeText(standingShadow.twoDimensionalHipKneeRatio)) · 3D \(hipKneeText(standingShadow.threeDimensionalHipKneeRatio)) · база \(hipKneeText(standingShadow.standingReference))",
+            "Vision 3D: \(threeDimensionalStatus) · пара #\(synchronizedPair?.sampleNumber ?? 0)",
+            "Скорость: 2D \(rateText(currentProbe?.twoDimensionalFramesPerSecond)) · 3D \(rateText(enabled ? currentProbe?.threeDimensionalSamplesPerSecond : nil))",
+            "Время: 2D сейчас \(latencyText(diagnostics.vision2DLatencyMs)) · 3D пары \(latencyText(pairedProbe?.threeDimensionalLatencyMs))",
+            "Пара 2D Л \(angleText(synchronizedPair?.twoDimensionalLeftAngle)) · П \(angleText(synchronizedPair?.twoDimensionalRightAngle))",
+            "Пара 3D Л \(angleText(pairedProbe?.leftKneeAngle)) · П \(angleText(pairedProbe?.rightKneeAngle))",
+            "ТК пары: 2D[\(pairedLeg)] \(hipKneeText(synchronizedPair?.twoDimensionalSelectedHeightRatio)) · 3D Л \(hipKneeText(pairedProbe?.leftHipKneeHeightRatio)) П \(hipKneeText(pairedProbe?.rightHipKneeHeightRatio))",
             "Сбросы И:\(diagnostics.measurementLossCount) Н:\(diagnostics.legChangeCount) Г:\(diagnostics.observationGapCount)",
             "raw \(angleText(analysis?.measuredAngle)) · EMA \(angleText(analysis?.smoothedAngle))",
             "Таз−колено: \(hipKneeText(analysis?.hipKneeHeightRatio)) бедра",
@@ -84,6 +133,90 @@ final class SquatDiagnosticsView: UIVisualEffectView {
             "Последняя потеря: \(measurementIssueText(diagnostics.latestMeasurementIssue))"
         ]
         textLabel.text = lines.joined(separator: "\n")
+    }
+
+    private func legQualityText(_ status: Vision3DLegQualityStatus?) -> String {
+        switch status {
+        case .unavailable: return "нет 3D"
+        case .noReliableTwoDimensionalLeg: return "2D недоступна"
+        case .largeModelDifference: return "2D/3D расходятся"
+        case .abruptThreeDimensionalChange: return "скачок 3D"
+        case .noWarning: return "без флагов"
+        case nil: return "ожидание"
+        }
+    }
+
+    private func shadowAgreementText(_ agreement: Vision3DStandingAgreement) -> String {
+        switch agreement {
+        case .awaitingSelectedLeg: return "ожидается выбор 3D-ноги"
+        case .awaitingStandingReference: return "ожидается калибровка стоя"
+        case .insufficientTwoDimensionalData: return "не хватает 2D данных той же ноги"
+        case .insufficientThreeDimensionalData: return "не хватает 3D данных"
+        case .bothStanding: return "обе модели видят стойку"
+        case .bothMoving: return "обе модели не видят стойку"
+        case .twoDimensionalStandingOnly: return "2D стоя, 3D не подтверждает"
+        case .threeDimensionalStandingOnly: return "3D стоя, 2D не подтверждает"
+        }
+    }
+
+    private func confidenceText(_ confidence: Double?) -> String {
+        guard let confidence, confidence.isFinite else { return "—" }
+        return String(format: "%.2f", confidence)
+    }
+
+    private func experimentalSelectionText(_ source: Vision3DLegSelectionSource) -> String {
+        switch source {
+        case .awaitingEvidence: return "ожидание"
+        case .twoDimensionalConfidence: return "2D confidence"
+        case .singleThreeDimensionalLeg: return "единственная 3D"
+        }
+    }
+
+    private func threeDimensionalDurationText(_ duration: TimeInterval?) -> String {
+        guard let duration, duration.isFinite else { return "—" }
+        return String(format: "%.1f с", duration)
+    }
+
+    private func experimentalOutcomeText(_ outcome: Vision3DAttemptOutcome?) -> String {
+        switch outcome {
+        case .counted: return "засчитано"
+        case .returnedWithoutDepth: return "возврат без глубины"
+        case .loweredTimeout: return "тайм-аут нижней фазы"
+        case .invalidMeasurement: return "нет достоверной 3D позы"
+        case .observationGap: return "разрыв 3D наблюдений"
+        case .trackingReset: return "сброс отслеживания"
+        case nil: return "—"
+        }
+    }
+
+    private func experimentalDecisionText(_ decision: Vision3DExperimentalDecision) -> String {
+        switch decision {
+        case .waitingForSample: return "ожидание 3D"
+        case .awaitingLegEvidence: return "нет однозначной ноги"
+        case .awaitingStanding: return "нужно исходное стоя"
+        case .confirmingStanding: return "подтверждение стоя"
+        case .standingConfirmed: return "стоя подтверждено"
+        case .awaitingDepth: return "ждём сгибание"
+        case .insufficientDescent: return "таз опущен недостаточно"
+        case .confirmingDepth: return "подтверждение глубины"
+        case .loweredConfirmed: return "глубина подтверждена"
+        case .awaitingReturn: return "ждём возврат"
+        case .confirmingReturn: return "подтверждение возврата"
+        case .counted: return "повторение засчитано"
+        case .invalidMeasurement: return "нет надёжной 3D позы"
+        case .observationGap: return "разрыв 3D измерений"
+        case .loweredTimeout: return "тайм-аут нижней фазы (>5 с)"
+        }
+    }
+
+    private func rateText(_ rate: Double?) -> String {
+        guard let rate, rate.isFinite, rate >= 0 else { return "—" }
+        return String(format: "%.1f/с", rate)
+    }
+
+    private func latencyText(_ duration: Double?) -> String {
+        guard let duration, duration.isFinite else { return "—" }
+        return String(format: "%.1f мс", duration)
     }
 
     private func angleText(_ angle: Double?) -> String {

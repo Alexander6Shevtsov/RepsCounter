@@ -7,6 +7,9 @@
 
 import CoreGraphics
 import XCTest
+#if DEBUG
+import simd
+#endif
 @testable import RepsCounter
 
 final class PoseAnalyzerTests: XCTestCase {
@@ -210,6 +213,985 @@ final class PoseAnalyzerTests: XCTestCase {
         XCTAssertGreaterThan(angled.measuredAngle ?? 0, 105)
         XCTAssertLessThanOrEqual(side.measuredAngle ?? 180, 105)
     }
+
+    #if DEBUG
+    func testThreeDimensionalAngleIsStableUnderHorizontalCameraRotation() throws {
+        let kneePosition = SIMD3<Float>(0, 0, 0)
+        let anklePosition = SIMD3<Float>(0, -1, 0)
+        let yawSamples: [Float] = [0, Float.pi / 4, Float.pi / 2]
+        for yawRadians in yawSamples {
+            let hipPosition = SIMD3<Float>(cos(yawRadians), 0, sin(yawRadians))
+            let metrics = try XCTUnwrap(Vision3DGeometry.metrics(
+                hipPosition: hipPosition,
+                kneePosition: kneePosition,
+                anklePosition: anklePosition
+            ))
+            XCTAssertEqual(metrics.angle, 90, accuracy: 0.01)
+            XCTAssertEqual(metrics.heightRatio, 0, accuracy: 0.01)
+        }
+    }
+
+    func testThreeDimensionalVerticalGeometryAndInvalidJoints() throws {
+        let kneePosition = SIMD3<Float>(0, 0, 0)
+        let hipPosition = SIMD3<Float>(0, 1, 0)
+        let anklePosition = SIMD3<Float>(0, -1, 0)
+        let metrics = try XCTUnwrap(Vision3DGeometry.metrics(
+            hipPosition: hipPosition,
+            kneePosition: kneePosition,
+            anklePosition: anklePosition
+        ))
+        XCTAssertEqual(metrics.angle, 180, accuracy: 0.01)
+        XCTAssertEqual(metrics.heightRatio, 1, accuracy: 0.01)
+        XCTAssertNil(Vision3DGeometry.metrics(
+            hipPosition: kneePosition,
+            kneePosition: kneePosition,
+            anklePosition: anklePosition
+        ))
+        XCTAssertNil(Vision3DGeometry.metrics(
+            hipPosition: SIMD3<Float>(Float.nan, 0, 0),
+            kneePosition: kneePosition,
+            anklePosition: anklePosition
+        ))
+    }
+    func testThreeDimensionalSamplerTargetsFiveToTenSamplesPerSecond() {
+        var sampler = Vision3DSamplingController()
+        let timestamp = ContinuousClock.now
+        for offset in 0..<25 {
+            sampler.recordTwoDimensionalFrame(at: timestamp.advanced(by: .milliseconds(offset * 80)))
+        }
+        XCTAssertEqual(sampler.twoDimensionalFramesPerSecond ?? 0, 12.5, accuracy: 0.01)
+
+        XCTAssertTrue(sampler.shouldSampleThreeDimensional(at: timestamp, enabled: true))
+        sampler.recordThreeDimensionalSample(at: timestamp, latencyMilliseconds: 40)
+
+        XCTAssertFalse(sampler.shouldSampleThreeDimensional(
+            at: timestamp.advanced(by: .milliseconds(80)),
+            enabled: true
+        ))
+        let secondSample = timestamp.advanced(by: .milliseconds(160))
+        XCTAssertTrue(sampler.shouldSampleThreeDimensional(at: secondSample, enabled: true))
+        sampler.recordThreeDimensionalSample(at: secondSample, latencyMilliseconds: 40)
+
+        XCTAssertFalse(sampler.shouldSampleThreeDimensional(
+            at: timestamp.advanced(by: .milliseconds(240)),
+            enabled: true
+        ))
+        let thirdSample = timestamp.advanced(by: .milliseconds(320))
+        XCTAssertTrue(sampler.shouldSampleThreeDimensional(at: thirdSample, enabled: true))
+        sampler.recordThreeDimensionalSample(at: thirdSample, latencyMilliseconds: 40)
+
+        XCTAssertEqual(sampler.sampleCount, 3)
+        XCTAssertEqual(sampler.threeDimensionalSamplesPerSecond ?? 0, 6.25, accuracy: 0.01)
+    }
+
+    func testSlowVisionThreeDimensionalRequestIncreasesSamplingCooldown() {
+        var sampler = Vision3DSamplingController()
+        let timestamp = ContinuousClock.now
+        XCTAssertTrue(sampler.shouldSampleThreeDimensional(at: timestamp, enabled: true))
+        sampler.recordThreeDimensionalSample(at: timestamp, latencyMilliseconds: 130)
+
+        XCTAssertFalse(sampler.shouldSampleThreeDimensional(
+            at: timestamp.advanced(by: .milliseconds(200)),
+            enabled: true
+        ))
+        XCTAssertFalse(sampler.shouldSampleThreeDimensional(
+            at: timestamp.advanced(by: .milliseconds(259)),
+            enabled: true
+        ))
+        XCTAssertTrue(sampler.shouldSampleThreeDimensional(
+            at: timestamp.advanced(by: .milliseconds(260)),
+            enabled: true
+        ))
+        sampler.recordThreeDimensionalSample(
+            at: timestamp.advanced(by: .milliseconds(260)),
+            latencyMilliseconds: 130
+        )
+        XCTAssertEqual(sampler.threeDimensionalSamplesPerSecond ?? 0, 1 / 0.26, accuracy: 0.01)
+
+        XCTAssertFalse(sampler.shouldSampleThreeDimensional(
+            at: timestamp.advanced(by: .milliseconds(270)),
+            enabled: false
+        ))
+        XCTAssertEqual(sampler.sampleCount, 0)
+        XCTAssertNil(sampler.threeDimensionalSamplesPerSecond)
+        XCTAssertTrue(sampler.shouldSampleThreeDimensional(
+            at: timestamp.advanced(by: .milliseconds(271)),
+            enabled: true
+        ))
+    }
+
+    func testExperimentalThreeDimensionalCounterCountsTwoCompleteCyclesOnly() {
+        var counter = Vision3DExperimentalCounter()
+        let upright = SquatPoseFixture.experimental3DProbe(leftAngle: 160, leftHeight: 0.96)
+        let deep = SquatPoseFixture.experimental3DProbe(leftAngle: 75, leftHeight: 0.18)
+        XCTAssertFalse(counter.process(upright, at: 0))
+        XCTAssertFalse(counter.process(upright, at: 0.20))
+        XCTAssertEqual(counter.phase, .standing)
+        XCTAssertEqual(counter.standingHipKneeRatio ?? 0, 0.96, accuracy: 0.001)
+        XCTAssertFalse(counter.process(deep, at: 0.40))
+        XCTAssertFalse(counter.process(deep, at: 0.60))
+        XCTAssertEqual(counter.phase, .lowered)
+        XCTAssertFalse(counter.process(upright, at: 0.80))
+        XCTAssertTrue(counter.process(upright, at: 1.00))
+        XCTAssertEqual(counter.repetitions, 1)
+        XCTAssertFalse(counter.process(upright, at: 1.20))
+        XCTAssertFalse(counter.process(upright, at: 1.40))
+        XCTAssertEqual(counter.repetitions, 1)
+        XCTAssertFalse(counter.process(deep, at: 1.60))
+        XCTAssertFalse(counter.process(deep, at: 1.80))
+        XCTAssertFalse(counter.process(upright, at: 2.00))
+        XCTAssertTrue(counter.process(upright, at: 2.20))
+        XCTAssertEqual(counter.repetitions, 2)
+        XCTAssertEqual(counter.interruptions, 0)
+    }
+
+    func testExperimentalThreeDimensionalRejectsPartialDespiteSmallKneeAngle() {
+        var counter = Vision3DExperimentalCounter()
+        let upright = SquatPoseFixture.experimental3DProbe(leftAngle: 155, leftHeight: 0.96)
+        let partial = SquatPoseFixture.experimental3DProbe(leftAngle: 99.5, leftHeight: 0.59)
+        XCTAssertFalse(counter.process(upright, at: 0))
+        XCTAssertFalse(counter.process(upright, at: 0.20))
+        for timestamp in [0.40, 0.60, 0.80] {
+            XCTAssertFalse(counter.process(partial, at: timestamp))
+            XCTAssertEqual(counter.decision, .insufficientDescent)
+        }
+        XCTAssertEqual(counter.phase, .standing)
+        XCTAssertEqual(counter.relativeDescent ?? 0, 0.37, accuracy: 0.001)
+        XCTAssertFalse(counter.process(upright, at: 1.00))
+        XCTAssertFalse(counter.process(upright, at: 1.20))
+        XCTAssertEqual(counter.repetitions, 0)
+    }
+
+    func testExperimentalThreeDimensionalLossCannotCompleteOldSquat() {
+        var counter = Vision3DExperimentalCounter()
+        let upright = SquatPoseFixture.experimental3DProbe(leftAngle: 155, leftHeight: 0.96)
+        let deep = SquatPoseFixture.experimental3DProbe(leftAngle: 70, leftHeight: 0.18)
+        let unavailable = SquatPoseFixture.experimental3DProbe(
+            leftAngle: nil, leftHeight: nil, available: false
+        )
+        _ = counter.process(upright, at: 0)
+        _ = counter.process(upright, at: 0.20)
+        _ = counter.process(deep, at: 0.40)
+        _ = counter.process(deep, at: 0.60)
+        XCTAssertEqual(counter.phase, .lowered)
+        XCTAssertFalse(counter.process(unavailable, at: 0.80))
+        XCTAssertEqual(counter.decision, .invalidMeasurement)
+        XCTAssertEqual(counter.phase, .seekingStanding)
+        XCTAssertEqual(counter.interruptions, 1)
+        XCTAssertFalse(counter.process(upright, at: 1.00))
+        XCTAssertFalse(counter.process(upright, at: 1.20))
+        XCTAssertEqual(counter.phase, .standing)
+        XCTAssertEqual(counter.repetitions, 0)
+        _ = counter.process(deep, at: 1.40)
+        _ = counter.process(deep, at: 1.60)
+        XCTAssertFalse(counter.process(upright, at: 1.80))
+        XCTAssertTrue(counter.process(upright, at: 2.00))
+        XCTAssertEqual(counter.repetitions, 1)
+    }
+
+    func testExperimentalThreeDimensionalGapAndLegChangeResetMovement() {
+        var counter = Vision3DExperimentalCounter()
+        let uprightLeft = SquatPoseFixture.experimental3DProbe(leftAngle: 155, leftHeight: 0.96)
+        let deepLeft = SquatPoseFixture.experimental3DProbe(leftAngle: 70, leftHeight: 0.15)
+        let uprightRight = SquatPoseFixture.experimental3DProbe(
+            leftAngle: nil, leftHeight: nil, rightAngle: 150, rightHeight: 0.96
+        )
+        _ = counter.process(uprightLeft, at: 0)
+        _ = counter.process(uprightLeft, at: 0.20)
+        _ = counter.process(deepLeft, at: 0.40)
+        _ = counter.process(deepLeft, at: 0.60)
+        XCTAssertFalse(counter.process(uprightRight, at: 0.80))
+        XCTAssertEqual(counter.phase, .seekingStanding)
+        XCTAssertEqual(counter.interruptions, 1)
+        XCTAssertFalse(counter.process(uprightRight, at: 1.00))
+        XCTAssertFalse(counter.process(uprightRight, at: 1.20))
+        XCTAssertEqual(counter.selectedLeg, .right)
+        XCTAssertEqual(counter.phase, .standing)
+        XCTAssertEqual(counter.repetitions, 0)
+        counter.expire(at: 2.01)
+        XCTAssertEqual(counter.phase, .seekingStanding)
+        XCTAssertEqual(counter.decision, .observationGap)
+        XCTAssertEqual(counter.interruptions, 2)
+        XCTAssertFalse(counter.process(uprightRight, at: 2.20))
+        XCTAssertFalse(counter.process(uprightRight, at: 2.40))
+        XCTAssertEqual(counter.repetitions, 0)
+    }
+
+    func testExperimentalThreeDimensionalRequiresDistinctTimedSamples() {
+        var counter = Vision3DExperimentalCounter()
+        let upright = SquatPoseFixture.experimental3DProbe(leftAngle: 155, leftHeight: 0.96)
+        XCTAssertFalse(counter.process(upright, at: 0))
+        XCTAssertFalse(counter.process(upright, at: 0))
+        XCTAssertFalse(counter.process(upright, at: 0.05))
+        XCTAssertEqual(counter.phase, .seekingStanding)
+        XCTAssertFalse(counter.process(upright, at: 0.20))
+        XCTAssertEqual(counter.phase, .standing)
+        let skipped = SquatPoseFixture.experimental3DProbe(
+            leftAngle: nil, leftHeight: nil, sampled: false
+        )
+        XCTAssertFalse(counter.process(skipped, at: 0.30))
+        XCTAssertEqual(counter.phase, .standing)
+        XCTAssertFalse(counter.process(
+            SquatPoseFixture.experimental3DProbe(leftAngle: .nan, leftHeight: 0.2),
+            at: 0.40
+        ))
+        XCTAssertEqual(counter.phase, .seekingStanding)
+        XCTAssertEqual(counter.decision, .invalidMeasurement)
+    }
+
+    func testThreeDimensionalSelectsReliableRightLegInsteadOfDefaultLeft() {
+        var counter = Vision3DExperimentalCounter()
+        let standing = SquatPoseFixture.experimental3DProbe(
+            leftAngle: 165, leftHeight: 0.98, rightAngle: 165, rightHeight: 0.96
+        )
+        XCTAssertFalse(counter.process(
+            standing, at: 0,
+            leftTwoDimensionalConfidence: 0.61,
+            rightTwoDimensionalConfidence: 0.93,
+            preferredTwoDimensionalLeg: .right
+        ))
+        XCTAssertFalse(counter.process(
+            standing, at: 0.20,
+            leftTwoDimensionalConfidence: 0.62,
+            rightTwoDimensionalConfidence: 0.92,
+            preferredTwoDimensionalLeg: .right
+        ))
+        XCTAssertEqual(counter.selectedLeg, .right)
+        XCTAssertEqual(counter.phase, .standing)
+        XCTAssertEqual(counter.selectionSource, .twoDimensionalConfidence)
+        XCTAssertEqual(counter.rightTwoDimensionalConfidence ?? 0, 0.92, accuracy: 0.001)
+    }
+
+    func testThreeDimensionalLocksChosenLegDuringConfidenceChanges() {
+        var counter = Vision3DExperimentalCounter()
+        let standing = SquatPoseFixture.experimental3DProbe(
+            leftAngle: 165, leftHeight: 0.98, rightAngle: 165, rightHeight: 0.96
+        )
+        let lowered = SquatPoseFixture.experimental3DProbe(
+            leftAngle: 125, leftHeight: 0.50, rightAngle: 72, rightHeight: 0.18
+        )
+        _ = counter.process(
+            standing, at: 0,
+            leftTwoDimensionalConfidence: 0.64,
+            rightTwoDimensionalConfidence: 0.91,
+            preferredTwoDimensionalLeg: .right
+        )
+        _ = counter.process(
+            standing, at: 0.20,
+            leftTwoDimensionalConfidence: 0.64,
+            rightTwoDimensionalConfidence: 0.91,
+            preferredTwoDimensionalLeg: .right
+        )
+        XCTAssertEqual(counter.selectedLeg, .right)
+        XCTAssertFalse(counter.process(
+            lowered, at: 0.40,
+            leftTwoDimensionalConfidence: 0.94,
+            rightTwoDimensionalConfidence: 0.56,
+            preferredTwoDimensionalLeg: .left
+        ))
+        XCTAssertFalse(counter.process(
+            lowered, at: 0.60,
+            leftTwoDimensionalConfidence: 0.94,
+            rightTwoDimensionalConfidence: 0.56,
+            preferredTwoDimensionalLeg: .left
+        ))
+        XCTAssertEqual(counter.phase, .lowered)
+        XCTAssertEqual(counter.selectedLeg, .right)
+        XCTAssertEqual(counter.selectionSource, .twoDimensionalConfidence)
+        XCTAssertFalse(counter.process(standing, at: 0.80))
+        XCTAssertTrue(counter.process(standing, at: 1.00))
+        XCTAssertEqual(counter.repetitions, 1)
+    }
+
+    func testThreeDimensionalDoesNotArbitrarilyChooseLeftWithoutEvidence() {
+        var counter = Vision3DExperimentalCounter()
+        let standing = SquatPoseFixture.experimental3DProbe(
+            leftAngle: 165, leftHeight: 0.96, rightAngle: 165, rightHeight: 0.98
+        )
+        XCTAssertFalse(counter.process(standing, at: 0))
+        XCTAssertFalse(counter.process(standing, at: 0.20))
+        XCTAssertNil(counter.selectedLeg)
+        XCTAssertEqual(counter.decision, .awaitingLegEvidence)
+        XCTAssertEqual(counter.repetitions, 0)
+        XCTAssertFalse(counter.process(
+            standing, at: 0.40,
+            leftTwoDimensionalConfidence: 0.72,
+            rightTwoDimensionalConfidence: 0.91
+        ))
+        XCTAssertFalse(counter.process(
+            standing, at: 0.60,
+            leftTwoDimensionalConfidence: 0.73,
+            rightTwoDimensionalConfidence: 0.92
+        ))
+        XCTAssertEqual(counter.selectedLeg, .right)
+        XCTAssertEqual(counter.selectionSource, .twoDimensionalConfidence)
+        XCTAssertEqual(counter.phase, .standing)
+    }
+
+    func testThreeDimensionalAmbiguousConfidenceWaitsForStableChoice() {
+        var counter = Vision3DExperimentalCounter()
+        let standing = SquatPoseFixture.experimental3DProbe(
+            leftAngle: 165, leftHeight: 0.96, rightAngle: 165, rightHeight: 0.96
+        )
+        XCTAssertFalse(counter.process(
+            standing, at: 0,
+            leftTwoDimensionalConfidence: 0.82,
+            rightTwoDimensionalConfidence: 0.80
+        ))
+        XCTAssertNil(counter.selectedLeg)
+        XCTAssertEqual(counter.decision, .awaitingLegEvidence)
+        _ = counter.process(
+            standing, at: 0.20,
+            leftTwoDimensionalConfidence: 0.91,
+            rightTwoDimensionalConfidence: 0.70
+        )
+        _ = counter.process(
+            standing, at: 0.40,
+            leftTwoDimensionalConfidence: 0.89,
+            rightTwoDimensionalConfidence: 0.72
+        )
+        XCTAssertEqual(counter.selectedLeg, .left)
+        XCTAssertEqual(counter.phase, .standing)
+    }
+
+    func testThreeDimensionalRefusesOppositeLegToFinishLoweredMovement() {
+        var counter = Vision3DExperimentalCounter()
+        let standing = SquatPoseFixture.experimental3DProbe(
+            leftAngle: 160, leftHeight: 0.96, rightAngle: 160, rightHeight: 0.96
+        )
+        let lowered = SquatPoseFixture.experimental3DProbe(
+            leftAngle: 85, leftHeight: 0.50, rightAngle: 78, rightHeight: 0.16
+        )
+        _ = counter.process(
+            standing, at: 0,
+            leftTwoDimensionalConfidence: 0.65,
+            rightTwoDimensionalConfidence: 0.93,
+            preferredTwoDimensionalLeg: .right
+        )
+        _ = counter.process(
+            standing, at: 0.20,
+            leftTwoDimensionalConfidence: 0.65,
+            rightTwoDimensionalConfidence: 0.93,
+            preferredTwoDimensionalLeg: .right
+        )
+        _ = counter.process(lowered, at: 0.40)
+        _ = counter.process(lowered, at: 0.60)
+        XCTAssertEqual(counter.phase, .lowered)
+        let onlyLeft = SquatPoseFixture.experimental3DProbe(
+            leftAngle: 160, leftHeight: 0.96
+        )
+        XCTAssertFalse(counter.process(
+            onlyLeft, at: 0.80,
+            leftTwoDimensionalConfidence: 0.94,
+            preferredTwoDimensionalLeg: .left
+        ))
+        XCTAssertEqual(counter.phase, .seekingStanding)
+        XCTAssertNil(counter.selectedLeg)
+        XCTAssertEqual(counter.interruptions, 1)
+        XCTAssertFalse(counter.process(
+            onlyLeft, at: 1.00,
+            leftTwoDimensionalConfidence: 0.94,
+            preferredTwoDimensionalLeg: .left
+        ))
+        XCTAssertFalse(counter.process(
+            onlyLeft, at: 1.20,
+            leftTwoDimensionalConfidence: 0.94,
+            preferredTwoDimensionalLeg: .left
+        ))
+        XCTAssertEqual(counter.selectedLeg, .left)
+        XCTAssertEqual(counter.phase, .standing)
+        XCTAssertEqual(counter.repetitions, 0)
+    }
+
+    func testThreeDimensionalPreferredLegChangeRestartsStandingConfirmation() {
+        var counter = Vision3DExperimentalCounter()
+        let standing = SquatPoseFixture.experimental3DProbe(
+            leftAngle: 165, leftHeight: 0.96, rightAngle: 165, rightHeight: 0.96
+        )
+        XCTAssertFalse(counter.process(
+            standing, at: 0,
+            leftTwoDimensionalConfidence: 0.91,
+            rightTwoDimensionalConfidence: 0.70,
+            preferredTwoDimensionalLeg: .left
+        ))
+        XCTAssertFalse(counter.process(
+            standing, at: 0.20,
+            leftTwoDimensionalConfidence: 0.70,
+            rightTwoDimensionalConfidence: 0.91,
+            preferredTwoDimensionalLeg: .right
+        ))
+        XCTAssertNil(counter.selectedLeg)
+        XCTAssertEqual(counter.phase, .seekingStanding)
+        XCTAssertFalse(counter.process(
+            standing, at: 0.40,
+            leftTwoDimensionalConfidence: 0.70,
+            rightTwoDimensionalConfidence: 0.91,
+            preferredTwoDimensionalLeg: .right
+        ))
+        XCTAssertEqual(counter.selectedLeg, .right)
+        XCTAssertEqual(counter.phase, .standing)
+    }
+
+    func testThreeDimensionalDoesNotUseOnlyLegContradictedByReliableTwoDimensionalSide() {
+        var counter = Vision3DExperimentalCounter()
+        let onlyLeft = SquatPoseFixture.experimental3DProbe(
+            leftAngle: 165, leftHeight: 0.96
+        )
+        XCTAssertFalse(counter.process(
+            onlyLeft, at: 0,
+            rightTwoDimensionalConfidence: 0.94,
+            preferredTwoDimensionalLeg: .right
+        ))
+        XCTAssertNil(counter.selectedLeg)
+        XCTAssertEqual(counter.decision, .awaitingLegEvidence)
+
+        let onlyRight = SquatPoseFixture.experimental3DProbe(
+            leftAngle: nil, leftHeight: nil, rightAngle: 165, rightHeight: 0.96
+        )
+        XCTAssertFalse(counter.process(
+            onlyRight, at: 0.20,
+            rightTwoDimensionalConfidence: 0.94,
+            preferredTwoDimensionalLeg: .right
+        ))
+        XCTAssertFalse(counter.process(
+            onlyRight, at: 0.40,
+            rightTwoDimensionalConfidence: 0.94,
+            preferredTwoDimensionalLeg: .right
+        ))
+        XCTAssertEqual(counter.selectedLeg, .right)
+        XCTAssertEqual(counter.phase, .standing)
+        XCTAssertEqual(counter.repetitions, 0)
+    }
+
+    func testThreeDimensionalExpiredLoweredPhaseCannotCountLateReturn() {
+        var counter = Vision3DExperimentalCounter()
+        let standing = SquatPoseFixture.experimental3DProbe(leftAngle: 160, leftHeight: 0.96)
+        let lowered = SquatPoseFixture.experimental3DProbe(leftAngle: 72, leftHeight: 0.18)
+        _ = counter.process(standing, at: 0)
+        _ = counter.process(standing, at: 0.20)
+        _ = counter.process(lowered, at: 0.40)
+        _ = counter.process(lowered, at: 0.60)
+        XCTAssertEqual(counter.phase, .lowered)
+
+        for sampleNumber in 4...27 {
+            let timestamp = Double(sampleNumber) * 0.20
+            XCTAssertFalse(counter.process(lowered, at: timestamp))
+        }
+        XCTAssertEqual(counter.phase, .lowered)
+        XCTAssertFalse(counter.process(standing, at: 5.81))
+        XCTAssertEqual(counter.phase, .seekingStanding)
+        XCTAssertEqual(counter.decision, .loweredTimeout)
+        XCTAssertEqual(counter.repetitions, 0)
+        XCTAssertEqual(counter.interruptions, 1)
+        XCTAssertEqual(counter.lastAttempt?.outcome, .loweredTimeout)
+        XCTAssertEqual(counter.lastAttempt?.number, 1)
+        XCTAssertEqual(counter.lastAttempt?.selectedLeg, .left)
+        XCTAssertEqual(counter.lastAttempt?.minimumKneeAngle ?? 0, 72, accuracy: 0.01)
+        XCTAssertEqual(counter.lastAttempt?.maximumRelativeDescent ?? 0, 0.78, accuracy: 0.01)
+        XCTAssertEqual(counter.lastAttempt?.loweredDuration ?? 0, 5.21, accuracy: 0.01)
+
+        XCTAssertFalse(counter.process(standing, at: 6.00))
+        XCTAssertFalse(counter.process(standing, at: 6.20))
+        XCTAssertEqual(counter.phase, .standing)
+        XCTAssertEqual(counter.repetitions, 0)
+        XCTAssertEqual(counter.recentAttempts.count, 1)
+    }
+
+    func testThreeDimensionalTimerExpiresWithoutNewPoseAndNeedsFreshStanding() {
+        var counter = Vision3DExperimentalCounter()
+        let standing = SquatPoseFixture.experimental3DProbe(leftAngle: 155, leftHeight: 0.96)
+        let lowered = SquatPoseFixture.experimental3DProbe(leftAngle: 75, leftHeight: 0.20)
+        _ = counter.process(standing, at: 0)
+        _ = counter.process(standing, at: 0.20)
+        _ = counter.process(lowered, at: 0.40)
+        _ = counter.process(lowered, at: 0.60)
+
+        counter.expire(at: 5.61)
+        XCTAssertEqual(counter.phase, .seekingStanding)
+        XCTAssertEqual(counter.lastAttempt?.outcome, .loweredTimeout)
+        XCTAssertEqual(counter.repetitions, 0)
+        XCTAssertFalse(counter.process(standing, at: 5.80))
+        XCTAssertFalse(counter.process(standing, at: 6.00))
+        XCTAssertEqual(counter.phase, .standing)
+        XCTAssertEqual(counter.repetitions, 0)
+    }
+
+    func testThreeDimensionalNormalRepetitionRecordsCompletedAttempt() {
+        var counter = Vision3DExperimentalCounter()
+        let standing = SquatPoseFixture.experimental3DProbe(leftAngle: 160, leftHeight: 0.96)
+        let lowered = SquatPoseFixture.experimental3DProbe(leftAngle: 75, leftHeight: 0.18)
+        _ = counter.process(standing, at: 0)
+        _ = counter.process(standing, at: 0.20)
+        _ = counter.process(lowered, at: 0.40)
+        _ = counter.process(lowered, at: 0.60)
+        XCTAssertEqual(counter.activeAttempt?.number, 1)
+        XCTAssertEqual(counter.phase, .lowered)
+        XCTAssertFalse(counter.process(standing, at: 0.80))
+        XCTAssertTrue(counter.process(standing, at: 1.00))
+        XCTAssertEqual(counter.repetitions, 1)
+        XCTAssertNil(counter.activeAttempt)
+        XCTAssertEqual(counter.lastAttempt?.outcome, .counted)
+        XCTAssertEqual(counter.lastAttempt?.minimumKneeAngle ?? 0, 75, accuracy: 0.01)
+        XCTAssertEqual(counter.lastAttempt?.maximumRelativeDescent ?? 0, 0.78, accuracy: 0.01)
+        XCTAssertEqual(counter.lastAttempt?.loweredDuration ?? 0, 0.40, accuracy: 0.01)
+        XCTAssertEqual(counter.recentAttempts.count, 1)
+    }
+
+    func testThreeDimensionalPartialReturnsWithoutCountAndRecordsReason() {
+        var counter = Vision3DExperimentalCounter()
+        let standing = SquatPoseFixture.experimental3DProbe(leftAngle: 160, leftHeight: 0.96)
+        let partial = SquatPoseFixture.experimental3DProbe(leftAngle: 118, leftHeight: 0.59)
+        _ = counter.process(standing, at: 0)
+        _ = counter.process(standing, at: 0.20)
+        _ = counter.process(partial, at: 0.40)
+        _ = counter.process(partial, at: 0.60)
+        XCTAssertEqual(counter.activeAttempt?.number, 1)
+        XCTAssertFalse(counter.process(standing, at: 0.80))
+        XCTAssertFalse(counter.process(standing, at: 1.00))
+        XCTAssertEqual(counter.phase, .standing)
+        XCTAssertEqual(counter.repetitions, 0)
+        XCTAssertEqual(counter.lastAttempt?.outcome, .returnedWithoutDepth)
+        XCTAssertEqual(counter.lastAttempt?.minimumKneeAngle ?? 0, 118, accuracy: 0.01)
+        XCTAssertEqual(counter.lastAttempt?.maximumRelativeDescent ?? 0, 0.37, accuracy: 0.01)
+        XCTAssertNil(counter.lastAttempt?.loweredDuration)
+    }
+
+    func testThreeDimensionalAttemptHistoryIsBoundedToTwentySummaries() {
+        var counter = Vision3DExperimentalCounter()
+        let standing = SquatPoseFixture.experimental3DProbe(leftAngle: 160, leftHeight: 0.96)
+        let partial = SquatPoseFixture.experimental3DProbe(leftAngle: 118, leftHeight: 0.59)
+        _ = counter.process(standing, at: 0)
+        _ = counter.process(standing, at: 0.20)
+        for attemptIndex in 0..<23 {
+            let timestamp = Double(attemptIndex) * 0.80 + 0.40
+            _ = counter.process(partial, at: timestamp)
+            _ = counter.process(standing, at: timestamp + 0.20)
+            _ = counter.process(standing, at: timestamp + 0.40)
+        }
+        XCTAssertEqual(counter.repetitions, 0)
+        XCTAssertEqual(counter.recentAttempts.count, 20)
+        XCTAssertEqual(counter.recentAttempts.first?.number, 4)
+        XCTAssertEqual(counter.recentAttempts.last?.number, 23)
+        XCTAssertEqual(counter.lastAttempt?.outcome, .returnedWithoutDepth)
+        XCTAssertNil(counter.activeAttempt)
+        counter.reset()
+        XCTAssertTrue(counter.recentAttempts.isEmpty)
+        XCTAssertNil(counter.lastAttempt)
+        XCTAssertEqual(counter.repetitions, 0)
+    }
+
+    func testThreeDimensionalMissingPoseRecordsInterruptedAttempt() {
+        var counter = Vision3DExperimentalCounter()
+        let standing = SquatPoseFixture.experimental3DProbe(leftAngle: 160, leftHeight: 0.96)
+        let lowered = SquatPoseFixture.experimental3DProbe(leftAngle: 72, leftHeight: 0.18)
+        let missing = SquatPoseFixture.experimental3DProbe(
+            leftAngle: nil, leftHeight: nil, available: false
+        )
+        _ = counter.process(standing, at: 0)
+        _ = counter.process(standing, at: 0.20)
+        _ = counter.process(lowered, at: 0.40)
+        _ = counter.process(lowered, at: 0.60)
+        XCTAssertFalse(counter.process(missing, at: 0.80))
+        XCTAssertEqual(counter.lastAttempt?.outcome, .invalidMeasurement)
+        XCTAssertEqual(counter.lastAttempt?.loweredDuration ?? 0, 0.20, accuracy: 0.01)
+        XCTAssertEqual(counter.repetitions, 0)
+        XCTAssertEqual(counter.recentAttempts.count, 1)
+    }
+
+    func testThreeDimensionalObservationGapRecordsReasonBeforeTimeout() {
+        var counter = Vision3DExperimentalCounter()
+        let standing = SquatPoseFixture.experimental3DProbe(leftAngle: 160, leftHeight: 0.96)
+        let lowered = SquatPoseFixture.experimental3DProbe(leftAngle: 72, leftHeight: 0.18)
+        _ = counter.process(standing, at: 0)
+        _ = counter.process(standing, at: 0.20)
+        _ = counter.process(lowered, at: 0.40)
+        _ = counter.process(lowered, at: 0.60)
+        counter.expire(at: 1.40)
+        XCTAssertEqual(counter.decision, .observationGap)
+        XCTAssertEqual(counter.lastAttempt?.outcome, .observationGap)
+        XCTAssertEqual(counter.repetitions, 0)
+        XCTAssertEqual(counter.recentAttempts.count, 1)
+    }
+
+    func testThreeDimensionalTrackingResetRetainsFinishedCountAndLogsAttempt() {
+        var counter = Vision3DExperimentalCounter()
+        let standing = SquatPoseFixture.experimental3DProbe(leftAngle: 160, leftHeight: 0.96)
+        let lowered = SquatPoseFixture.experimental3DProbe(leftAngle: 72, leftHeight: 0.18)
+        _ = counter.process(standing, at: 0)
+        _ = counter.process(standing, at: 0.20)
+        _ = counter.process(lowered, at: 0.40)
+        _ = counter.process(lowered, at: 0.60)
+        _ = counter.process(standing, at: 0.80)
+        XCTAssertTrue(counter.process(standing, at: 1.00))
+        XCTAssertEqual(counter.repetitions, 1)
+
+        _ = counter.process(lowered, at: 1.20)
+        XCTAssertEqual(counter.activeAttempt?.number, 2)
+        counter.resetMovement()
+        XCTAssertNil(counter.activeAttempt)
+        XCTAssertEqual(counter.lastAttempt?.outcome, .trackingReset)
+        XCTAssertEqual(counter.lastAttempt?.number, 2)
+        XCTAssertEqual(counter.repetitions, 1)
+        XCTAssertEqual(counter.recentAttempts.count, 2)
+    }
+
+    func testShadowDetectsPersistentTwoDimensionalStandingWhileThreeDimensionalDoesNot() {
+        var shadow = Vision3DReturnShadow()
+        let lowered = SquatPoseFixture.experimental3DProbe(
+            leftAngle: nil, leftHeight: nil, rightAngle: 112, rightHeight: 0.90
+        )
+        let standing = SquatPoseFixture.experimental3DProbe(
+            leftAngle: nil, leftHeight: nil, rightAngle: 160, rightHeight: 0.96
+        )
+
+        shadow.observe(
+            lowered, at: 0, threeDimensionalLeg: .right, standingReference: 0.96,
+            twoDimensionalLeg: .right, twoDimensionalLeftAngle: nil,
+            twoDimensionalRightAngle: 175, twoDimensionalSelectedHipKneeRatio: 0.97
+        )
+        XCTAssertEqual(shadow.agreement, .twoDimensionalStandingOnly)
+        XCTAssertEqual(shadow.consecutiveDisagreements, 1)
+        XCTAssertFalse(shadow.isStableDisagreement)
+        XCTAssertEqual(shadow.angleDifference ?? 0, 63, accuracy: 0.01)
+
+        shadow.observe(
+            lowered, at: 0.20, threeDimensionalLeg: .right, standingReference: 0.96,
+            twoDimensionalLeg: .right, twoDimensionalLeftAngle: nil,
+            twoDimensionalRightAngle: 175, twoDimensionalSelectedHipKneeRatio: 0.97
+        )
+        XCTAssertEqual(shadow.consecutiveDisagreements, 2)
+        XCTAssertTrue(shadow.isStableDisagreement)
+        XCTAssertEqual(shadow.stableDisagreementEvents, 1)
+
+        shadow.observe(
+            lowered, at: 0.40, threeDimensionalLeg: .right, standingReference: 0.96,
+            twoDimensionalLeg: .right, twoDimensionalLeftAngle: nil,
+            twoDimensionalRightAngle: 174, twoDimensionalSelectedHipKneeRatio: 0.96
+        )
+        XCTAssertEqual(shadow.stableDisagreementEvents, 1)
+
+        shadow.observe(
+            standing, at: 0.60, threeDimensionalLeg: .right, standingReference: 0.96,
+            twoDimensionalLeg: .right, twoDimensionalLeftAngle: nil,
+            twoDimensionalRightAngle: 170, twoDimensionalSelectedHipKneeRatio: 0.97
+        )
+        XCTAssertEqual(shadow.agreement, .bothStanding)
+        XCTAssertFalse(shadow.isStableDisagreement)
+        XCTAssertEqual(shadow.consecutiveDisagreements, 0)
+        XCTAssertEqual(shadow.stableDisagreementEvents, 1)
+    }
+
+    func testShadowRequiresDistinctTimedSameLegEvidenceToConfirmDisagreement() {
+        var shadow = Vision3DReturnShadow()
+        let probe = SquatPoseFixture.experimental3DProbe(
+            leftAngle: nil, leftHeight: nil, rightAngle: 113, rightHeight: 0.94
+        )
+        shadow.observe(
+            probe, at: 0, threeDimensionalLeg: .right, standingReference: 0.96,
+            twoDimensionalLeg: .right, twoDimensionalLeftAngle: nil,
+            twoDimensionalRightAngle: 170, twoDimensionalSelectedHipKneeRatio: 0.95
+        )
+        shadow.observe(
+            probe, at: 0.05, threeDimensionalLeg: .right, standingReference: 0.96,
+            twoDimensionalLeg: .right, twoDimensionalLeftAngle: nil,
+            twoDimensionalRightAngle: 170, twoDimensionalSelectedHipKneeRatio: 0.95
+        )
+        XCTAssertFalse(shadow.isStableDisagreement)
+        shadow.observe(
+            probe, at: 0.05, threeDimensionalLeg: .right, standingReference: 0.96,
+            twoDimensionalLeg: .right, twoDimensionalLeftAngle: nil,
+            twoDimensionalRightAngle: 170, twoDimensionalSelectedHipKneeRatio: 0.95
+        )
+        XCTAssertEqual(shadow.consecutiveDisagreements, 2)
+        shadow.observe(
+            probe, at: 0.20, threeDimensionalLeg: .right, standingReference: 0.96,
+            twoDimensionalLeg: .left, twoDimensionalLeftAngle: 170,
+            twoDimensionalRightAngle: 170, twoDimensionalSelectedHipKneeRatio: 0.95
+        )
+        XCTAssertEqual(shadow.agreement, .insufficientTwoDimensionalData)
+        XCTAssertEqual(shadow.consecutiveDisagreements, 0)
+        XCTAssertFalse(shadow.isStableDisagreement)
+        shadow.observe(
+            probe, at: 0.40, threeDimensionalLeg: .right, standingReference: 0.96,
+            twoDimensionalLeg: .right, twoDimensionalLeftAngle: nil,
+            twoDimensionalRightAngle: 170, twoDimensionalSelectedHipKneeRatio: 0.95
+        )
+        XCTAssertEqual(shadow.consecutiveDisagreements, 1)
+        XCTAssertFalse(shadow.isStableDisagreement)
+        shadow.observe(
+            probe, at: 0.60, threeDimensionalLeg: .right, standingReference: 0.96,
+            twoDimensionalLeg: .right, twoDimensionalLeftAngle: nil,
+            twoDimensionalRightAngle: 170, twoDimensionalSelectedHipKneeRatio: 0.95
+        )
+        XCTAssertTrue(shadow.isStableDisagreement)
+    }
+
+    func testShadowSeparatesAgreementFromAmbiguousThreeDimensionalGeometry() {
+        var shadow = Vision3DReturnShadow()
+        let standing = SquatPoseFixture.experimental3DProbe(
+            leftAngle: 158, leftHeight: 0.96
+        )
+        let lowered = SquatPoseFixture.experimental3DProbe(
+            leftAngle: 75, leftHeight: 0.18
+        )
+        shadow.observe(
+            standing, at: 0, threeDimensionalLeg: .left, standingReference: nil,
+            twoDimensionalLeg: .left, twoDimensionalLeftAngle: 170,
+            twoDimensionalRightAngle: nil, twoDimensionalSelectedHipKneeRatio: 0.96
+        )
+        XCTAssertEqual(shadow.agreement, .awaitingStandingReference)
+
+        shadow.observe(
+            standing, at: 0.20, threeDimensionalLeg: .left, standingReference: 0.96,
+            twoDimensionalLeg: .left, twoDimensionalLeftAngle: 170,
+            twoDimensionalRightAngle: nil, twoDimensionalSelectedHipKneeRatio: 0.96
+        )
+        XCTAssertEqual(shadow.agreement, .bothStanding)
+
+        shadow.observe(
+            lowered, at: 0.40, threeDimensionalLeg: .left, standingReference: 0.96,
+            twoDimensionalLeg: .left, twoDimensionalLeftAngle: 90,
+            twoDimensionalRightAngle: nil, twoDimensionalSelectedHipKneeRatio: 0.18
+        )
+        XCTAssertEqual(shadow.agreement, .bothMoving)
+        XCTAssertFalse(shadow.isStableDisagreement)
+
+        shadow.observe(
+            standing, at: 0.60, threeDimensionalLeg: .left, standingReference: 0.96,
+            twoDimensionalLeg: .left, twoDimensionalLeftAngle: 90,
+            twoDimensionalRightAngle: nil, twoDimensionalSelectedHipKneeRatio: 0.18
+        )
+        XCTAssertEqual(shadow.agreement, .threeDimensionalStandingOnly)
+        XCTAssertFalse(shadow.isStableDisagreement)
+
+        shadow.observe(
+            standing, at: 0.80, threeDimensionalLeg: .left, standingReference: 0.96,
+            twoDimensionalLeg: .left, twoDimensionalLeftAngle: nil,
+            twoDimensionalRightAngle: nil, twoDimensionalSelectedHipKneeRatio: nil
+        )
+        XCTAssertEqual(shadow.agreement, .insufficientTwoDimensionalData)
+        XCTAssertFalse(shadow.isStableDisagreement)
+    }
+
+    func testShadowExpiryAndLegSwitchClearStaleDisagreement() {
+        var shadow = Vision3DReturnShadow()
+        let rightProbe = SquatPoseFixture.experimental3DProbe(
+            leftAngle: nil, leftHeight: nil, rightAngle: 112, rightHeight: 0.93
+        )
+        let leftProbe = SquatPoseFixture.experimental3DProbe(
+            leftAngle: 155, leftHeight: 0.96
+        )
+        shadow.observe(
+            rightProbe, at: 0, threeDimensionalLeg: .right, standingReference: 0.96,
+            twoDimensionalLeg: .right, twoDimensionalLeftAngle: nil,
+            twoDimensionalRightAngle: 175, twoDimensionalSelectedHipKneeRatio: 0.95
+        )
+        shadow.observe(
+            rightProbe, at: 0.20, threeDimensionalLeg: .right, standingReference: 0.96,
+            twoDimensionalLeg: .right, twoDimensionalLeftAngle: nil,
+            twoDimensionalRightAngle: 175, twoDimensionalSelectedHipKneeRatio: 0.95
+        )
+        XCTAssertTrue(shadow.isStableDisagreement)
+        shadow.expire(at: 1.0)
+        XCTAssertEqual(shadow.agreement, .awaitingSelectedLeg)
+        XCTAssertFalse(shadow.isStableDisagreement)
+        XCTAssertEqual(shadow.sampleNumber, 0)
+
+        shadow.observe(
+            leftProbe, at: 1.20, threeDimensionalLeg: .left, standingReference: 0.96,
+            twoDimensionalLeg: .left, twoDimensionalLeftAngle: 175,
+            twoDimensionalRightAngle: nil, twoDimensionalSelectedHipKneeRatio: 0.96
+        )
+        XCTAssertEqual(shadow.agreement, .bothStanding)
+        XCTAssertEqual(shadow.selectedLeg, .left)
+        XCTAssertFalse(shadow.isStableDisagreement)
+    }
+
+    func testShadowDoesNotTrustUnavailableThreeDimensionalPose() {
+        var shadow = Vision3DReturnShadow()
+        let unavailable = SquatPoseFixture.experimental3DProbe(
+            leftAngle: 160, leftHeight: 0.96, available: false
+        )
+        shadow.observe(
+            unavailable, at: 0, threeDimensionalLeg: .left, standingReference: 0.96,
+            twoDimensionalLeg: .left, twoDimensionalLeftAngle: 170,
+            twoDimensionalRightAngle: nil, twoDimensionalSelectedHipKneeRatio: 0.96
+        )
+        shadow.observe(
+            unavailable, at: 0.20, threeDimensionalLeg: .left, standingReference: 0.96,
+            twoDimensionalLeg: .left, twoDimensionalLeftAngle: 170,
+            twoDimensionalRightAngle: nil, twoDimensionalSelectedHipKneeRatio: 0.96
+        )
+        XCTAssertEqual(shadow.agreement, .insufficientThreeDimensionalData)
+        XCTAssertNil(shadow.threeDimensionalAngle)
+        XCTAssertFalse(shadow.isStableDisagreement)
+    }
+
+    func testBilateralQualitySeparates3DLegAsymmetryFromUnreliable2D() {
+        var quality = Vision3DBilateralQualityMonitor()
+        let analysis = PoseAnalyzer().analyze(
+            SquatPoseFixture.pose(
+                leftAngle: 160, rightAngle: 160,
+                leftConfidence: 0.93, rightConfidence: 0.93
+            )
+        )
+        let probe = SquatPoseFixture.experimental3DProbe(
+            leftAngle: 160, leftHeight: 0.96,
+            rightAngle: 75, rightHeight: 0.18
+        )
+        quality.observe(
+            probe, at: 0,
+            leftTwoDimensionalMeasurement: analysis.leftMeasurement,
+            rightTwoDimensionalMeasurement: analysis.rightMeasurement,
+            selectedThreeDimensionalLeg: .right
+        )
+        XCTAssertEqual(quality.threeDimensionalAngleDifference ?? 0, 85, accuracy: 0.01)
+        XCTAssertEqual(quality.threeDimensionalHeightDifference ?? 0, 0.78, accuracy: 0.01)
+        XCTAssertEqual(quality.rightLeg?.status, .largeModelDifference)
+        XCTAssertFalse(quality.isPersistentBilateralDisagreement)
+        XCTAssertFalse(quality.lastSampleExcluded)
+
+        quality.observe(
+            probe, at: 0.20,
+            leftTwoDimensionalMeasurement: analysis.leftMeasurement,
+            rightTwoDimensionalMeasurement: analysis.rightMeasurement,
+            selectedThreeDimensionalLeg: .right
+        )
+        XCTAssertTrue(quality.isPersistentBilateralDisagreement)
+        XCTAssertEqual(quality.consecutiveBilateralDisagreements, 2)
+        XCTAssertEqual(quality.excludedExperimentalSamples, 0)
+    }
+
+    func testBilateralQualityFiltersOnlyExtremeSelected3DJump() {
+        var quality = Vision3DBilateralQualityMonitor()
+        let analysis = PoseAnalyzer().analyze(
+            SquatPoseFixture.pose(
+                leftAngle: 160, rightAngle: 160,
+                leftConfidence: 0.49, rightConfidence: 0.94
+            )
+        )
+        let standing = SquatPoseFixture.experimental3DProbe(
+            leftAngle: 160, leftHeight: 0.96,
+            rightAngle: 160, rightHeight: 0.96
+        )
+        let outlier = SquatPoseFixture.experimental3DProbe(
+            leftAngle: 160, leftHeight: 0.96,
+            rightAngle: 25, rightHeight: -0.04
+        )
+        let recovered = SquatPoseFixture.experimental3DProbe(
+            leftAngle: 160, leftHeight: 0.96,
+            rightAngle: 75, rightHeight: 0.18
+        )
+        quality.observe(
+            standing, at: 0,
+            leftTwoDimensionalMeasurement: analysis.leftMeasurement,
+            rightTwoDimensionalMeasurement: analysis.rightMeasurement,
+            selectedThreeDimensionalLeg: .right
+        )
+        XCTAssertFalse(quality.lastSampleExcluded)
+
+        quality.observe(
+            outlier, at: 0.20,
+            leftTwoDimensionalMeasurement: analysis.leftMeasurement,
+            rightTwoDimensionalMeasurement: analysis.rightMeasurement,
+            selectedThreeDimensionalLeg: .right
+        )
+        XCTAssertTrue(quality.lastSampleExcluded)
+        XCTAssertEqual(quality.excludedExperimentalSamples, 1)
+        XCTAssertEqual(quality.rightLeg?.status, .abruptThreeDimensionalChange)
+        XCTAssertEqual(quality.rightLeg?.previousAngleChange ?? 0, 135, accuracy: 0.01)
+        XCTAssertEqual(quality.rightLeg?.previousHeightChange ?? 0, 1.0, accuracy: 0.01)
+
+        quality.observe(
+            recovered, at: 0.40,
+            leftTwoDimensionalMeasurement: analysis.leftMeasurement,
+            rightTwoDimensionalMeasurement: analysis.rightMeasurement,
+            selectedThreeDimensionalLeg: .right
+        )
+        XCTAssertFalse(quality.lastSampleExcluded)
+        XCTAssertEqual(quality.excludedExperimentalSamples, 1)
+        XCTAssertEqual(quality.leftLeg?.status, .noReliableTwoDimensionalLeg)
+        quality.expire(at: 1.30)
+        XCTAssertNil(quality.leftLeg)
+        XCTAssertNil(quality.rightLeg)
+        XCTAssertEqual(quality.excludedExperimentalSamples, 1)
+        quality.resetObservations()
+        XCTAssertEqual(quality.excludedExperimentalSamples, 1)
+        quality.reset()
+        XCTAssertEqual(quality.excludedExperimentalSamples, 0)
+    }
+
+    func testBilateralQualityDoesNotAssume2DGroundTruthOrMissing3DPose() {
+        var quality = Vision3DBilateralQualityMonitor()
+        let unreliable2D = PoseAnalyzer().analyze(
+            SquatPoseFixture.pose(
+                leftAngle: 160, rightAngle: 160,
+                leftConfidence: 0.49, rightConfidence: 0.49
+            )
+        )
+        let missingPose = SquatPoseFixture.experimental3DProbe(
+            leftAngle: 160, leftHeight: 0.96,
+            rightAngle: 160, rightHeight: 0.96,
+            available: false
+        )
+        quality.observe(
+            missingPose, at: 0,
+            leftTwoDimensionalMeasurement: unreliable2D.leftMeasurement,
+            rightTwoDimensionalMeasurement: unreliable2D.rightMeasurement,
+            selectedThreeDimensionalLeg: .right
+        )
+        XCTAssertEqual(quality.rightLeg?.status, .unavailable)
+        XCTAssertNil(quality.rightLeg?.threeDimensionalAngle)
+        XCTAssertFalse(quality.lastSampleExcluded)
+
+        let valid3D = SquatPoseFixture.experimental3DProbe(
+            leftAngle: 160, leftHeight: 0.96,
+            rightAngle: 160, rightHeight: 0.96
+        )
+        quality.observe(
+            valid3D, at: 0.20,
+            leftTwoDimensionalMeasurement: unreliable2D.leftMeasurement,
+            rightTwoDimensionalMeasurement: unreliable2D.rightMeasurement,
+            selectedThreeDimensionalLeg: .right
+        )
+        XCTAssertEqual(quality.leftLeg?.status, .noReliableTwoDimensionalLeg)
+        XCTAssertEqual(quality.rightLeg?.status, .noReliableTwoDimensionalLeg)
+        XCTAssertFalse(quality.lastSampleExcluded)
+        XCTAssertEqual(quality.excludedExperimentalSamples, 0)
+    }
+
+    func testBilateralQualityKeepsNormalFastSquatAvailable() {
+        var quality = Vision3DBilateralQualityMonitor()
+        let analysis = PoseAnalyzer().analyze(
+            SquatPoseFixture.pose(leftAngle: 170, rightAngle: 170)
+        )
+        let standing = SquatPoseFixture.experimental3DProbe(
+            leftAngle: 160, leftHeight: 0.96,
+            rightAngle: 160, rightHeight: 0.96
+        )
+        let lowered = SquatPoseFixture.experimental3DProbe(
+            leftAngle: 75, leftHeight: 0.18,
+            rightAngle: 75, rightHeight: 0.18
+        )
+        quality.observe(
+            standing, at: 0,
+            leftTwoDimensionalMeasurement: analysis.leftMeasurement,
+            rightTwoDimensionalMeasurement: analysis.rightMeasurement,
+            selectedThreeDimensionalLeg: .left
+        )
+        quality.observe(
+            lowered, at: 0.20,
+            leftTwoDimensionalMeasurement: analysis.leftMeasurement,
+            rightTwoDimensionalMeasurement: analysis.rightMeasurement,
+            selectedThreeDimensionalLeg: .left
+        )
+        XCTAssertEqual(quality.leftLeg?.previousAngleChange ?? 0, 85, accuracy: 0.01)
+        XCTAssertEqual(quality.leftLeg?.previousHeightChange ?? 0, 0.78, accuracy: 0.01)
+        XCTAssertFalse(quality.lastSampleExcluded)
+        XCTAssertEqual(quality.excludedExperimentalSamples, 0)
+    }
+
+    #endif
 }
 
 enum SquatPoseFixture {
@@ -220,6 +1202,30 @@ enum SquatPoseFixture {
         }
         return BodyPose(joints: joints, aspectRatio: aspectRatio)
     }
+
+    #if DEBUG
+    static func experimental3DProbe(
+        leftAngle: Double?,
+        leftHeight: Double?,
+        rightAngle: Double? = nil,
+        rightHeight: Double? = nil,
+        available: Bool = true,
+        sampled: Bool = true
+    ) -> Vision3DProbe {
+        Vision3DProbe(
+            twoDimensionalLatencyMs: 13,
+            threeDimensionalLatencyMs: sampled ? 40 : nil,
+            leftKneeAngle: leftAngle,
+            rightKneeAngle: rightAngle,
+            leftHipKneeHeightRatio: leftHeight,
+            rightHipKneeHeightRatio: rightHeight,
+            sampleCount: 1,
+            observationAvailable: available,
+            twoDimensionalFramesPerSecond: 10,
+            threeDimensionalSamplesPerSecond: 5
+        )
+    }
+    #endif
 
     static func replacing(_ pose: BodyPose, joint: BodyJoint, confidence: Float? = nil, location: CGPoint? = nil) -> BodyPose {
         var joints = pose.joints
