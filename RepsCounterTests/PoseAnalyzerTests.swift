@@ -439,6 +439,170 @@ final class PoseAnalyzerTests: XCTestCase {
         XCTAssertEqual(counter.decision, .invalidMeasurement)
     }
 
+    func testThreeDimensionalSelectsReliableRightLegInsteadOfDefaultLeft() {
+        var counter = Vision3DExperimentalCounter()
+        let standing = SquatPoseFixture.experimental3DProbe(
+            leftAngle: 165, leftHeight: 0.98, rightAngle: 165, rightHeight: 0.96
+        )
+        XCTAssertFalse(counter.process(
+            standing, at: 0,
+            leftTwoDimensionalConfidence: 0.61,
+            rightTwoDimensionalConfidence: 0.93,
+            preferredTwoDimensionalLeg: .right
+        ))
+        XCTAssertFalse(counter.process(
+            standing, at: 0.20,
+            leftTwoDimensionalConfidence: 0.62,
+            rightTwoDimensionalConfidence: 0.92,
+            preferredTwoDimensionalLeg: .right
+        ))
+        XCTAssertEqual(counter.selectedLeg, .right)
+        XCTAssertEqual(counter.phase, .standing)
+        XCTAssertEqual(counter.selectionSource, .twoDimensionalConfidence)
+        XCTAssertEqual(counter.rightTwoDimensionalConfidence ?? 0, 0.92, accuracy: 0.001)
+    }
+
+    func testThreeDimensionalLocksChosenLegDuringConfidenceChanges() {
+        var counter = Vision3DExperimentalCounter()
+        let standing = SquatPoseFixture.experimental3DProbe(
+            leftAngle: 165, leftHeight: 0.98, rightAngle: 165, rightHeight: 0.96
+        )
+        let lowered = SquatPoseFixture.experimental3DProbe(
+            leftAngle: 125, leftHeight: 0.50, rightAngle: 72, rightHeight: 0.18
+        )
+        _ = counter.process(
+            standing, at: 0,
+            leftTwoDimensionalConfidence: 0.64,
+            rightTwoDimensionalConfidence: 0.91,
+            preferredTwoDimensionalLeg: .right
+        )
+        _ = counter.process(
+            standing, at: 0.20,
+            leftTwoDimensionalConfidence: 0.64,
+            rightTwoDimensionalConfidence: 0.91,
+            preferredTwoDimensionalLeg: .right
+        )
+        XCTAssertEqual(counter.selectedLeg, .right)
+        XCTAssertFalse(counter.process(
+            lowered, at: 0.40,
+            leftTwoDimensionalConfidence: 0.94,
+            rightTwoDimensionalConfidence: 0.56,
+            preferredTwoDimensionalLeg: .left
+        ))
+        XCTAssertFalse(counter.process(
+            lowered, at: 0.60,
+            leftTwoDimensionalConfidence: 0.94,
+            rightTwoDimensionalConfidence: 0.56,
+            preferredTwoDimensionalLeg: .left
+        ))
+        XCTAssertEqual(counter.phase, .lowered)
+        XCTAssertEqual(counter.selectedLeg, .right)
+        XCTAssertEqual(counter.selectionSource, .twoDimensionalConfidence)
+        XCTAssertFalse(counter.process(standing, at: 0.80))
+        XCTAssertTrue(counter.process(standing, at: 1.00))
+        XCTAssertEqual(counter.repetitions, 1)
+    }
+
+    func testThreeDimensionalDoesNotArbitrarilyChooseLeftWithoutEvidence() {
+        var counter = Vision3DExperimentalCounter()
+        let standing = SquatPoseFixture.experimental3DProbe(
+            leftAngle: 165, leftHeight: 0.96, rightAngle: 165, rightHeight: 0.98
+        )
+        XCTAssertFalse(counter.process(standing, at: 0))
+        XCTAssertFalse(counter.process(standing, at: 0.20))
+        XCTAssertNil(counter.selectedLeg)
+        XCTAssertEqual(counter.decision, .awaitingLegEvidence)
+        XCTAssertEqual(counter.repetitions, 0)
+        XCTAssertFalse(counter.process(
+            standing, at: 0.40,
+            leftTwoDimensionalConfidence: 0.72,
+            rightTwoDimensionalConfidence: 0.91
+        ))
+        XCTAssertFalse(counter.process(
+            standing, at: 0.60,
+            leftTwoDimensionalConfidence: 0.73,
+            rightTwoDimensionalConfidence: 0.92
+        ))
+        XCTAssertEqual(counter.selectedLeg, .right)
+        XCTAssertEqual(counter.selectionSource, .twoDimensionalConfidence)
+        XCTAssertEqual(counter.phase, .standing)
+    }
+
+    func testThreeDimensionalAmbiguousConfidenceWaitsForStableChoice() {
+        var counter = Vision3DExperimentalCounter()
+        let standing = SquatPoseFixture.experimental3DProbe(
+            leftAngle: 165, leftHeight: 0.96, rightAngle: 165, rightHeight: 0.96
+        )
+        XCTAssertFalse(counter.process(
+            standing, at: 0,
+            leftTwoDimensionalConfidence: 0.82,
+            rightTwoDimensionalConfidence: 0.80
+        ))
+        XCTAssertNil(counter.selectedLeg)
+        XCTAssertEqual(counter.decision, .awaitingLegEvidence)
+        _ = counter.process(
+            standing, at: 0.20,
+            leftTwoDimensionalConfidence: 0.91,
+            rightTwoDimensionalConfidence: 0.70
+        )
+        _ = counter.process(
+            standing, at: 0.40,
+            leftTwoDimensionalConfidence: 0.89,
+            rightTwoDimensionalConfidence: 0.72
+        )
+        XCTAssertEqual(counter.selectedLeg, .left)
+        XCTAssertEqual(counter.phase, .standing)
+    }
+
+    func testThreeDimensionalRefusesOppositeLegToFinishLoweredMovement() {
+        var counter = Vision3DExperimentalCounter()
+        let standing = SquatPoseFixture.experimental3DProbe(
+            leftAngle: 160, leftHeight: 0.96, rightAngle: 160, rightHeight: 0.96
+        )
+        let lowered = SquatPoseFixture.experimental3DProbe(
+            leftAngle: 85, leftHeight: 0.50, rightAngle: 78, rightHeight: 0.16
+        )
+        _ = counter.process(
+            standing, at: 0,
+            leftTwoDimensionalConfidence: 0.65,
+            rightTwoDimensionalConfidence: 0.93,
+            preferredTwoDimensionalLeg: .right
+        )
+        _ = counter.process(
+            standing, at: 0.20,
+            leftTwoDimensionalConfidence: 0.65,
+            rightTwoDimensionalConfidence: 0.93,
+            preferredTwoDimensionalLeg: .right
+        )
+        _ = counter.process(lowered, at: 0.40)
+        _ = counter.process(lowered, at: 0.60)
+        XCTAssertEqual(counter.phase, .lowered)
+        let onlyLeft = SquatPoseFixture.experimental3DProbe(
+            leftAngle: 160, leftHeight: 0.96
+        )
+        XCTAssertFalse(counter.process(
+            onlyLeft, at: 0.80,
+            leftTwoDimensionalConfidence: 0.94,
+            preferredTwoDimensionalLeg: .left
+        ))
+        XCTAssertEqual(counter.phase, .seekingStanding)
+        XCTAssertNil(counter.selectedLeg)
+        XCTAssertEqual(counter.interruptions, 1)
+        XCTAssertFalse(counter.process(
+            onlyLeft, at: 1.00,
+            leftTwoDimensionalConfidence: 0.94,
+            preferredTwoDimensionalLeg: .left
+        ))
+        XCTAssertFalse(counter.process(
+            onlyLeft, at: 1.20,
+            leftTwoDimensionalConfidence: 0.94,
+            preferredTwoDimensionalLeg: .left
+        ))
+        XCTAssertEqual(counter.selectedLeg, .left)
+        XCTAssertEqual(counter.phase, .standing)
+        XCTAssertEqual(counter.repetitions, 0)
+    }
+
     #endif
 }
 
