@@ -250,6 +250,25 @@ enum Vision3DExperimentalDecision: Equatable {
     case counted
     case invalidMeasurement
     case observationGap
+    case loweredTimeout
+}
+
+enum Vision3DAttemptOutcome: Equatable {
+    case counted
+    case returnedWithoutDepth
+    case loweredTimeout
+    case invalidMeasurement
+    case observationGap
+    case trackingReset
+}
+
+struct Vision3DAttempt {
+    let number: Int
+    let selectedLeg: BodyLeg
+    var minimumKneeAngle: Double
+    var maximumRelativeDescent: Double
+    var loweredDuration: TimeInterval?
+    var outcome: Vision3DAttemptOutcome?
 }
 
 enum Vision3DLegSelectionSource: Equatable {
@@ -269,12 +288,16 @@ struct Vision3DExperimentalCounter {
     private(set) var standingHipKneeRatio: Double?
     private(set) var relativeDescent: Double?
     private(set) var interruptions = 0
+    private(set) var activeAttempt: Vision3DAttempt?
+    private(set) var lastAttempt: Vision3DAttempt?
+    private(set) var recentAttempts: [Vision3DAttempt] = []
 
     let standingAngle = 135.0
     let loweredAngle = 110.0
     let minimumStandingHipKneeRatio = 0.70
     let minimumRelativeDescent = 0.55
     let maximumSampleGap: TimeInterval = 0.75
+    let maximumLoweredDuration: TimeInterval = 5
     let minimumConfirmationDuration: TimeInterval = 0.12
     let requiredConfirmationSamples = 2
 
@@ -284,6 +307,10 @@ struct Vision3DExperimentalCounter {
     private var candidateStandingRatio: Double?
     private var pendingLeg: BodyLeg?
     private var pendingSelectionSource: Vision3DLegSelectionSource = .awaitingEvidence
+    private var loweredStartedAt: TimeInterval?
+    private var attemptNumber = 0
+    private var returnConfirmationStartedAt: TimeInterval?
+    private var returnConfirmationSamples = 0
 
     mutating func process(
         _ probe: Vision3DProbe,
@@ -297,16 +324,18 @@ struct Vision3DExperimentalCounter {
             interrupt(.invalidMeasurement)
             return false
         }
-        if let lastSampleTime {
-            guard timestamp > lastSampleTime else { return false }
-            if timestamp - lastSampleTime > maximumSampleGap {
-                interrupt(.observationGap)
-            }
+        if let lastSampleTime, timestamp <= lastSampleTime { return false }
+        if isLoweredTimedOut(at: timestamp) {
+            interrupt(.loweredTimeout, at: timestamp)
+            return false
+        }
+        if let lastSampleTime, timestamp - lastSampleTime > maximumSampleGap {
+            interrupt(.observationGap, at: timestamp)
         }
         lastSampleTime = timestamp
 
         guard probe.observationAvailable else {
-            interrupt(.invalidMeasurement)
+            interrupt(.invalidMeasurement, at: timestamp)
             return false
         }
         let leftMeasurement = validMeasurement(
@@ -343,13 +372,19 @@ struct Vision3DExperimentalCounter {
 
         let measurement = activeLeg == .left ? leftMeasurement : rightMeasurement
         guard let measurement else {
-            interrupt(.invalidMeasurement)
+            interrupt(.invalidMeasurement, at: timestamp)
             return false
         }
 
         let angle = measurement.angle
         let heightRatio = measurement.heightRatio
         relativeDescent = standingHipKneeRatio.map { $0 - heightRatio }
+        updateAttempt(
+            kneeAngle: angle,
+            relativeDescent: relativeDescent,
+            timestamp: timestamp,
+            selectedLeg: activeLeg
+        )
 
         switch phase {
         case .seekingStanding:
@@ -377,9 +412,15 @@ struct Vision3DExperimentalCounter {
             decision = .standingConfirmed
         case .standing:
             guard let standingHipKneeRatio else {
-                interrupt(.invalidMeasurement)
+                interrupt(.invalidMeasurement, at: timestamp)
                 return false
             }
+            updateReturnedWithoutDepth(
+                angle: angle,
+                heightRatio: heightRatio,
+                standingHeightRatio: standingHipKneeRatio,
+                timestamp: timestamp
+            )
             let hasDepth = angle <= loweredAngle
                 && standingHipKneeRatio - heightRatio >= minimumRelativeDescent
             guard confirm(hasDepth, at: timestamp) else {
@@ -393,10 +434,15 @@ struct Vision3DExperimentalCounter {
                 return false
             }
             phase = .lowered
+            loweredStartedAt = timestamp
+            if var activeAttempt {
+                activeAttempt.loweredDuration = 0
+                self.activeAttempt = activeAttempt
+            }
             decision = .loweredConfirmed
         case .lowered:
             guard let standingHipKneeRatio else {
-                interrupt(.invalidMeasurement)
+                interrupt(.invalidMeasurement, at: timestamp)
                 return false
             }
             let returnedStanding = angle >= standingAngle
@@ -406,6 +452,8 @@ struct Vision3DExperimentalCounter {
                 return false
             }
             repetitions += 1
+            finishAttempt(.counted, at: timestamp)
+            loweredStartedAt = nil
             phase = .standing
             decision = .counted
             self.standingHipKneeRatio = max(standingHipKneeRatio, heightRatio)
@@ -416,12 +464,22 @@ struct Vision3DExperimentalCounter {
     }
 
     mutating func expire(at timestamp: TimeInterval) {
-        guard timestamp.isFinite, let lastSampleTime,
+        guard timestamp.isFinite else { return }
+        if isLoweredTimedOut(at: timestamp) {
+            interrupt(.loweredTimeout, at: timestamp)
+            return
+        }
+        guard let lastSampleTime,
               timestamp - lastSampleTime > maximumSampleGap else { return }
-        interrupt(.observationGap)
+        interrupt(.observationGap, at: timestamp)
     }
 
     mutating func resetMovement() {
+        finishAttempt(.trackingReset, at: lastSampleTime)
+        clearMovementState()
+    }
+
+    private mutating func clearMovementState() {
         phase = .seekingStanding
         decision = .waitingForSample
         selectedLeg = nil
@@ -436,20 +494,114 @@ struct Vision3DExperimentalCounter {
         confirmationSamples = 0
         confirmationStartedAt = nil
         candidateStandingRatio = nil
+        loweredStartedAt = nil
+        returnConfirmationStartedAt = nil
+        returnConfirmationSamples = 0
+        activeAttempt = nil
     }
 
     mutating func reset() {
+        clearMovementState()
         repetitions = 0
         interruptions = 0
-        resetMovement()
+        attemptNumber = 0
+        lastAttempt = nil
+        recentAttempts.removeAll(keepingCapacity: true)
     }
 
-    private mutating func interrupt(_ reason: Vision3DExperimentalDecision) {
+    private mutating func interrupt(
+        _ reason: Vision3DExperimentalDecision,
+        at timestamp: TimeInterval? = nil
+    ) {
         if selectedLeg != nil || phase != .seekingStanding {
             interruptions += 1
         }
-        resetMovement()
+        let outcome: Vision3DAttemptOutcome
+        switch reason {
+        case .loweredTimeout: outcome = .loweredTimeout
+        case .observationGap: outcome = .observationGap
+        default: outcome = .invalidMeasurement
+        }
+        finishAttempt(outcome, at: timestamp ?? lastSampleTime)
+        clearMovementState()
         decision = reason
+    }
+
+    private func isLoweredTimedOut(at timestamp: TimeInterval) -> Bool {
+        guard phase == .lowered, let loweredStartedAt else { return false }
+        return timestamp - loweredStartedAt > maximumLoweredDuration
+    }
+
+    private mutating func updateAttempt(
+        kneeAngle: Double,
+        relativeDescent: Double?,
+        timestamp: TimeInterval,
+        selectedLeg: BodyLeg
+    ) {
+        if phase == .standing, kneeAngle < standingAngle, activeAttempt == nil {
+            attemptNumber += 1
+            activeAttempt = Vision3DAttempt(
+                number: attemptNumber,
+                selectedLeg: selectedLeg,
+                minimumKneeAngle: kneeAngle,
+                maximumRelativeDescent: relativeDescent ?? 0,
+                loweredDuration: nil,
+                outcome: nil
+            )
+        }
+        guard var attempt = activeAttempt else { return }
+        attempt.minimumKneeAngle = min(attempt.minimumKneeAngle, kneeAngle)
+        if let relativeDescent, relativeDescent.isFinite {
+            attempt.maximumRelativeDescent = max(
+                attempt.maximumRelativeDescent,
+                relativeDescent
+            )
+        }
+        if let loweredStartedAt {
+            attempt.loweredDuration = max(0, timestamp - loweredStartedAt)
+        }
+        activeAttempt = attempt
+    }
+
+    private mutating func updateReturnedWithoutDepth(
+        angle: Double,
+        heightRatio: Double,
+        standingHeightRatio: Double,
+        timestamp: TimeInterval
+    ) {
+        guard activeAttempt != nil else { return }
+        let returnedStanding = angle >= standingAngle
+            && heightRatio >= standingHeightRatio - 0.20
+        guard returnedStanding else {
+            returnConfirmationStartedAt = nil
+            returnConfirmationSamples = 0
+            return
+        }
+        if returnConfirmationStartedAt == nil {
+            returnConfirmationStartedAt = timestamp
+        }
+        returnConfirmationSamples += 1
+        if returnConfirmationSamples >= requiredConfirmationSamples,
+           timestamp - (returnConfirmationStartedAt ?? timestamp) >= minimumConfirmationDuration {
+            finishAttempt(.returnedWithoutDepth, at: timestamp)
+        }
+    }
+
+    private mutating func finishAttempt(
+        _ outcome: Vision3DAttemptOutcome,
+        at timestamp: TimeInterval?
+    ) {
+        guard var attempt = activeAttempt else { return }
+        if let loweredStartedAt, let timestamp, timestamp.isFinite {
+            attempt.loweredDuration = max(0, timestamp - loweredStartedAt)
+        }
+        attempt.outcome = outcome
+        lastAttempt = attempt
+        recentAttempts.append(attempt)
+        if recentAttempts.count > 20 { recentAttempts.removeFirst() }
+        activeAttempt = nil
+        returnConfirmationStartedAt = nil
+        returnConfirmationSamples = 0
     }
 
     private mutating func confirm(_ satisfies: Bool, at timestamp: TimeInterval) -> Bool {
