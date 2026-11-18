@@ -480,6 +480,7 @@ struct SquatDiagnostics {
     let vision3DSynchronizedPair: Vision3DSynchronizedPair?
     let vision3DExperimentalCounter: Vision3DExperimentalCounter
     let vision3DReturnShadow: Vision3DReturnShadow
+    let vision3DBilateralQuality: Vision3DBilateralQualityMonitor
 }
 
 enum SquatDepthBreak: Equatable {
@@ -1114,6 +1115,7 @@ final class WorkoutViewModel {
     private var latestVision3DSynchronizedPair: Vision3DSynchronizedPair?
     private var vision3DExperimentalCounter = Vision3DExperimentalCounter()
     private var vision3DReturnShadow = Vision3DReturnShadow()
+    private var vision3DBilateralQuality = Vision3DBilateralQualityMonitor()
     #endif
 
     private let persistence: any WorkoutStoring
@@ -1170,6 +1172,7 @@ final class WorkoutViewModel {
         latestVision3DSynchronizedPair = nil
         vision3DExperimentalCounter.reset()
         vision3DReturnShadow.reset()
+        vision3DBilateralQuality.reset()
         publish()
     }
     #endif
@@ -1184,6 +1187,7 @@ final class WorkoutViewModel {
         depthAttemptTracker.recordPose(at: currentTime)
         vision3DExperimentalCounter.expire(at: currentTime)
         vision3DReturnShadow.expire(at: currentTime)
+        vision3DBilateralQuality.expire(at: currentTime)
         #endif
         expireTracking(at: currentTime)
         let analysis = analyzer.analyze(pose)
@@ -1203,15 +1207,24 @@ final class WorkoutViewModel {
                 probe: probe
             )
             if Vision3DProbeControl.isEnabled {
-                _ = vision3DExperimentalCounter.process(
+                vision3DBilateralQuality.observe(
                     probe,
                     at: currentTime,
-                    leftTwoDimensionalConfidence: analysis.leftMeasurement.isReliable
-                        ? Double(analysis.leftMeasurement.confidence) : nil,
-                    rightTwoDimensionalConfidence: analysis.rightMeasurement.isReliable
-                        ? Double(analysis.rightMeasurement.confidence) : nil,
-                    preferredTwoDimensionalLeg: analysis.selectedLeg
+                    leftTwoDimensionalMeasurement: analysis.leftMeasurement,
+                    rightTwoDimensionalMeasurement: analysis.rightMeasurement,
+                    selectedThreeDimensionalLeg: vision3DExperimentalCounter.selectedLeg
                 )
+                if !vision3DBilateralQuality.lastSampleExcluded {
+                    _ = vision3DExperimentalCounter.process(
+                        probe,
+                        at: currentTime,
+                        leftTwoDimensionalConfidence: analysis.leftMeasurement.isReliable
+                            ? Double(analysis.leftMeasurement.confidence) : nil,
+                        rightTwoDimensionalConfidence: analysis.rightMeasurement.isReliable
+                            ? Double(analysis.rightMeasurement.confidence) : nil,
+                        preferredTwoDimensionalLeg: analysis.selectedLeg
+                    )
+                }
                 vision3DReturnShadow.observe(
                     probe,
                     at: currentTime,
@@ -1400,6 +1413,7 @@ final class WorkoutViewModel {
         #if DEBUG
         vision3DExperimentalCounter.expire(at: currentTime)
         vision3DReturnShadow.expire(at: currentTime)
+        vision3DBilateralQuality.expire(at: currentTime)
         #endif
         expireTracking(at: currentTime)
         publish(activeTime: activeTime)
@@ -1440,6 +1454,7 @@ final class WorkoutViewModel {
         latestVision3DSynchronizedPair = nil
         vision3DExperimentalCounter.resetMovement()
         vision3DReturnShadow.reset()
+        vision3DBilateralQuality.reset()
         #endif
         counter.resetMovement()
         analyzer.reset()
@@ -1508,7 +1523,8 @@ final class WorkoutViewModel {
             vision3DProbe: latestVision3DProbe,
             vision3DSynchronizedPair: latestVision3DSynchronizedPair,
             vision3DExperimentalCounter: vision3DExperimentalCounter,
-            vision3DReturnShadow: vision3DReturnShadow
+            vision3DReturnShadow: vision3DReturnShadow,
+            vision3DBilateralQuality: vision3DBilateralQuality
         )
         latestDiagnostics = diagnostics
         onDiagnosticsChange?(diagnostics)
