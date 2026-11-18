@@ -1115,6 +1115,10 @@ final class PoseAnalyzerTests: XCTestCase {
         XCTAssertNil(quality.leftLeg)
         XCTAssertNil(quality.rightLeg)
         XCTAssertEqual(quality.excludedExperimentalSamples, 1)
+        quality.resetObservations()
+        XCTAssertEqual(quality.excludedExperimentalSamples, 1)
+        quality.reset()
+        XCTAssertEqual(quality.excludedExperimentalSamples, 0)
     }
 
     func testBilateralQualityDoesNotAssume2DGroundTruthOrMissing3DPose() {
