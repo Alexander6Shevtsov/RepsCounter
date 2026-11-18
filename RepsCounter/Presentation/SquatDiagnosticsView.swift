@@ -75,6 +75,19 @@ final class SquatDiagnosticsView: UIVisualEffectView {
         let synchronizedPair = enabled ? diagnostics.vision3DSynchronizedPair : nil
         let pairedProbe = synchronizedPair?.probe
         let threeDimensionalStatus = !enabled ? "выкл" : (synchronizedPair == nil ? "ожидание" : (pairedProbe?.observationAvailable == true ? "есть" : "нет позы"))
+        let experimental = diagnostics.vision3DExperimentalCounter
+        let experimentalPhase: String
+        switch experimental.phase {
+        case .seekingStanding: experimentalPhase = "ожидает стоя"
+        case .standing: experimentalPhase = "стоя"
+        case .lowered: experimentalPhase = "внизу"
+        }
+        let experimentalLeg: String
+        switch experimental.selectedLeg {
+        case .left: experimentalLeg = "Л"
+        case .right: experimentalLeg = "П"
+        case nil: experimentalLeg = "—"
+        }
         let pairedLeg: String
         switch synchronizedPair?.selectedLeg {
         case .left: pairedLeg = "Л"
@@ -82,6 +95,9 @@ final class SquatDiagnosticsView: UIVisualEffectView {
         case nil: pairedLeg = "—"
         }
         let lines = [
+            "3D ТЕСТ счёт: \(enabled ? String(experimental.repetitions) : "—") · \(experimentalPhase)",
+            "3D нога: \(experimentalLeg) · \(experimentalDecisionText(experimental.decision))",
+            "3D база ТК \(hipKneeText(experimental.standingHipKneeRatio)) · спуск \(hipKneeText(experimental.relativeDescent)) / 0.55 · сбросы \(experimental.interruptions)",
             "Vision 3D: \(threeDimensionalStatus) · пара #\(synchronizedPair?.sampleNumber ?? 0)",
             "Скорость: 2D \(rateText(currentProbe?.twoDimensionalFramesPerSecond)) · 3D \(rateText(enabled ? currentProbe?.threeDimensionalSamplesPerSecond : nil))",
             "Время: 2D сейчас \(latencyText(diagnostics.vision2DLatencyMs)) · 3D пары \(latencyText(pairedProbe?.threeDimensionalLatencyMs))",
@@ -101,6 +117,24 @@ final class SquatDiagnosticsView: UIVisualEffectView {
             "Последняя потеря: \(measurementIssueText(diagnostics.latestMeasurementIssue))"
         ]
         textLabel.text = lines.joined(separator: "\n")
+    }
+
+    private func experimentalDecisionText(_ decision: Vision3DExperimentalDecision) -> String {
+        switch decision {
+        case .waitingForSample: return "ожидание 3D"
+        case .awaitingStanding: return "нужно исходное стоя"
+        case .confirmingStanding: return "подтверждение стоя"
+        case .standingConfirmed: return "стоя подтверждено"
+        case .awaitingDepth: return "ждём сгибание"
+        case .insufficientDescent: return "таз опущен недостаточно"
+        case .confirmingDepth: return "подтверждение глубины"
+        case .loweredConfirmed: return "глубина подтверждена"
+        case .awaitingReturn: return "ждём возврат"
+        case .confirmingReturn: return "подтверждение возврата"
+        case .counted: return "повторение засчитано"
+        case .invalidMeasurement: return "нет надёжной 3D позы"
+        case .observationGap: return "разрыв 3D измерений"
+        }
     }
 
     private func rateText(_ rate: Double?) -> String {
