@@ -798,6 +798,43 @@ final class PoseAnalyzerTests: XCTestCase {
         XCTAssertEqual(counter.recentAttempts.count, 1)
     }
 
+    func testThreeDimensionalObservationGapRecordsReasonBeforeTimeout() {
+        var counter = Vision3DExperimentalCounter()
+        let standing = SquatPoseFixture.experimental3DProbe(leftAngle: 160, leftHeight: 0.96)
+        let lowered = SquatPoseFixture.experimental3DProbe(leftAngle: 72, leftHeight: 0.18)
+        _ = counter.process(standing, at: 0)
+        _ = counter.process(standing, at: 0.20)
+        _ = counter.process(lowered, at: 0.40)
+        _ = counter.process(lowered, at: 0.60)
+        counter.expire(at: 1.40)
+        XCTAssertEqual(counter.decision, .observationGap)
+        XCTAssertEqual(counter.lastAttempt?.outcome, .observationGap)
+        XCTAssertEqual(counter.repetitions, 0)
+        XCTAssertEqual(counter.recentAttempts.count, 1)
+    }
+
+    func testThreeDimensionalTrackingResetRetainsFinishedCountAndLogsAttempt() {
+        var counter = Vision3DExperimentalCounter()
+        let standing = SquatPoseFixture.experimental3DProbe(leftAngle: 160, leftHeight: 0.96)
+        let lowered = SquatPoseFixture.experimental3DProbe(leftAngle: 72, leftHeight: 0.18)
+        _ = counter.process(standing, at: 0)
+        _ = counter.process(standing, at: 0.20)
+        _ = counter.process(lowered, at: 0.40)
+        _ = counter.process(lowered, at: 0.60)
+        _ = counter.process(standing, at: 0.80)
+        XCTAssertTrue(counter.process(standing, at: 1.00))
+        XCTAssertEqual(counter.repetitions, 1)
+
+        _ = counter.process(lowered, at: 1.20)
+        XCTAssertEqual(counter.activeAttempt?.number, 2)
+        counter.resetMovement()
+        XCTAssertNil(counter.activeAttempt)
+        XCTAssertEqual(counter.lastAttempt?.outcome, .trackingReset)
+        XCTAssertEqual(counter.lastAttempt?.number, 2)
+        XCTAssertEqual(counter.repetitions, 1)
+        XCTAssertEqual(counter.recentAttempts.count, 2)
+    }
+
     #endif
 }
 
