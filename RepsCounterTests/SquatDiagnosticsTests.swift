@@ -314,6 +314,56 @@ final class SquatDiagnosticsTests: XCTestCase {
     }
 
     @MainActor
+    func testThreeDimensionalTrackerPrefersReliableTwoDimensionalRightLeg() throws {
+        let wasEnabled = Vision3DProbeControl.isEnabled
+        if !wasEnabled { Vision3DProbeControl.toggle() }
+        defer {
+            if !wasEnabled { Vision3DProbeControl.toggle() }
+        }
+
+        let fixture = SquatTrackingFixture()
+        defer { fixture.viewModel.finish() }
+        let standing = SquatPoseFixture.pose(
+            leftAngle: 170, rightAngle: 170,
+            leftConfidence: 0.61, rightConfidence: 0.94
+        )
+        let probe = SquatPoseFixture.experimental3DProbe(
+            leftAngle: 160, leftHeight: 0.98,
+            rightAngle: 160, rightHeight: 0.96
+        )
+        let paired = BodyPose(
+            joints: standing.joints,
+            aspectRatio: standing.aspectRatio,
+            rotationAngle: standing.rotationAngle,
+            vision3DProbe: probe
+        )
+        fixture.clock.currentTime = 0
+        fixture.viewModel.process(paired)
+        fixture.clock.currentTime = 0.20
+        fixture.viewModel.process(paired)
+
+        let diagnostics = try XCTUnwrap(fixture.viewModel.latestDiagnostics)
+        XCTAssertEqual(diagnostics.analysis?.selectedLeg, .right)
+        XCTAssertEqual(diagnostics.vision3DExperimentalCounter.selectedLeg, .right)
+        XCTAssertEqual(diagnostics.vision3DExperimentalCounter.selectionSource, .twoDimensionalConfidence)
+        XCTAssertEqual(
+            diagnostics.vision3DExperimentalCounter.rightTwoDimensionalConfidence ?? 0,
+            0.94,
+            accuracy: 0.01
+        )
+        XCTAssertEqual(fixture.state?.totalRepetitions, 0)
+
+        let panel = SquatDiagnosticsView()
+        panel.render(diagnostics)
+        let label = try XCTUnwrap(allSubviews(in: panel).first {
+            $0.accessibilityIdentifier == "squatDiagnosticsText"
+        } as? UILabel)
+        XCTAssertTrue(label.text?.contains("3D нога: П") == true)
+        XCTAssertTrue(label.text?.contains("3D выбор: 2D confidence") == true)
+        XCTAssertTrue(label.text?.contains("Л 0.61 П 0.94") == true)
+    }
+
+    @MainActor
     func testDiagnosticsExposeBothLegConfidencesRawAngleAndSmoothedDecision() throws {
         let fixture = SquatTrackingFixture()
         defer { fixture.viewModel.finish() }
