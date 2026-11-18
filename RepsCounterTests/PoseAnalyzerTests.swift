@@ -835,6 +835,178 @@ final class PoseAnalyzerTests: XCTestCase {
         XCTAssertEqual(counter.recentAttempts.count, 2)
     }
 
+    func testShadowDetectsPersistentTwoDimensionalStandingWhileThreeDimensionalDoesNot() {
+        var shadow = Vision3DReturnShadow()
+        let lowered = SquatPoseFixture.experimental3DProbe(
+            leftAngle: nil, leftHeight: nil, rightAngle: 112, rightHeight: 0.90
+        )
+        let standing = SquatPoseFixture.experimental3DProbe(
+            leftAngle: nil, leftHeight: nil, rightAngle: 160, rightHeight: 0.96
+        )
+
+        shadow.observe(
+            lowered, at: 0, threeDimensionalLeg: .right, standingReference: 0.96,
+            twoDimensionalLeg: .right, twoDimensionalLeftAngle: nil,
+            twoDimensionalRightAngle: 175, twoDimensionalSelectedHipKneeRatio: 0.97
+        )
+        XCTAssertEqual(shadow.agreement, .twoDimensionalStandingOnly)
+        XCTAssertEqual(shadow.consecutiveDisagreements, 1)
+        XCTAssertFalse(shadow.isStableDisagreement)
+        XCTAssertEqual(shadow.angleDifference ?? 0, 63, accuracy: 0.01)
+
+        shadow.observe(
+            lowered, at: 0.20, threeDimensionalLeg: .right, standingReference: 0.96,
+            twoDimensionalLeg: .right, twoDimensionalLeftAngle: nil,
+            twoDimensionalRightAngle: 175, twoDimensionalSelectedHipKneeRatio: 0.97
+        )
+        XCTAssertEqual(shadow.consecutiveDisagreements, 2)
+        XCTAssertTrue(shadow.isStableDisagreement)
+        XCTAssertEqual(shadow.stableDisagreementEvents, 1)
+
+        shadow.observe(
+            lowered, at: 0.40, threeDimensionalLeg: .right, standingReference: 0.96,
+            twoDimensionalLeg: .right, twoDimensionalLeftAngle: nil,
+            twoDimensionalRightAngle: 174, twoDimensionalSelectedHipKneeRatio: 0.96
+        )
+        XCTAssertEqual(shadow.stableDisagreementEvents, 1)
+
+        shadow.observe(
+            standing, at: 0.60, threeDimensionalLeg: .right, standingReference: 0.96,
+            twoDimensionalLeg: .right, twoDimensionalLeftAngle: nil,
+            twoDimensionalRightAngle: 170, twoDimensionalSelectedHipKneeRatio: 0.97
+        )
+        XCTAssertEqual(shadow.agreement, .bothStanding)
+        XCTAssertFalse(shadow.isStableDisagreement)
+        XCTAssertEqual(shadow.consecutiveDisagreements, 0)
+        XCTAssertEqual(shadow.stableDisagreementEvents, 1)
+    }
+
+    func testShadowRequiresDistinctTimedSameLegEvidenceToConfirmDisagreement() {
+        var shadow = Vision3DReturnShadow()
+        let probe = SquatPoseFixture.experimental3DProbe(
+            leftAngle: nil, leftHeight: nil, rightAngle: 113, rightHeight: 0.94
+        )
+        shadow.observe(
+            probe, at: 0, threeDimensionalLeg: .right, standingReference: 0.96,
+            twoDimensionalLeg: .right, twoDimensionalLeftAngle: nil,
+            twoDimensionalRightAngle: 170, twoDimensionalSelectedHipKneeRatio: 0.95
+        )
+        shadow.observe(
+            probe, at: 0.05, threeDimensionalLeg: .right, standingReference: 0.96,
+            twoDimensionalLeg: .right, twoDimensionalLeftAngle: nil,
+            twoDimensionalRightAngle: 170, twoDimensionalSelectedHipKneeRatio: 0.95
+        )
+        XCTAssertFalse(shadow.isStableDisagreement)
+        shadow.observe(
+            probe, at: 0.05, threeDimensionalLeg: .right, standingReference: 0.96,
+            twoDimensionalLeg: .right, twoDimensionalLeftAngle: nil,
+            twoDimensionalRightAngle: 170, twoDimensionalSelectedHipKneeRatio: 0.95
+        )
+        XCTAssertEqual(shadow.consecutiveDisagreements, 2)
+        shadow.observe(
+            probe, at: 0.20, threeDimensionalLeg: .right, standingReference: 0.96,
+            twoDimensionalLeg: .left, twoDimensionalLeftAngle: 170,
+            twoDimensionalRightAngle: 170, twoDimensionalSelectedHipKneeRatio: 0.95
+        )
+        XCTAssertEqual(shadow.agreement, .insufficientTwoDimensionalData)
+        XCTAssertEqual(shadow.consecutiveDisagreements, 0)
+        XCTAssertFalse(shadow.isStableDisagreement)
+        shadow.observe(
+            probe, at: 0.40, threeDimensionalLeg: .right, standingReference: 0.96,
+            twoDimensionalLeg: .right, twoDimensionalLeftAngle: nil,
+            twoDimensionalRightAngle: 170, twoDimensionalSelectedHipKneeRatio: 0.95
+        )
+        XCTAssertEqual(shadow.consecutiveDisagreements, 1)
+        XCTAssertFalse(shadow.isStableDisagreement)
+        shadow.observe(
+            probe, at: 0.60, threeDimensionalLeg: .right, standingReference: 0.96,
+            twoDimensionalLeg: .right, twoDimensionalLeftAngle: nil,
+            twoDimensionalRightAngle: 170, twoDimensionalSelectedHipKneeRatio: 0.95
+        )
+        XCTAssertTrue(shadow.isStableDisagreement)
+    }
+
+    func testShadowSeparatesAgreementFromAmbiguousThreeDimensionalGeometry() {
+        var shadow = Vision3DReturnShadow()
+        let standing = SquatPoseFixture.experimental3DProbe(
+            leftAngle: 158, leftHeight: 0.96
+        )
+        let lowered = SquatPoseFixture.experimental3DProbe(
+            leftAngle: 75, leftHeight: 0.18
+        )
+        shadow.observe(
+            standing, at: 0, threeDimensionalLeg: .left, standingReference: nil,
+            twoDimensionalLeg: .left, twoDimensionalLeftAngle: 170,
+            twoDimensionalRightAngle: nil, twoDimensionalSelectedHipKneeRatio: 0.96
+        )
+        XCTAssertEqual(shadow.agreement, .awaitingStandingReference)
+
+        shadow.observe(
+            standing, at: 0.20, threeDimensionalLeg: .left, standingReference: 0.96,
+            twoDimensionalLeg: .left, twoDimensionalLeftAngle: 170,
+            twoDimensionalRightAngle: nil, twoDimensionalSelectedHipKneeRatio: 0.96
+        )
+        XCTAssertEqual(shadow.agreement, .bothStanding)
+
+        shadow.observe(
+            lowered, at: 0.40, threeDimensionalLeg: .left, standingReference: 0.96,
+            twoDimensionalLeg: .left, twoDimensionalLeftAngle: 90,
+            twoDimensionalRightAngle: nil, twoDimensionalSelectedHipKneeRatio: 0.18
+        )
+        XCTAssertEqual(shadow.agreement, .bothMoving)
+        XCTAssertFalse(shadow.isStableDisagreement)
+
+        shadow.observe(
+            standing, at: 0.60, threeDimensionalLeg: .left, standingReference: 0.96,
+            twoDimensionalLeg: .left, twoDimensionalLeftAngle: 90,
+            twoDimensionalRightAngle: nil, twoDimensionalSelectedHipKneeRatio: 0.18
+        )
+        XCTAssertEqual(shadow.agreement, .threeDimensionalStandingOnly)
+        XCTAssertFalse(shadow.isStableDisagreement)
+
+        shadow.observe(
+            standing, at: 0.80, threeDimensionalLeg: .left, standingReference: 0.96,
+            twoDimensionalLeg: .left, twoDimensionalLeftAngle: nil,
+            twoDimensionalRightAngle: nil, twoDimensionalSelectedHipKneeRatio: nil
+        )
+        XCTAssertEqual(shadow.agreement, .insufficientTwoDimensionalData)
+        XCTAssertFalse(shadow.isStableDisagreement)
+    }
+
+    func testShadowExpiryAndLegSwitchClearStaleDisagreement() {
+        var shadow = Vision3DReturnShadow()
+        let rightProbe = SquatPoseFixture.experimental3DProbe(
+            leftAngle: nil, leftHeight: nil, rightAngle: 112, rightHeight: 0.93
+        )
+        let leftProbe = SquatPoseFixture.experimental3DProbe(
+            leftAngle: 155, leftHeight: 0.96
+        )
+        shadow.observe(
+            rightProbe, at: 0, threeDimensionalLeg: .right, standingReference: 0.96,
+            twoDimensionalLeg: .right, twoDimensionalLeftAngle: nil,
+            twoDimensionalRightAngle: 175, twoDimensionalSelectedHipKneeRatio: 0.95
+        )
+        shadow.observe(
+            rightProbe, at: 0.20, threeDimensionalLeg: .right, standingReference: 0.96,
+            twoDimensionalLeg: .right, twoDimensionalLeftAngle: nil,
+            twoDimensionalRightAngle: 175, twoDimensionalSelectedHipKneeRatio: 0.95
+        )
+        XCTAssertTrue(shadow.isStableDisagreement)
+        shadow.expire(at: 1.0)
+        XCTAssertEqual(shadow.agreement, .awaitingSelectedLeg)
+        XCTAssertFalse(shadow.isStableDisagreement)
+        XCTAssertEqual(shadow.sampleNumber, 0)
+
+        shadow.observe(
+            leftProbe, at: 1.20, threeDimensionalLeg: .left, standingReference: 0.96,
+            twoDimensionalLeg: .left, twoDimensionalLeftAngle: 175,
+            twoDimensionalRightAngle: nil, twoDimensionalSelectedHipKneeRatio: 0.96
+        )
+        XCTAssertEqual(shadow.agreement, .bothStanding)
+        XCTAssertEqual(shadow.selectedLeg, .left)
+        XCTAssertFalse(shadow.isStableDisagreement)
+    }
+
     #endif
 }
 
