@@ -1007,6 +1007,26 @@ final class PoseAnalyzerTests: XCTestCase {
         XCTAssertFalse(shadow.isStableDisagreement)
     }
 
+    func testShadowDoesNotTrustUnavailableThreeDimensionalPose() {
+        var shadow = Vision3DReturnShadow()
+        let unavailable = SquatPoseFixture.experimental3DProbe(
+            leftAngle: 160, leftHeight: 0.96, available: false
+        )
+        shadow.observe(
+            unavailable, at: 0, threeDimensionalLeg: .left, standingReference: 0.96,
+            twoDimensionalLeg: .left, twoDimensionalLeftAngle: 170,
+            twoDimensionalRightAngle: nil, twoDimensionalSelectedHipKneeRatio: 0.96
+        )
+        shadow.observe(
+            unavailable, at: 0.20, threeDimensionalLeg: .left, standingReference: 0.96,
+            twoDimensionalLeg: .left, twoDimensionalLeftAngle: 170,
+            twoDimensionalRightAngle: nil, twoDimensionalSelectedHipKneeRatio: 0.96
+        )
+        XCTAssertEqual(shadow.agreement, .insufficientThreeDimensionalData)
+        XCTAssertNil(shadow.threeDimensionalAngle)
+        XCTAssertFalse(shadow.isStableDisagreement)
+    }
+
     #endif
 }
 
