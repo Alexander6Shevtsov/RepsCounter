@@ -373,6 +373,10 @@ struct Vision3DBilateralQualityMonitor {
         excludedExperimentalSamples = 0
     }
 
+    mutating func resetObservations() {
+        resetHistory()
+    }
+
     private mutating func resetHistory() {
         leftLeg = nil
         rightLeg = nil
@@ -1454,7 +1458,7 @@ final class WorkoutViewModel {
         latestVision3DSynchronizedPair = nil
         vision3DExperimentalCounter.resetMovement()
         vision3DReturnShadow.reset()
-        vision3DBilateralQuality.reset()
+        vision3DBilateralQuality.resetObservations()
         #endif
         counter.resetMovement()
         analyzer.reset()
