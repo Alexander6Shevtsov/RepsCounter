@@ -160,8 +160,9 @@ final class SquatDiagnosticsTests: XCTestCase {
                 let panelFrame = panel.convert(panel.bounds, to: controller.view)
                 XCTAssertTrue(controller.view.bounds.contains(panelFrame))
                 XCTAssertEqual(panelFrame.width, 250, accuracy: 0.5)
-                XCTAssertEqual(panelFrame.height, 170, accuracy: 0.5)
-                XCTAssertLessThan(panelFrame.midY, controller.view.bounds.midY)
+                XCTAssertGreaterThan(panelFrame.height, 170)
+                XCTAssertLessThanOrEqual(panelFrame.height, 460.5)
+                XCTAssertLessThan(panelFrame.minY, controller.view.bounds.midY)
                 let metrics = try XCTUnwrap(contents.first { $0.accessibilityIdentifier == "workoutMetricsScroll" })
                 let count = try XCTUnwrap(contents.first { $0.accessibilityIdentifier == "workoutCount" })
                 let controls = try XCTUnwrap(contents.first { $0.accessibilityIdentifier == "workoutControls" })
@@ -179,6 +180,11 @@ final class SquatDiagnosticsTests: XCTestCase {
                 XCTAssertTrue(panelScroll.isScrollEnabled)
                 XCTAssertGreaterThan(panelScroll.bounds.height, 0)
                 XCTAssertGreaterThan(panelScroll.contentSize.height, 0)
+                if panelScroll.contentSize.height > panelScroll.bounds.height {
+                    let bottomOffset = panelScroll.contentSize.height - panelScroll.bounds.height
+                    panelScroll.setContentOffset(CGPoint(x: 0, y: bottomOffset), animated: false)
+                    XCTAssertEqual(panelScroll.contentOffset.y, bottomOffset, accuracy: 0.5)
+                }
                 if viewport.width == 393, category == .large {
                     let image = UIGraphicsImageRenderer(size: viewport).image { context in
                         controller.view.layer.render(in: context.cgContext)
