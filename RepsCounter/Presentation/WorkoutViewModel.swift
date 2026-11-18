@@ -75,6 +75,7 @@ struct SquatDiagnostics {
     let vision2DLatencyMs: Double?
     let vision3DProbe: Vision3DProbe?
     let vision3DSynchronizedPair: Vision3DSynchronizedPair?
+    let vision3DExperimentalCounter: Vision3DExperimentalCounter
 }
 
 enum SquatDepthBreak: Equatable {
@@ -459,6 +460,7 @@ final class WorkoutViewModel {
     private var latestVision2DLatencyMs: Double?
     private var latestVision3DProbe: Vision3DProbe?
     private var latestVision3DSynchronizedPair: Vision3DSynchronizedPair?
+    private var vision3DExperimentalCounter = Vision3DExperimentalCounter()
     #endif
 
     private let persistence: any WorkoutStoring
@@ -513,6 +515,7 @@ final class WorkoutViewModel {
     func clearVision3DComparison() {
         latestVision3DProbe = nil
         latestVision3DSynchronizedPair = nil
+        vision3DExperimentalCounter.reset()
         publish()
     }
     #endif
@@ -525,6 +528,7 @@ final class WorkoutViewModel {
         guard restDeadline == nil else { return }
         #if DEBUG
         depthAttemptTracker.recordPose(at: currentTime)
+        vision3DExperimentalCounter.expire(at: currentTime)
         #endif
         expireTracking(at: currentTime)
         let analysis = analyzer.analyze(pose)
@@ -543,6 +547,9 @@ final class WorkoutViewModel {
                 twoDimensionalSelectedHeightRatio: analysis.hipKneeHeightRatio,
                 probe: probe
             )
+            if Vision3DProbeControl.isEnabled {
+                _ = vision3DExperimentalCounter.process(probe, at: currentTime)
+            }
         }
         #endif
         hasPose = analysis.smoothedAngle != nil
@@ -715,6 +722,9 @@ final class WorkoutViewModel {
         let currentTime = timeSource.currentTime
         let activeTime = activeDuration(at: currentTime)
         advanceRest(at: activeTime)
+        #if DEBUG
+        vision3DExperimentalCounter.expire(at: currentTime)
+        #endif
         expireTracking(at: currentTime)
         publish(activeTime: activeTime)
     }
@@ -752,6 +762,7 @@ final class WorkoutViewModel {
         latestVision2DLatencyMs = nil
         latestVision3DProbe = nil
         latestVision3DSynchronizedPair = nil
+        vision3DExperimentalCounter.resetMovement()
         #endif
         counter.resetMovement()
         analyzer.reset()
@@ -818,7 +829,8 @@ final class WorkoutViewModel {
             recentDepthAttempts: depthAttemptTracker.recentAttempts,
             vision2DLatencyMs: latestVision2DLatencyMs,
             vision3DProbe: latestVision3DProbe,
-            vision3DSynchronizedPair: latestVision3DSynchronizedPair
+            vision3DSynchronizedPair: latestVision3DSynchronizedPair,
+            vision3DExperimentalCounter: vision3DExperimentalCounter
         )
         latestDiagnostics = diagnostics
         onDiagnosticsChange?(diagnostics)
