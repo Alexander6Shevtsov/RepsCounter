@@ -97,6 +97,7 @@ final class SquatDiagnosticsView: UIVisualEffectView {
         let lines = [
             "3D ТЕСТ счёт: \(enabled ? String(experimental.repetitions) : "—") · \(experimentalPhase)",
             "3D нога: \(experimentalLeg) · \(experimentalDecisionText(experimental.decision))",
+            "3D выбор: \(experimentalSelectionText(experimental.selectionSource)) · 2D Л \(confidenceText(experimental.leftTwoDimensionalConfidence)) П \(confidenceText(experimental.rightTwoDimensionalConfidence))",
             "3D база ТК \(hipKneeText(experimental.standingHipKneeRatio)) · спуск \(hipKneeText(experimental.relativeDescent)) / 0.55 · сбросы \(experimental.interruptions)",
             "Vision 3D: \(threeDimensionalStatus) · пара #\(synchronizedPair?.sampleNumber ?? 0)",
             "Скорость: 2D \(rateText(currentProbe?.twoDimensionalFramesPerSecond)) · 3D \(rateText(enabled ? currentProbe?.threeDimensionalSamplesPerSecond : nil))",
@@ -119,9 +120,23 @@ final class SquatDiagnosticsView: UIVisualEffectView {
         textLabel.text = lines.joined(separator: "\n")
     }
 
+    private func confidenceText(_ confidence: Double?) -> String {
+        guard let confidence, confidence.isFinite else { return "—" }
+        return String(format: "%.2f", confidence)
+    }
+
+    private func experimentalSelectionText(_ source: Vision3DLegSelectionSource) -> String {
+        switch source {
+        case .awaitingEvidence: return "ожидание"
+        case .twoDimensionalConfidence: return "2D confidence"
+        case .singleThreeDimensionalLeg: return "единственная 3D"
+        }
+    }
+
     private func experimentalDecisionText(_ decision: Vision3DExperimentalDecision) -> String {
         switch decision {
         case .waitingForSample: return "ожидание 3D"
+        case .awaitingLegEvidence: return "нет однозначной ноги"
         case .awaitingStanding: return "нужно исходное стоя"
         case .confirmingStanding: return "подтверждение стоя"
         case .standingConfirmed: return "стоя подтверждено"
