@@ -106,7 +106,7 @@ final class SquatDiagnosticsView: UIVisualEffectView {
             "3D попытка #\(experimentalAttempt?.number ?? 0): мин угол \(angleText(experimentalAttempt?.minimumKneeAngle)) · пик спуска \(hipKneeText(experimentalAttempt?.maximumRelativeDescent))",
             "3D внизу: \(threeDimensionalDurationText(experimentalAttempt?.loweredDuration)) / 5 с · итог: \(experimentalAttemptState) · история \(experimental.recentAttempts.count)/20",
             "Возврат 2D/3D: \(shadowAgreementText(standingShadow.agreement))",
-            "Тест возврата: совпадений нет \(standingShadow.consecutiveDisagreements)/2 · устойчивое расхождение \(standingShadow.isStableDisagreement ? "ДА" : "нет")",
+            "Расхождение стоя: \(standingShadow.consecutiveDisagreements)/2 · устойчивое \(standingShadow.isStableDisagreement ? "ДА" : "нет")",
             "Кадр #\(standingShadow.sampleNumber): угол 2D \(angleText(standingShadow.twoDimensionalAngle)) · 3D \(angleText(standingShadow.threeDimensionalAngle)) · Δ \(angleText(standingShadow.angleDifference))",
             "ТК: 2D \(hipKneeText(standingShadow.twoDimensionalHipKneeRatio)) · 3D \(hipKneeText(standingShadow.threeDimensionalHipKneeRatio)) · база \(hipKneeText(standingShadow.standingReference))",
             "Vision 3D: \(threeDimensionalStatus) · пара #\(synchronizedPair?.sampleNumber ?? 0)",
