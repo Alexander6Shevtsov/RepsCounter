@@ -317,8 +317,8 @@ struct Vision3DExperimentalCounter {
             angle: probe.rightKneeAngle,
             heightRatio: probe.rightHipKneeHeightRatio
         )
-        leftTwoDimensionalConfidence = validatedConfidence(leftTwoDimensionalConfidence)
-        rightTwoDimensionalConfidence = validatedConfidence(rightTwoDimensionalConfidence)
+        self.leftTwoDimensionalConfidence = validatedConfidence(leftTwoDimensionalConfidence)
+        self.rightTwoDimensionalConfidence = validatedConfidence(rightTwoDimensionalConfidence)
 
         let activeLeg: BodyLeg
         if let selectedLeg {
