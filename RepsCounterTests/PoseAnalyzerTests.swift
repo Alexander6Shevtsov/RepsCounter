@@ -603,6 +603,66 @@ final class PoseAnalyzerTests: XCTestCase {
         XCTAssertEqual(counter.repetitions, 0)
     }
 
+    func testThreeDimensionalPreferredLegChangeRestartsStandingConfirmation() {
+        var counter = Vision3DExperimentalCounter()
+        let standing = SquatPoseFixture.experimental3DProbe(
+            leftAngle: 165, leftHeight: 0.96, rightAngle: 165, rightHeight: 0.96
+        )
+        XCTAssertFalse(counter.process(
+            standing, at: 0,
+            leftTwoDimensionalConfidence: 0.91,
+            rightTwoDimensionalConfidence: 0.70,
+            preferredTwoDimensionalLeg: .left
+        ))
+        XCTAssertFalse(counter.process(
+            standing, at: 0.20,
+            leftTwoDimensionalConfidence: 0.70,
+            rightTwoDimensionalConfidence: 0.91,
+            preferredTwoDimensionalLeg: .right
+        ))
+        XCTAssertNil(counter.selectedLeg)
+        XCTAssertEqual(counter.phase, .seekingStanding)
+        XCTAssertFalse(counter.process(
+            standing, at: 0.40,
+            leftTwoDimensionalConfidence: 0.70,
+            rightTwoDimensionalConfidence: 0.91,
+            preferredTwoDimensionalLeg: .right
+        ))
+        XCTAssertEqual(counter.selectedLeg, .right)
+        XCTAssertEqual(counter.phase, .standing)
+    }
+
+    func testThreeDimensionalDoesNotUseOnlyLegContradictedByReliableTwoDimensionalSide() {
+        var counter = Vision3DExperimentalCounter()
+        let onlyLeft = SquatPoseFixture.experimental3DProbe(
+            leftAngle: 165, leftHeight: 0.96
+        )
+        XCTAssertFalse(counter.process(
+            onlyLeft, at: 0,
+            rightTwoDimensionalConfidence: 0.94,
+            preferredTwoDimensionalLeg: .right
+        ))
+        XCTAssertNil(counter.selectedLeg)
+        XCTAssertEqual(counter.decision, .awaitingLegEvidence)
+
+        let onlyRight = SquatPoseFixture.experimental3DProbe(
+            leftAngle: nil, leftHeight: nil, rightAngle: 165, rightHeight: 0.96
+        )
+        XCTAssertFalse(counter.process(
+            onlyRight, at: 0.20,
+            rightTwoDimensionalConfidence: 0.94,
+            preferredTwoDimensionalLeg: .right
+        ))
+        XCTAssertFalse(counter.process(
+            onlyRight, at: 0.40,
+            rightTwoDimensionalConfidence: 0.94,
+            preferredTwoDimensionalLeg: .right
+        ))
+        XCTAssertEqual(counter.selectedLeg, .right)
+        XCTAssertEqual(counter.phase, .standing)
+        XCTAssertEqual(counter.repetitions, 0)
+    }
+
     #endif
 }
 
