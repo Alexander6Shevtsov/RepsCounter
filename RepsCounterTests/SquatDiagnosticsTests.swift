@@ -260,6 +260,57 @@ final class SquatDiagnosticsTests: XCTestCase {
     }
 
     @MainActor
+    func testExperimentalThreeDimensionalCountDoesNotAffectProductionCountOrHistory() throws {
+        let wasEnabled = Vision3DProbeControl.isEnabled
+        if !wasEnabled { Vision3DProbeControl.toggle() }
+        defer {
+            if !wasEnabled { Vision3DProbeControl.toggle() }
+        }
+        let fixture = SquatTrackingFixture()
+        defer { fixture.viewModel.finish() }
+        let unchangedTwoDimensionalPose = SquatPoseFixture.pose(leftAngle: 170)
+        let movements: [(TimeInterval, Double, Double)] = [
+            (0, 155, 0.96), (0.20, 155, 0.96),
+            (0.40, 70, 0.18), (0.60, 70, 0.18),
+            (0.80, 155, 0.95), (1.00, 155, 0.95)
+        ]
+        for (timestamp, angle, heightRatio) in movements {
+            fixture.clock.currentTime = timestamp
+            let probe = SquatPoseFixture.experimental3DProbe(
+                leftAngle: angle, leftHeight: heightRatio
+            )
+            let pose = BodyPose(
+                joints: unchangedTwoDimensionalPose.joints,
+                aspectRatio: unchangedTwoDimensionalPose.aspectRatio,
+                rotationAngle: unchangedTwoDimensionalPose.rotationAngle,
+                vision3DProbe: probe
+            )
+            fixture.viewModel.process(pose)
+        }
+        let diagnostics = try XCTUnwrap(fixture.viewModel.latestDiagnostics)
+        XCTAssertEqual(diagnostics.vision3DExperimentalCounter.repetitions, 1)
+        XCTAssertEqual(diagnostics.vision3DExperimentalCounter.decision, .counted)
+        XCTAssertEqual(diagnostics.vision3DExperimentalCounter.phase, .standing)
+        XCTAssertEqual(fixture.state?.totalRepetitions, 0)
+        XCTAssertEqual(fixture.state?.repetitions, 0)
+
+        let panel = SquatDiagnosticsView()
+        panel.render(diagnostics)
+        let label = try XCTUnwrap(allSubviews(in: panel).first {
+            $0.accessibilityIdentifier == "squatDiagnosticsText"
+        } as? UILabel)
+        XCTAssertTrue(label.text?.contains("3D ТЕСТ счёт: 1") == true)
+        XCTAssertTrue(label.text?.contains("3D база ТК") == true)
+
+        fixture.viewModel.pause()
+        XCTAssertEqual(fixture.viewModel.latestDiagnostics?.vision3DExperimentalCounter.repetitions, 1)
+        fixture.viewModel.clearVision3DComparison()
+        XCTAssertEqual(fixture.viewModel.latestDiagnostics?.vision3DExperimentalCounter.repetitions, 0)
+        XCTAssertEqual(fixture.state?.totalRepetitions, 0)
+        XCTAssertTrue(fixture.store.history().isEmpty)
+    }
+
+    @MainActor
     func testDiagnosticsExposeBothLegConfidencesRawAngleAndSmoothedDecision() throws {
         let fixture = SquatTrackingFixture()
         defer { fixture.viewModel.finish() }
