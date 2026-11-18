@@ -233,6 +233,212 @@ struct SquatDepthAttemptTracker {
     }
 }
 
+
+enum Vision3DExperimentalDecision: Equatable {
+    case waitingForSample
+    case awaitingStanding
+    case confirmingStanding
+    case standingConfirmed
+    case awaitingDepth
+    case insufficientDescent
+    case confirmingDepth
+    case loweredConfirmed
+    case awaitingReturn
+    case confirmingReturn
+    case counted
+    case invalidMeasurement
+    case observationGap
+}
+
+struct Vision3DExperimentalCounter {
+    private(set) var repetitions = 0
+    private(set) var phase: SquatPhase = .seekingStanding
+    private(set) var decision: Vision3DExperimentalDecision = .waitingForSample
+    private(set) var selectedLeg: BodyLeg?
+    private(set) var standingHipKneeRatio: Double?
+    private(set) var relativeDescent: Double?
+    private(set) var interruptions = 0
+
+    let standingAngle = 135.0
+    let loweredAngle = 110.0
+    let minimumStandingHipKneeRatio = 0.70
+    let minimumRelativeDescent = 0.55
+    let maximumSampleGap: TimeInterval = 0.75
+    let minimumConfirmationDuration: TimeInterval = 0.12
+    let requiredConfirmationSamples = 2
+
+    private var lastSampleTime: TimeInterval?
+    private var confirmationStartedAt: TimeInterval?
+    private var confirmationSamples = 0
+    private var candidateStandingRatio: Double?
+
+    mutating func process(_ probe: Vision3DProbe, at timestamp: TimeInterval) -> Bool {
+        guard probe.threeDimensionalLatencyMs != nil else { return false }
+        guard timestamp.isFinite, timestamp >= 0 else {
+            interrupt(.invalidMeasurement)
+            return false
+        }
+        if let lastSampleTime {
+            guard timestamp > lastSampleTime else { return false }
+            if timestamp - lastSampleTime > maximumSampleGap {
+                interrupt(.observationGap)
+            }
+        }
+        lastSampleTime = timestamp
+
+        guard probe.observationAvailable else {
+            interrupt(.invalidMeasurement)
+            return false
+        }
+        let leftMeasurement = validMeasurement(
+            angle: probe.leftKneeAngle,
+            heightRatio: probe.leftHipKneeHeightRatio
+        )
+        let rightMeasurement = validMeasurement(
+            angle: probe.rightKneeAngle,
+            heightRatio: probe.rightHipKneeHeightRatio
+        )
+        if selectedLeg == nil {
+            if leftMeasurement != nil {
+                selectedLeg = .left
+            } else if rightMeasurement != nil {
+                selectedLeg = .right
+            }
+        }
+
+        let measurement = selectedLeg == .left ? leftMeasurement : rightMeasurement
+        guard let measurement else {
+            interrupt(.invalidMeasurement)
+            return false
+        }
+
+        let angle = measurement.angle
+        let heightRatio = measurement.heightRatio
+        relativeDescent = standingHipKneeRatio.map { $0 - heightRatio }
+
+        switch phase {
+        case .seekingStanding:
+            let isStanding = angle >= standingAngle
+                && heightRatio >= minimumStandingHipKneeRatio
+            if isStanding {
+                candidateStandingRatio = max(
+                    candidateStandingRatio ?? heightRatio,
+                    heightRatio
+                )
+            } else {
+                candidateStandingRatio = nil
+            }
+            guard confirm(isStanding, at: timestamp) else {
+                decision = isStanding ? .confirmingStanding : .awaitingStanding
+                return false
+            }
+            standingHipKneeRatio = candidateStandingRatio
+            candidateStandingRatio = nil
+            relativeDescent = 0
+            phase = .standing
+            decision = .standingConfirmed
+        case .standing:
+            guard let standingHipKneeRatio else {
+                interrupt(.invalidMeasurement)
+                return false
+            }
+            let hasDepth = angle <= loweredAngle
+                && standingHipKneeRatio - heightRatio >= minimumRelativeDescent
+            guard confirm(hasDepth, at: timestamp) else {
+                if angle > loweredAngle {
+                    decision = .awaitingDepth
+                } else if !hasDepth {
+                    decision = .insufficientDescent
+                } else {
+                    decision = .confirmingDepth
+                }
+                return false
+            }
+            phase = .lowered
+            decision = .loweredConfirmed
+        case .lowered:
+            guard let standingHipKneeRatio else {
+                interrupt(.invalidMeasurement)
+                return false
+            }
+            let returnedStanding = angle >= standingAngle
+                && heightRatio >= standingHipKneeRatio - 0.20
+            guard confirm(returnedStanding, at: timestamp) else {
+                decision = returnedStanding ? .confirmingReturn : .awaitingReturn
+                return false
+            }
+            repetitions += 1
+            phase = .standing
+            decision = .counted
+            self.standingHipKneeRatio = max(standingHipKneeRatio, heightRatio)
+            relativeDescent = 0
+            return true
+        }
+        return false
+    }
+
+    mutating func expire(at timestamp: TimeInterval) {
+        guard timestamp.isFinite, let lastSampleTime,
+              timestamp - lastSampleTime > maximumSampleGap else { return }
+        interrupt(.observationGap)
+    }
+
+    mutating func resetMovement() {
+        phase = .seekingStanding
+        decision = .waitingForSample
+        selectedLeg = nil
+        standingHipKneeRatio = nil
+        relativeDescent = nil
+        lastSampleTime = nil
+        confirmationSamples = 0
+        confirmationStartedAt = nil
+        candidateStandingRatio = nil
+    }
+
+    mutating func reset() {
+        repetitions = 0
+        interruptions = 0
+        resetMovement()
+    }
+
+    private mutating func interrupt(_ reason: Vision3DExperimentalDecision) {
+        if selectedLeg != nil || phase != .seekingStanding {
+            interruptions += 1
+        }
+        resetMovement()
+        decision = reason
+    }
+
+    private mutating func confirm(_ satisfies: Bool, at timestamp: TimeInterval) -> Bool {
+        guard satisfies else {
+            confirmationSamples = 0
+            confirmationStartedAt = nil
+            return false
+        }
+        if confirmationStartedAt == nil {
+            confirmationStartedAt = timestamp
+        }
+        confirmationSamples += 1
+        guard confirmationSamples >= requiredConfirmationSamples,
+              timestamp - (confirmationStartedAt ?? timestamp) >= minimumConfirmationDuration
+        else { return false }
+        confirmationSamples = 0
+        confirmationStartedAt = nil
+        return true
+    }
+
+    private func validMeasurement(
+        angle: Double?,
+        heightRatio: Double?
+    ) -> (angle: Double, heightRatio: Double)? {
+        guard let angle, let heightRatio,
+              angle.isFinite, heightRatio.isFinite,
+              (0...180).contains(angle),
+              (-1...1).contains(heightRatio) else { return nil }
+        return (angle, heightRatio)
+    }
+}
+
 #endif
 
 @MainActor
