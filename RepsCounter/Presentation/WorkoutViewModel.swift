@@ -644,7 +644,15 @@ final class WorkoutViewModel {
                 probe: probe
             )
             if Vision3DProbeControl.isEnabled {
-                _ = vision3DExperimentalCounter.process(probe, at: currentTime)
+                _ = vision3DExperimentalCounter.process(
+                    probe,
+                    at: currentTime,
+                    leftTwoDimensionalConfidence: analysis.leftMeasurement.isReliable
+                        ? Double(analysis.leftMeasurement.confidence) : nil,
+                    rightTwoDimensionalConfidence: analysis.rightMeasurement.isReliable
+                        ? Double(analysis.rightMeasurement.confidence) : nil,
+                    preferredTwoDimensionalLeg: analysis.selectedLeg
+                )
             }
         }
         #endif
