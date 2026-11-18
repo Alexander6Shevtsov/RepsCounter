@@ -76,6 +76,9 @@ final class SquatDiagnosticsView: UIVisualEffectView {
         let pairedProbe = synchronizedPair?.probe
         let threeDimensionalStatus = !enabled ? "выкл" : (synchronizedPair == nil ? "ожидание" : (pairedProbe?.observationAvailable == true ? "есть" : "нет позы"))
         let experimental = diagnostics.vision3DExperimentalCounter
+        let experimentalAttempt = experimental.activeAttempt ?? experimental.lastAttempt
+        let experimentalAttemptState = experimental.activeAttempt != nil
+            ? "в ходе" : experimentalOutcomeText(experimentalAttempt?.outcome)
         let experimentalPhase: String
         switch experimental.phase {
         case .seekingStanding: experimentalPhase = "ожидает стоя"
@@ -99,6 +102,8 @@ final class SquatDiagnosticsView: UIVisualEffectView {
             "3D нога: \(experimentalLeg) · \(experimentalDecisionText(experimental.decision))",
             "3D выбор: \(experimentalSelectionText(experimental.selectionSource)) · 2D Л \(confidenceText(experimental.leftTwoDimensionalConfidence)) П \(confidenceText(experimental.rightTwoDimensionalConfidence))",
             "3D база ТК \(hipKneeText(experimental.standingHipKneeRatio)) · спуск \(hipKneeText(experimental.relativeDescent)) / 0.55 · сбросы \(experimental.interruptions)",
+            "3D попытка #\(experimentalAttempt?.number ?? 0): мин угол \(angleText(experimentalAttempt?.minimumKneeAngle)) · пик спуска \(hipKneeText(experimentalAttempt?.maximumRelativeDescent))",
+            "3D внизу: \(threeDimensionalDurationText(experimentalAttempt?.loweredDuration)) / 5 с · итог: \(experimentalAttemptState) · история \(experimental.recentAttempts.count)/20",
             "Vision 3D: \(threeDimensionalStatus) · пара #\(synchronizedPair?.sampleNumber ?? 0)",
             "Скорость: 2D \(rateText(currentProbe?.twoDimensionalFramesPerSecond)) · 3D \(rateText(enabled ? currentProbe?.threeDimensionalSamplesPerSecond : nil))",
             "Время: 2D сейчас \(latencyText(diagnostics.vision2DLatencyMs)) · 3D пары \(latencyText(pairedProbe?.threeDimensionalLatencyMs))",
@@ -133,6 +138,23 @@ final class SquatDiagnosticsView: UIVisualEffectView {
         }
     }
 
+    private func threeDimensionalDurationText(_ duration: TimeInterval?) -> String {
+        guard let duration, duration.isFinite else { return "—" }
+        return String(format: "%.1f с", duration)
+    }
+
+    private func experimentalOutcomeText(_ outcome: Vision3DAttemptOutcome?) -> String {
+        switch outcome {
+        case .counted: return "засчитано"
+        case .returnedWithoutDepth: return "возврат без глубины"
+        case .loweredTimeout: return "тайм-аут нижней фазы"
+        case .invalidMeasurement: return "нет достоверной 3D позы"
+        case .observationGap: return "разрыв 3D наблюдений"
+        case .trackingReset: return "сброс отслеживания"
+        case nil: return "—"
+        }
+    }
+
     private func experimentalDecisionText(_ decision: Vision3DExperimentalDecision) -> String {
         switch decision {
         case .waitingForSample: return "ожидание 3D"
@@ -149,6 +171,7 @@ final class SquatDiagnosticsView: UIVisualEffectView {
         case .counted: return "повторение засчитано"
         case .invalidMeasurement: return "нет надёжной 3D позы"
         case .observationGap: return "разрыв 3D измерений"
+        case .loweredTimeout: return "тайм-аут нижней фазы (>5 с)"
         }
     }
 
