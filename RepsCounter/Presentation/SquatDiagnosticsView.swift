@@ -76,6 +76,7 @@ final class SquatDiagnosticsView: UIVisualEffectView {
         let pairedProbe = synchronizedPair?.probe
         let threeDimensionalStatus = !enabled ? "выкл" : (synchronizedPair == nil ? "ожидание" : (pairedProbe?.observationAvailable == true ? "есть" : "нет позы"))
         let experimental = diagnostics.vision3DExperimentalCounter
+        let standingShadow = diagnostics.vision3DReturnShadow
         let experimentalAttempt = experimental.activeAttempt ?? experimental.lastAttempt
         let experimentalAttemptState = experimental.activeAttempt != nil
             ? "в ходе" : experimentalOutcomeText(experimentalAttempt?.outcome)
@@ -104,6 +105,10 @@ final class SquatDiagnosticsView: UIVisualEffectView {
             "3D база ТК \(hipKneeText(experimental.standingHipKneeRatio)) · спуск \(hipKneeText(experimental.relativeDescent)) / 0.55 · сбросы \(experimental.interruptions)",
             "3D попытка #\(experimentalAttempt?.number ?? 0): мин угол \(angleText(experimentalAttempt?.minimumKneeAngle)) · пик спуска \(hipKneeText(experimentalAttempt?.maximumRelativeDescent))",
             "3D внизу: \(threeDimensionalDurationText(experimentalAttempt?.loweredDuration)) / 5 с · итог: \(experimentalAttemptState) · история \(experimental.recentAttempts.count)/20",
+            "Возврат 2D/3D: \(shadowAgreementText(standingShadow.agreement))",
+            "Тест возврата: совпадений нет \(standingShadow.consecutiveDisagreements)/2 · устойчивое расхождение \(standingShadow.isStableDisagreement ? "ДА" : "нет")",
+            "Кадр #\(standingShadow.sampleNumber): угол 2D \(angleText(standingShadow.twoDimensionalAngle)) · 3D \(angleText(standingShadow.threeDimensionalAngle)) · Δ \(angleText(standingShadow.angleDifference))",
+            "ТК: 2D \(hipKneeText(standingShadow.twoDimensionalHipKneeRatio)) · 3D \(hipKneeText(standingShadow.threeDimensionalHipKneeRatio)) · база \(hipKneeText(standingShadow.standingReference))",
             "Vision 3D: \(threeDimensionalStatus) · пара #\(synchronizedPair?.sampleNumber ?? 0)",
             "Скорость: 2D \(rateText(currentProbe?.twoDimensionalFramesPerSecond)) · 3D \(rateText(enabled ? currentProbe?.threeDimensionalSamplesPerSecond : nil))",
             "Время: 2D сейчас \(latencyText(diagnostics.vision2DLatencyMs)) · 3D пары \(latencyText(pairedProbe?.threeDimensionalLatencyMs))",
@@ -123,6 +128,19 @@ final class SquatDiagnosticsView: UIVisualEffectView {
             "Последняя потеря: \(measurementIssueText(diagnostics.latestMeasurementIssue))"
         ]
         textLabel.text = lines.joined(separator: "\n")
+    }
+
+    private func shadowAgreementText(_ agreement: Vision3DStandingAgreement) -> String {
+        switch agreement {
+        case .awaitingSelectedLeg: return "ожидается выбор 3D-ноги"
+        case .awaitingStandingReference: return "ожидается калибровка стоя"
+        case .insufficientTwoDimensionalData: return "не хватает 2D данных той же ноги"
+        case .insufficientThreeDimensionalData: return "не хватает 3D данных"
+        case .bothStanding: return "обе модели видят стойку"
+        case .bothMoving: return "обе модели не видят стойку"
+        case .twoDimensionalStandingOnly: return "2D стоя, 3D не подтверждает"
+        case .threeDimensionalStandingOnly: return "3D стоя, 2D не подтверждает"
+        }
     }
 
     private func confidenceText(_ confidence: Double?) -> String {
