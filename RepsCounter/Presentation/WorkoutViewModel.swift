@@ -127,9 +127,13 @@ struct Vision3DReturnShadow {
             ? twoDimensionalSelectedHipKneeRatio : nil
 
         twoDimensionalAngle = validatedAngle(currentTwoDimensionalAngle)
-        threeDimensionalAngle = validatedAngle(currentThreeDimensionalAngle)
+        threeDimensionalAngle = validatedAngle(
+            probe.observationAvailable ? currentThreeDimensionalAngle : nil
+        )
         twoDimensionalHipKneeRatio = validatedRatio(currentTwoDimensionalRatio)
-        threeDimensionalHipKneeRatio = validatedRatio(currentThreeDimensionalRatio)
+        threeDimensionalHipKneeRatio = validatedRatio(
+            probe.observationAvailable ? currentThreeDimensionalRatio : nil
+        )
         angleDifference = nil
         if let twoDimensionalAngle, let threeDimensionalAngle {
             angleDifference = twoDimensionalAngle - threeDimensionalAngle
