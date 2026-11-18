@@ -1027,6 +1027,166 @@ final class PoseAnalyzerTests: XCTestCase {
         XCTAssertFalse(shadow.isStableDisagreement)
     }
 
+    func testBilateralQualitySeparates3DLegAsymmetryFromUnreliable2D() {
+        var quality = Vision3DBilateralQualityMonitor()
+        let analysis = PoseAnalyzer().analyze(
+            SquatPoseFixture.pose(
+                leftAngle: 160, rightAngle: 160,
+                leftConfidence: 0.93, rightConfidence: 0.93
+            )
+        )
+        let probe = SquatPoseFixture.experimental3DProbe(
+            leftAngle: 160, leftHeight: 0.96,
+            rightAngle: 75, rightHeight: 0.18
+        )
+        quality.observe(
+            probe, at: 0,
+            leftTwoDimensionalMeasurement: analysis.leftMeasurement,
+            rightTwoDimensionalMeasurement: analysis.rightMeasurement,
+            selectedThreeDimensionalLeg: .right
+        )
+        XCTAssertEqual(quality.threeDimensionalAngleDifference ?? 0, 85, accuracy: 0.01)
+        XCTAssertEqual(quality.threeDimensionalHeightDifference ?? 0, 0.78, accuracy: 0.01)
+        XCTAssertEqual(quality.rightLeg?.status, .largeModelDifference)
+        XCTAssertFalse(quality.isPersistentBilateralDisagreement)
+        XCTAssertFalse(quality.lastSampleExcluded)
+
+        quality.observe(
+            probe, at: 0.20,
+            leftTwoDimensionalMeasurement: analysis.leftMeasurement,
+            rightTwoDimensionalMeasurement: analysis.rightMeasurement,
+            selectedThreeDimensionalLeg: .right
+        )
+        XCTAssertTrue(quality.isPersistentBilateralDisagreement)
+        XCTAssertEqual(quality.consecutiveBilateralDisagreements, 2)
+        XCTAssertEqual(quality.excludedExperimentalSamples, 0)
+    }
+
+    func testBilateralQualityFiltersOnlyExtremeSelected3DJump() {
+        var quality = Vision3DBilateralQualityMonitor()
+        let analysis = PoseAnalyzer().analyze(
+            SquatPoseFixture.pose(
+                leftAngle: 160, rightAngle: 160,
+                leftConfidence: 0.49, rightConfidence: 0.94
+            )
+        )
+        let standing = SquatPoseFixture.experimental3DProbe(
+            leftAngle: 160, leftHeight: 0.96,
+            rightAngle: 160, rightHeight: 0.96
+        )
+        let outlier = SquatPoseFixture.experimental3DProbe(
+            leftAngle: 160, leftHeight: 0.96,
+            rightAngle: 25, rightHeight: -0.04
+        )
+        let recovered = SquatPoseFixture.experimental3DProbe(
+            leftAngle: 160, leftHeight: 0.96,
+            rightAngle: 75, rightHeight: 0.18
+        )
+        quality.observe(
+            standing, at: 0,
+            leftTwoDimensionalMeasurement: analysis.leftMeasurement,
+            rightTwoDimensionalMeasurement: analysis.rightMeasurement,
+            selectedThreeDimensionalLeg: .right
+        )
+        XCTAssertFalse(quality.lastSampleExcluded)
+
+        quality.observe(
+            outlier, at: 0.20,
+            leftTwoDimensionalMeasurement: analysis.leftMeasurement,
+            rightTwoDimensionalMeasurement: analysis.rightMeasurement,
+            selectedThreeDimensionalLeg: .right
+        )
+        XCTAssertTrue(quality.lastSampleExcluded)
+        XCTAssertEqual(quality.excludedExperimentalSamples, 1)
+        XCTAssertEqual(quality.rightLeg?.status, .abruptThreeDimensionalChange)
+        XCTAssertEqual(quality.rightLeg?.previousAngleChange ?? 0, 135, accuracy: 0.01)
+        XCTAssertEqual(quality.rightLeg?.previousHeightChange ?? 0, 1.0, accuracy: 0.01)
+
+        quality.observe(
+            recovered, at: 0.40,
+            leftTwoDimensionalMeasurement: analysis.leftMeasurement,
+            rightTwoDimensionalMeasurement: analysis.rightMeasurement,
+            selectedThreeDimensionalLeg: .right
+        )
+        XCTAssertFalse(quality.lastSampleExcluded)
+        XCTAssertEqual(quality.excludedExperimentalSamples, 1)
+        XCTAssertEqual(quality.leftLeg?.status, .noReliableTwoDimensionalLeg)
+        quality.expire(at: 1.30)
+        XCTAssertNil(quality.leftLeg)
+        XCTAssertNil(quality.rightLeg)
+        XCTAssertEqual(quality.excludedExperimentalSamples, 1)
+    }
+
+    func testBilateralQualityDoesNotAssume2DGroundTruthOrMissing3DPose() {
+        var quality = Vision3DBilateralQualityMonitor()
+        let unreliable2D = PoseAnalyzer().analyze(
+            SquatPoseFixture.pose(
+                leftAngle: 160, rightAngle: 160,
+                leftConfidence: 0.49, rightConfidence: 0.49
+            )
+        )
+        let missingPose = SquatPoseFixture.experimental3DProbe(
+            leftAngle: 160, leftHeight: 0.96,
+            rightAngle: 160, rightHeight: 0.96,
+            available: false
+        )
+        quality.observe(
+            missingPose, at: 0,
+            leftTwoDimensionalMeasurement: unreliable2D.leftMeasurement,
+            rightTwoDimensionalMeasurement: unreliable2D.rightMeasurement,
+            selectedThreeDimensionalLeg: .right
+        )
+        XCTAssertEqual(quality.rightLeg?.status, .unavailable)
+        XCTAssertNil(quality.rightLeg?.threeDimensionalAngle)
+        XCTAssertFalse(quality.lastSampleExcluded)
+
+        let valid3D = SquatPoseFixture.experimental3DProbe(
+            leftAngle: 160, leftHeight: 0.96,
+            rightAngle: 160, rightHeight: 0.96
+        )
+        quality.observe(
+            valid3D, at: 0.20,
+            leftTwoDimensionalMeasurement: unreliable2D.leftMeasurement,
+            rightTwoDimensionalMeasurement: unreliable2D.rightMeasurement,
+            selectedThreeDimensionalLeg: .right
+        )
+        XCTAssertEqual(quality.leftLeg?.status, .noReliableTwoDimensionalLeg)
+        XCTAssertEqual(quality.rightLeg?.status, .noReliableTwoDimensionalLeg)
+        XCTAssertFalse(quality.lastSampleExcluded)
+        XCTAssertEqual(quality.excludedExperimentalSamples, 0)
+    }
+
+    func testBilateralQualityKeepsNormalFastSquatAvailable() {
+        var quality = Vision3DBilateralQualityMonitor()
+        let analysis = PoseAnalyzer().analyze(
+            SquatPoseFixture.pose(leftAngle: 170, rightAngle: 170)
+        )
+        let standing = SquatPoseFixture.experimental3DProbe(
+            leftAngle: 160, leftHeight: 0.96,
+            rightAngle: 160, rightHeight: 0.96
+        )
+        let lowered = SquatPoseFixture.experimental3DProbe(
+            leftAngle: 75, leftHeight: 0.18,
+            rightAngle: 75, rightHeight: 0.18
+        )
+        quality.observe(
+            standing, at: 0,
+            leftTwoDimensionalMeasurement: analysis.leftMeasurement,
+            rightTwoDimensionalMeasurement: analysis.rightMeasurement,
+            selectedThreeDimensionalLeg: .left
+        )
+        quality.observe(
+            lowered, at: 0.20,
+            leftTwoDimensionalMeasurement: analysis.leftMeasurement,
+            rightTwoDimensionalMeasurement: analysis.rightMeasurement,
+            selectedThreeDimensionalLeg: .left
+        )
+        XCTAssertEqual(quality.leftLeg?.previousAngleChange ?? 0, 85, accuracy: 0.01)
+        XCTAssertEqual(quality.leftLeg?.previousHeightChange ?? 0, 0.78, accuracy: 0.01)
+        XCTAssertFalse(quality.lastSampleExcluded)
+        XCTAssertEqual(quality.excludedExperimentalSamples, 0)
+    }
+
     #endif
 }
 
