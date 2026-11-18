@@ -333,12 +333,12 @@ struct Vision3DExperimentalCounter {
                 decision = .awaitingLegEvidence
                 return false
             }
-            if pendingLeg != candidate.leg {
+            if pendingLeg != candidate.chosenLeg {
                 clearStandingConfirmation()
-                pendingLeg = candidate.leg
+                pendingLeg = candidate.chosenLeg
             }
             pendingSelectionSource = candidate.source
-            activeLeg = candidate.leg
+            activeLeg = candidate.chosenLeg
         }
 
         let measurement = activeLeg == .left ? leftMeasurement : rightMeasurement
@@ -488,7 +488,7 @@ struct Vision3DExperimentalCounter {
         leftMeasurementAvailable: Bool,
         rightMeasurementAvailable: Bool,
         preferredTwoDimensionalLeg: BodyLeg?
-    ) -> (leg: BodyLeg, source: Vision3DLegSelectionSource)? {
+    ) -> (chosenLeg: BodyLeg, source: Vision3DLegSelectionSource)? {
         if leftMeasurementAvailable, !rightMeasurementAvailable {
             if preferredTwoDimensionalLeg == .right,
                rightTwoDimensionalConfidence != nil { return nil }
