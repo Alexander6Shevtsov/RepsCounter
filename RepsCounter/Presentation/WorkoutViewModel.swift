@@ -237,6 +237,7 @@ struct SquatDepthAttemptTracker {
 
 enum Vision3DExperimentalDecision: Equatable {
     case waitingForSample
+    case awaitingLegEvidence
     case awaitingStanding
     case confirmingStanding
     case standingConfirmed
@@ -251,11 +252,20 @@ enum Vision3DExperimentalDecision: Equatable {
     case observationGap
 }
 
+enum Vision3DLegSelectionSource: Equatable {
+    case awaitingEvidence
+    case twoDimensionalConfidence
+    case singleThreeDimensionalLeg
+}
+
 struct Vision3DExperimentalCounter {
     private(set) var repetitions = 0
     private(set) var phase: SquatPhase = .seekingStanding
     private(set) var decision: Vision3DExperimentalDecision = .waitingForSample
     private(set) var selectedLeg: BodyLeg?
+    private(set) var selectionSource: Vision3DLegSelectionSource = .awaitingEvidence
+    private(set) var leftTwoDimensionalConfidence: Double?
+    private(set) var rightTwoDimensionalConfidence: Double?
     private(set) var standingHipKneeRatio: Double?
     private(set) var relativeDescent: Double?
     private(set) var interruptions = 0
@@ -272,8 +282,16 @@ struct Vision3DExperimentalCounter {
     private var confirmationStartedAt: TimeInterval?
     private var confirmationSamples = 0
     private var candidateStandingRatio: Double?
+    private var pendingLeg: BodyLeg?
+    private var pendingSelectionSource: Vision3DLegSelectionSource = .awaitingEvidence
 
-    mutating func process(_ probe: Vision3DProbe, at timestamp: TimeInterval) -> Bool {
+    mutating func process(
+        _ probe: Vision3DProbe,
+        at timestamp: TimeInterval,
+        leftTwoDimensionalConfidence: Double? = nil,
+        rightTwoDimensionalConfidence: Double? = nil,
+        preferredTwoDimensionalLeg: BodyLeg? = nil
+    ) -> Bool {
         guard probe.threeDimensionalLatencyMs != nil else { return false }
         guard timestamp.isFinite, timestamp >= 0 else {
             interrupt(.invalidMeasurement)
@@ -299,15 +317,31 @@ struct Vision3DExperimentalCounter {
             angle: probe.rightKneeAngle,
             heightRatio: probe.rightHipKneeHeightRatio
         )
-        if selectedLeg == nil {
-            if leftMeasurement != nil {
-                selectedLeg = .left
-            } else if rightMeasurement != nil {
-                selectedLeg = .right
+        leftTwoDimensionalConfidence = validatedConfidence(leftTwoDimensionalConfidence)
+        rightTwoDimensionalConfidence = validatedConfidence(rightTwoDimensionalConfidence)
+
+        let activeLeg: BodyLeg
+        if let selectedLeg {
+            activeLeg = selectedLeg
+        } else {
+            guard let candidate = initialLeg(
+                leftMeasurementAvailable: leftMeasurement != nil,
+                rightMeasurementAvailable: rightMeasurement != nil,
+                preferredTwoDimensionalLeg: preferredTwoDimensionalLeg
+            ) else {
+                clearStandingConfirmation()
+                decision = .awaitingLegEvidence
+                return false
             }
+            if pendingLeg != candidate.leg {
+                clearStandingConfirmation()
+                pendingLeg = candidate.leg
+            }
+            pendingSelectionSource = candidate.source
+            activeLeg = candidate.leg
         }
 
-        let measurement = selectedLeg == .left ? leftMeasurement : rightMeasurement
+        let measurement = activeLeg == .left ? leftMeasurement : rightMeasurement
         guard let measurement else {
             interrupt(.invalidMeasurement)
             return false
@@ -336,6 +370,9 @@ struct Vision3DExperimentalCounter {
             standingHipKneeRatio = candidateStandingRatio
             candidateStandingRatio = nil
             relativeDescent = 0
+            selectedLeg = activeLeg
+            selectionSource = pendingSelectionSource
+            pendingLeg = nil
             phase = .standing
             decision = .standingConfirmed
         case .standing:
@@ -388,6 +425,11 @@ struct Vision3DExperimentalCounter {
         phase = .seekingStanding
         decision = .waitingForSample
         selectedLeg = nil
+        selectionSource = .awaitingEvidence
+        leftTwoDimensionalConfidence = nil
+        rightTwoDimensionalConfidence = nil
+        pendingLeg = nil
+        pendingSelectionSource = .awaitingEvidence
         standingHipKneeRatio = nil
         relativeDescent = nil
         lastSampleTime = nil
@@ -426,6 +468,60 @@ struct Vision3DExperimentalCounter {
         confirmationSamples = 0
         confirmationStartedAt = nil
         return true
+    }
+
+    private mutating func clearStandingConfirmation() {
+        pendingLeg = nil
+        pendingSelectionSource = .awaitingEvidence
+        candidateStandingRatio = nil
+        confirmationSamples = 0
+        confirmationStartedAt = nil
+    }
+
+    private func validatedConfidence(_ confidence: Double?) -> Double? {
+        guard let confidence, confidence.isFinite,
+              (0.5...1).contains(confidence) else { return nil }
+        return confidence
+    }
+
+    private func initialLeg(
+        leftMeasurementAvailable: Bool,
+        rightMeasurementAvailable: Bool,
+        preferredTwoDimensionalLeg: BodyLeg?
+    ) -> (leg: BodyLeg, source: Vision3DLegSelectionSource)? {
+        if leftMeasurementAvailable, !rightMeasurementAvailable {
+            if preferredTwoDimensionalLeg == .right,
+               rightTwoDimensionalConfidence != nil { return nil }
+            return (.left, .singleThreeDimensionalLeg)
+        }
+        if rightMeasurementAvailable, !leftMeasurementAvailable {
+            if preferredTwoDimensionalLeg == .left,
+               leftTwoDimensionalConfidence != nil { return nil }
+            return (.right, .singleThreeDimensionalLeg)
+        }
+        guard leftMeasurementAvailable, rightMeasurementAvailable else { return nil }
+
+        if preferredTwoDimensionalLeg == .left, leftTwoDimensionalConfidence != nil {
+            return (.left, .twoDimensionalConfidence)
+        }
+        if preferredTwoDimensionalLeg == .right, rightTwoDimensionalConfidence != nil {
+            return (.right, .twoDimensionalConfidence)
+        }
+        if let leftTwoDimensionalConfidence, let rightTwoDimensionalConfidence {
+            guard abs(leftTwoDimensionalConfidence - rightTwoDimensionalConfidence) >= 0.05 else {
+                return nil
+            }
+            return leftTwoDimensionalConfidence > rightTwoDimensionalConfidence
+                ? (.left, .twoDimensionalConfidence)
+                : (.right, .twoDimensionalConfidence)
+        }
+        if leftTwoDimensionalConfidence != nil {
+            return (.left, .twoDimensionalConfidence)
+        }
+        if rightTwoDimensionalConfidence != nil {
+            return (.right, .twoDimensionalConfidence)
+        }
+        return nil
     }
 
     private func validMeasurement(
