@@ -663,6 +663,141 @@ final class PoseAnalyzerTests: XCTestCase {
         XCTAssertEqual(counter.repetitions, 0)
     }
 
+    func testThreeDimensionalExpiredLoweredPhaseCannotCountLateReturn() {
+        var counter = Vision3DExperimentalCounter()
+        let standing = SquatPoseFixture.experimental3DProbe(leftAngle: 160, leftHeight: 0.96)
+        let lowered = SquatPoseFixture.experimental3DProbe(leftAngle: 72, leftHeight: 0.18)
+        _ = counter.process(standing, at: 0)
+        _ = counter.process(standing, at: 0.20)
+        _ = counter.process(lowered, at: 0.40)
+        _ = counter.process(lowered, at: 0.60)
+        XCTAssertEqual(counter.phase, .lowered)
+
+        for sampleNumber in 4...27 {
+            let timestamp = Double(sampleNumber) * 0.20
+            XCTAssertFalse(counter.process(lowered, at: timestamp))
+        }
+        XCTAssertEqual(counter.phase, .lowered)
+        XCTAssertFalse(counter.process(standing, at: 5.81))
+        XCTAssertEqual(counter.phase, .seekingStanding)
+        XCTAssertEqual(counter.decision, .loweredTimeout)
+        XCTAssertEqual(counter.repetitions, 0)
+        XCTAssertEqual(counter.interruptions, 1)
+        XCTAssertEqual(counter.lastAttempt?.outcome, .loweredTimeout)
+        XCTAssertEqual(counter.lastAttempt?.number, 1)
+        XCTAssertEqual(counter.lastAttempt?.selectedLeg, .left)
+        XCTAssertEqual(counter.lastAttempt?.minimumKneeAngle ?? 0, 72, accuracy: 0.01)
+        XCTAssertEqual(counter.lastAttempt?.maximumRelativeDescent ?? 0, 0.78, accuracy: 0.01)
+        XCTAssertEqual(counter.lastAttempt?.loweredDuration ?? 0, 5.21, accuracy: 0.01)
+
+        XCTAssertFalse(counter.process(standing, at: 6.00))
+        XCTAssertFalse(counter.process(standing, at: 6.20))
+        XCTAssertEqual(counter.phase, .standing)
+        XCTAssertEqual(counter.repetitions, 0)
+        XCTAssertEqual(counter.recentAttempts.count, 1)
+    }
+
+    func testThreeDimensionalTimerExpiresWithoutNewPoseAndNeedsFreshStanding() {
+        var counter = Vision3DExperimentalCounter()
+        let standing = SquatPoseFixture.experimental3DProbe(leftAngle: 155, leftHeight: 0.96)
+        let lowered = SquatPoseFixture.experimental3DProbe(leftAngle: 75, leftHeight: 0.20)
+        _ = counter.process(standing, at: 0)
+        _ = counter.process(standing, at: 0.20)
+        _ = counter.process(lowered, at: 0.40)
+        _ = counter.process(lowered, at: 0.60)
+
+        counter.expire(at: 5.61)
+        XCTAssertEqual(counter.phase, .seekingStanding)
+        XCTAssertEqual(counter.lastAttempt?.outcome, .loweredTimeout)
+        XCTAssertEqual(counter.repetitions, 0)
+        XCTAssertFalse(counter.process(standing, at: 5.80))
+        XCTAssertFalse(counter.process(standing, at: 6.00))
+        XCTAssertEqual(counter.phase, .standing)
+        XCTAssertEqual(counter.repetitions, 0)
+    }
+
+    func testThreeDimensionalNormalRepetitionRecordsCompletedAttempt() {
+        var counter = Vision3DExperimentalCounter()
+        let standing = SquatPoseFixture.experimental3DProbe(leftAngle: 160, leftHeight: 0.96)
+        let lowered = SquatPoseFixture.experimental3DProbe(leftAngle: 75, leftHeight: 0.18)
+        _ = counter.process(standing, at: 0)
+        _ = counter.process(standing, at: 0.20)
+        _ = counter.process(lowered, at: 0.40)
+        _ = counter.process(lowered, at: 0.60)
+        XCTAssertEqual(counter.activeAttempt?.number, 1)
+        XCTAssertEqual(counter.phase, .lowered)
+        XCTAssertFalse(counter.process(standing, at: 0.80))
+        XCTAssertTrue(counter.process(standing, at: 1.00))
+        XCTAssertEqual(counter.repetitions, 1)
+        XCTAssertNil(counter.activeAttempt)
+        XCTAssertEqual(counter.lastAttempt?.outcome, .counted)
+        XCTAssertEqual(counter.lastAttempt?.minimumKneeAngle ?? 0, 75, accuracy: 0.01)
+        XCTAssertEqual(counter.lastAttempt?.maximumRelativeDescent ?? 0, 0.78, accuracy: 0.01)
+        XCTAssertEqual(counter.lastAttempt?.loweredDuration ?? 0, 0.40, accuracy: 0.01)
+        XCTAssertEqual(counter.recentAttempts.count, 1)
+    }
+
+    func testThreeDimensionalPartialReturnsWithoutCountAndRecordsReason() {
+        var counter = Vision3DExperimentalCounter()
+        let standing = SquatPoseFixture.experimental3DProbe(leftAngle: 160, leftHeight: 0.96)
+        let partial = SquatPoseFixture.experimental3DProbe(leftAngle: 118, leftHeight: 0.59)
+        _ = counter.process(standing, at: 0)
+        _ = counter.process(standing, at: 0.20)
+        _ = counter.process(partial, at: 0.40)
+        _ = counter.process(partial, at: 0.60)
+        XCTAssertEqual(counter.activeAttempt?.number, 1)
+        XCTAssertFalse(counter.process(standing, at: 0.80))
+        XCTAssertFalse(counter.process(standing, at: 1.00))
+        XCTAssertEqual(counter.phase, .standing)
+        XCTAssertEqual(counter.repetitions, 0)
+        XCTAssertEqual(counter.lastAttempt?.outcome, .returnedWithoutDepth)
+        XCTAssertEqual(counter.lastAttempt?.minimumKneeAngle ?? 0, 118, accuracy: 0.01)
+        XCTAssertEqual(counter.lastAttempt?.maximumRelativeDescent ?? 0, 0.37, accuracy: 0.01)
+        XCTAssertNil(counter.lastAttempt?.loweredDuration)
+    }
+
+    func testThreeDimensionalAttemptHistoryIsBoundedToTwentySummaries() {
+        var counter = Vision3DExperimentalCounter()
+        let standing = SquatPoseFixture.experimental3DProbe(leftAngle: 160, leftHeight: 0.96)
+        let partial = SquatPoseFixture.experimental3DProbe(leftAngle: 118, leftHeight: 0.59)
+        _ = counter.process(standing, at: 0)
+        _ = counter.process(standing, at: 0.20)
+        for attemptIndex in 0..<23 {
+            let timestamp = Double(attemptIndex) * 0.80 + 0.40
+            _ = counter.process(partial, at: timestamp)
+            _ = counter.process(standing, at: timestamp + 0.20)
+            _ = counter.process(standing, at: timestamp + 0.40)
+        }
+        XCTAssertEqual(counter.repetitions, 0)
+        XCTAssertEqual(counter.recentAttempts.count, 20)
+        XCTAssertEqual(counter.recentAttempts.first?.number, 4)
+        XCTAssertEqual(counter.recentAttempts.last?.number, 23)
+        XCTAssertEqual(counter.lastAttempt?.outcome, .returnedWithoutDepth)
+        XCTAssertNil(counter.activeAttempt)
+        counter.reset()
+        XCTAssertTrue(counter.recentAttempts.isEmpty)
+        XCTAssertNil(counter.lastAttempt)
+        XCTAssertEqual(counter.repetitions, 0)
+    }
+
+    func testThreeDimensionalMissingPoseRecordsInterruptedAttempt() {
+        var counter = Vision3DExperimentalCounter()
+        let standing = SquatPoseFixture.experimental3DProbe(leftAngle: 160, leftHeight: 0.96)
+        let lowered = SquatPoseFixture.experimental3DProbe(leftAngle: 72, leftHeight: 0.18)
+        let missing = SquatPoseFixture.experimental3DProbe(
+            leftAngle: nil, leftHeight: nil, available: false
+        )
+        _ = counter.process(standing, at: 0)
+        _ = counter.process(standing, at: 0.20)
+        _ = counter.process(lowered, at: 0.40)
+        _ = counter.process(lowered, at: 0.60)
+        XCTAssertFalse(counter.process(missing, at: 0.80))
+        XCTAssertEqual(counter.lastAttempt?.outcome, .invalidMeasurement)
+        XCTAssertEqual(counter.lastAttempt?.loweredDuration ?? 0, 0.20, accuracy: 0.01)
+        XCTAssertEqual(counter.repetitions, 0)
+        XCTAssertEqual(counter.recentAttempts.count, 1)
+    }
+
     #endif
 }
 
