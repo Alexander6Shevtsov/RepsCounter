@@ -158,13 +158,15 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
         updateVision3DButton()
         diagnosticsView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(diagnosticsView)
+        let preferredPanelHeight = diagnosticsView.heightAnchor.constraint(equalToConstant: 460)
+        preferredPanelHeight.priority = .defaultHigh
         NSLayoutConstraint.activate([
             diagnosticsView.leadingAnchor.constraint(greaterThanOrEqualTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 12),
             diagnosticsView.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -12),
             diagnosticsView.topAnchor.constraint(equalTo: dashboard.toolbar.bottomAnchor, constant: 8),
             diagnosticsView.bottomAnchor.constraint(lessThanOrEqualTo: dashboard.controls.topAnchor, constant: -12),
             diagnosticsView.widthAnchor.constraint(equalToConstant: 250),
-            diagnosticsView.heightAnchor.constraint(equalToConstant: 170)
+            preferredPanelHeight
         ])
     }
 
