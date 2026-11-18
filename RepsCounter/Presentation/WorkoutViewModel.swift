@@ -55,6 +55,170 @@ struct Vision3DSynchronizedPair {
     let probe: Vision3DProbe
 }
 
+enum Vision3DStandingAgreement: Equatable {
+    case awaitingSelectedLeg
+    case awaitingStandingReference
+    case insufficientTwoDimensionalData
+    case insufficientThreeDimensionalData
+    case bothStanding
+    case bothMoving
+    case twoDimensionalStandingOnly
+    case threeDimensionalStandingOnly
+}
+
+struct Vision3DReturnShadow {
+    private(set) var agreement: Vision3DStandingAgreement = .awaitingSelectedLeg
+    private(set) var selectedLeg: BodyLeg?
+    private(set) var sampleNumber = 0
+    private(set) var twoDimensionalAngle: Double?
+    private(set) var threeDimensionalAngle: Double?
+    private(set) var twoDimensionalHipKneeRatio: Double?
+    private(set) var threeDimensionalHipKneeRatio: Double?
+    private(set) var standingReference: Double?
+    private(set) var angleDifference: Double?
+    private(set) var consecutiveDisagreements = 0
+    private(set) var isStableDisagreement = false
+    private(set) var stableDisagreementEvents = 0
+
+    let twoDimensionalStandingAngle = 160.0
+    let minimumTwoDimensionalStandingRatio = 0.70
+    let threeDimensionalStandingAngle = 135.0
+    let maximumThreeDimensionalHeightDrop = 0.20
+    let minimumConfirmationDuration: TimeInterval = 0.12
+    let maximumSampleGap: TimeInterval = 0.75
+
+    private var disagreementStartedAt: TimeInterval?
+    private var lastSampleTime: TimeInterval?
+
+    mutating func observe(
+        _ probe: Vision3DProbe,
+        at timestamp: TimeInterval,
+        threeDimensionalLeg: BodyLeg?,
+        standingReference: Double?,
+        twoDimensionalLeg: BodyLeg?,
+        twoDimensionalLeftAngle: Double?,
+        twoDimensionalRightAngle: Double?,
+        twoDimensionalSelectedHipKneeRatio: Double?
+    ) {
+        guard probe.threeDimensionalLatencyMs != nil, timestamp.isFinite else { return }
+        if let lastSampleTime, timestamp <= lastSampleTime { return }
+        if let lastSampleTime, timestamp - lastSampleTime > maximumSampleGap {
+            reset()
+        }
+        if selectedLeg != threeDimensionalLeg {
+            reset()
+        }
+        lastSampleTime = timestamp
+        selectedLeg = threeDimensionalLeg
+        sampleNumber = probe.sampleCount
+        self.standingReference = standingReference
+
+        guard let threeDimensionalLeg else {
+            agreement = .awaitingSelectedLeg
+            return
+        }
+        let currentTwoDimensionalAngle = threeDimensionalLeg == .left
+            ? twoDimensionalLeftAngle : twoDimensionalRightAngle
+        let currentThreeDimensionalAngle = threeDimensionalLeg == .left
+            ? probe.leftKneeAngle : probe.rightKneeAngle
+        let currentThreeDimensionalRatio = threeDimensionalLeg == .left
+            ? probe.leftHipKneeHeightRatio : probe.rightHipKneeHeightRatio
+        let currentTwoDimensionalRatio = twoDimensionalLeg == threeDimensionalLeg
+            ? twoDimensionalSelectedHipKneeRatio : nil
+
+        twoDimensionalAngle = validatedAngle(currentTwoDimensionalAngle)
+        threeDimensionalAngle = validatedAngle(currentThreeDimensionalAngle)
+        twoDimensionalHipKneeRatio = validatedRatio(currentTwoDimensionalRatio)
+        threeDimensionalHipKneeRatio = validatedRatio(currentThreeDimensionalRatio)
+        angleDifference = nil
+        if let twoDimensionalAngle, let threeDimensionalAngle {
+            angleDifference = twoDimensionalAngle - threeDimensionalAngle
+        }
+
+        guard let standingReference = validatedRatio(standingReference) else {
+            updateAgreement(.awaitingStandingReference, at: timestamp)
+            return
+        }
+        guard let threeDimensionalAngle, let threeDimensionalHipKneeRatio else {
+            updateAgreement(.insufficientThreeDimensionalData, at: timestamp)
+            return
+        }
+        guard let twoDimensionalAngle, let twoDimensionalHipKneeRatio else {
+            updateAgreement(.insufficientTwoDimensionalData, at: timestamp)
+            return
+        }
+
+        let twoDimensionalStanding = twoDimensionalAngle >= twoDimensionalStandingAngle
+            && twoDimensionalHipKneeRatio >= minimumTwoDimensionalStandingRatio
+        let threeDimensionalStanding = threeDimensionalAngle >= threeDimensionalStandingAngle
+            && threeDimensionalHipKneeRatio >= standingReference - maximumThreeDimensionalHeightDrop
+        let nextAgreement: Vision3DStandingAgreement
+        switch (twoDimensionalStanding, threeDimensionalStanding) {
+        case (true, true): nextAgreement = .bothStanding
+        case (false, false): nextAgreement = .bothMoving
+        case (true, false): nextAgreement = .twoDimensionalStandingOnly
+        case (false, true): nextAgreement = .threeDimensionalStandingOnly
+        }
+        updateAgreement(nextAgreement, at: timestamp)
+    }
+
+    mutating func expire(at timestamp: TimeInterval) {
+        guard timestamp.isFinite, let lastSampleTime,
+              timestamp - lastSampleTime > maximumSampleGap else { return }
+        reset()
+    }
+
+    mutating func reset() {
+        agreement = .awaitingSelectedLeg
+        selectedLeg = nil
+        sampleNumber = 0
+        twoDimensionalAngle = nil
+        threeDimensionalAngle = nil
+        twoDimensionalHipKneeRatio = nil
+        threeDimensionalHipKneeRatio = nil
+        standingReference = nil
+        angleDifference = nil
+        consecutiveDisagreements = 0
+        isStableDisagreement = false
+        disagreementStartedAt = nil
+        lastSampleTime = nil
+        stableDisagreementEvents = 0
+    }
+
+    private mutating func updateAgreement(
+        _ nextAgreement: Vision3DStandingAgreement,
+        at timestamp: TimeInterval
+    ) {
+        agreement = nextAgreement
+        guard nextAgreement == .twoDimensionalStandingOnly else {
+            consecutiveDisagreements = 0
+            isStableDisagreement = false
+            disagreementStartedAt = nil
+            return
+        }
+        if disagreementStartedAt == nil {
+            disagreementStartedAt = timestamp
+        }
+        consecutiveDisagreements += 1
+        let confirmed = consecutiveDisagreements >= 2
+            && timestamp - (disagreementStartedAt ?? timestamp) >= minimumConfirmationDuration
+        if confirmed, !isStableDisagreement {
+            stableDisagreementEvents += 1
+        }
+        isStableDisagreement = confirmed
+    }
+
+    private func validatedAngle(_ value: Double?) -> Double? {
+        guard let value, value.isFinite, (0...180).contains(value) else { return nil }
+        return value
+    }
+
+    private func validatedRatio(_ value: Double?) -> Double? {
+        guard let value, value.isFinite, (-1...1).contains(value) else { return nil }
+        return value
+    }
+}
+
 struct SquatDiagnostics {
     let analysis: PoseAnalysis?
     let phase: SquatPhase
