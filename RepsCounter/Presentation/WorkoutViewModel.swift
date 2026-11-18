@@ -223,6 +223,241 @@ struct Vision3DReturnShadow {
     }
 }
 
+enum Vision3DLegQualityStatus: Equatable {
+    case unavailable
+    case noReliableTwoDimensionalLeg
+    case largeModelDifference
+    case abruptThreeDimensionalChange
+    case noWarning
+}
+
+struct Vision3DLegQuality {
+    let twoDimensionalConfidence: Double?
+    let twoDimensionalAngle: Double?
+    let threeDimensionalAngle: Double?
+    let threeDimensionalHipKneeRatio: Double?
+    let angleDifference: Double?
+    let previousAngleChange: Double?
+    let previousHeightChange: Double?
+    let hasExtremeThreeDimensionalJump: Bool
+
+    var status: Vision3DLegQualityStatus {
+        guard threeDimensionalAngle != nil,
+              threeDimensionalHipKneeRatio != nil else { return .unavailable }
+        if hasExtremeThreeDimensionalJump { return .abruptThreeDimensionalChange }
+        guard let angleDifference else { return .noReliableTwoDimensionalLeg }
+        if abs(angleDifference) >= 45 { return .largeModelDifference }
+        return .noWarning
+    }
+}
+
+struct Vision3DBilateralQualityMonitor {
+    private(set) var leftLeg: Vision3DLegQuality?
+    private(set) var rightLeg: Vision3DLegQuality?
+    private(set) var sampleNumber = 0
+    private(set) var threeDimensionalAngleDifference: Double?
+    private(set) var threeDimensionalHeightDifference: Double?
+    private(set) var consecutiveBilateralDisagreements = 0
+    private(set) var isPersistentBilateralDisagreement = false
+    private(set) var selectedLeg: BodyLeg?
+    private(set) var excludedExperimentalSamples = 0
+    private(set) var lastSampleExcluded = false
+
+    let largeCrossLegAngleDifference = 55.0
+    let largeCrossLegHeightDifference = 0.45
+    let extremeAngleJump = 110.0
+    let extremeHeightJump = 0.75
+    let maximumShortInterval: TimeInterval = 0.35
+    let maximumSampleGap: TimeInterval = 0.75
+    let minimumConfirmationDuration: TimeInterval = 0.12
+
+    private var lastSampleTime: TimeInterval?
+    private var disagreementStartedAt: TimeInterval?
+    private var priorLeftAngle: Double?
+    private var priorRightAngle: Double?
+    private var priorLeftHeight: Double?
+    private var priorRightHeight: Double?
+
+    mutating func observe(
+        _ probe: Vision3DProbe,
+        at timestamp: TimeInterval,
+        leftTwoDimensionalMeasurement: LegMeasurement,
+        rightTwoDimensionalMeasurement: LegMeasurement,
+        selectedThreeDimensionalLeg: BodyLeg?
+    ) {
+        guard probe.threeDimensionalLatencyMs != nil, timestamp.isFinite,
+              timestamp >= 0 else { return }
+        if let lastSampleTime, timestamp <= lastSampleTime { return }
+        if let lastSampleTime, timestamp - lastSampleTime > maximumSampleGap {
+            resetHistory()
+        }
+
+        let previousTimestamp = lastSampleTime
+        sampleNumber = probe.sampleCount
+        selectedLeg = selectedThreeDimensionalLeg
+        let validThreeDimensionalPose = probe.observationAvailable
+
+        leftLeg = makeQuality(
+            twoDimensionalMeasurement: leftTwoDimensionalMeasurement,
+            threeDimensionalAngle: validThreeDimensionalPose ? probe.leftKneeAngle : nil,
+            threeDimensionalHeight: validThreeDimensionalPose ? probe.leftHipKneeHeightRatio : nil,
+            previousAngle: priorLeftAngle,
+            previousHeight: priorLeftHeight,
+            previousTimestamp: previousTimestamp,
+            timestamp: timestamp
+        )
+        rightLeg = makeQuality(
+            twoDimensionalMeasurement: rightTwoDimensionalMeasurement,
+            threeDimensionalAngle: validThreeDimensionalPose ? probe.rightKneeAngle : nil,
+            threeDimensionalHeight: validThreeDimensionalPose ? probe.rightHipKneeHeightRatio : nil,
+            previousAngle: priorRightAngle,
+            previousHeight: priorRightHeight,
+            previousTimestamp: previousTimestamp,
+            timestamp: timestamp
+        )
+        lastSampleTime = timestamp
+
+        priorLeftAngle = leftLeg?.threeDimensionalAngle
+        priorRightAngle = rightLeg?.threeDimensionalAngle
+        priorLeftHeight = leftLeg?.threeDimensionalHipKneeRatio
+        priorRightHeight = rightLeg?.threeDimensionalHipKneeRatio
+
+        if let leftAngle = leftLeg?.threeDimensionalAngle,
+           let rightAngle = rightLeg?.threeDimensionalAngle {
+            threeDimensionalAngleDifference = abs(leftAngle - rightAngle)
+        } else {
+            threeDimensionalAngleDifference = nil
+        }
+        if let leftHeight = leftLeg?.threeDimensionalHipKneeRatio,
+           let rightHeight = rightLeg?.threeDimensionalHipKneeRatio {
+            threeDimensionalHeightDifference = abs(leftHeight - rightHeight)
+        } else {
+            threeDimensionalHeightDifference = nil
+        }
+
+        let largeBilateralDifference =
+            (threeDimensionalAngleDifference ?? 0) >= largeCrossLegAngleDifference
+            || (threeDimensionalHeightDifference ?? 0) >= largeCrossLegHeightDifference
+        if largeBilateralDifference {
+            if disagreementStartedAt == nil {
+                disagreementStartedAt = timestamp
+            }
+            consecutiveBilateralDisagreements += 1
+        } else {
+            disagreementStartedAt = nil
+            consecutiveBilateralDisagreements = 0
+        }
+        isPersistentBilateralDisagreement = consecutiveBilateralDisagreements >= 2
+            && timestamp - (disagreementStartedAt ?? timestamp) >= minimumConfirmationDuration
+
+        let selectedQuality: Vision3DLegQuality?
+        switch selectedThreeDimensionalLeg {
+        case .left: selectedQuality = leftLeg
+        case .right: selectedQuality = rightLeg
+        case nil: selectedQuality = nil
+        }
+        lastSampleExcluded = selectedQuality?.hasExtremeThreeDimensionalJump == true
+        if lastSampleExcluded {
+            excludedExperimentalSamples += 1
+        }
+    }
+
+    mutating func expire(at timestamp: TimeInterval) {
+        guard timestamp.isFinite, let lastSampleTime,
+              timestamp - lastSampleTime > maximumSampleGap else { return }
+        resetHistory()
+    }
+
+    mutating func reset() {
+        resetHistory()
+        excludedExperimentalSamples = 0
+    }
+
+    private mutating func resetHistory() {
+        leftLeg = nil
+        rightLeg = nil
+        sampleNumber = 0
+        threeDimensionalAngleDifference = nil
+        threeDimensionalHeightDifference = nil
+        consecutiveBilateralDisagreements = 0
+        isPersistentBilateralDisagreement = false
+        selectedLeg = nil
+        lastSampleExcluded = false
+        lastSampleTime = nil
+        disagreementStartedAt = nil
+        priorLeftAngle = nil
+        priorRightAngle = nil
+        priorLeftHeight = nil
+        priorRightHeight = nil
+    }
+
+    private func makeQuality(
+        twoDimensionalMeasurement: LegMeasurement,
+        threeDimensionalAngle: Double?,
+        threeDimensionalHeight: Double?,
+        previousAngle: Double?,
+        previousHeight: Double?,
+        previousTimestamp: TimeInterval?,
+        timestamp: TimeInterval
+    ) -> Vision3DLegQuality {
+        let validAngle = validatedAngle(threeDimensionalAngle)
+        let validHeight = validatedHeight(threeDimensionalHeight)
+        let confidence: Double? = twoDimensionalMeasurement.isReliable
+            ? Double(twoDimensionalMeasurement.confidence) : nil
+        let twoDimensionalAngle = twoDimensionalMeasurement.isReliable
+            ? validatedAngle(twoDimensionalMeasurement.angle) : nil
+        let angleDifference: Double?
+        if let twoDimensionalAngle, let validAngle {
+            angleDifference = twoDimensionalAngle - validAngle
+        } else {
+            angleDifference = nil
+        }
+
+        let angleChange: Double?
+        let heightChange: Double?
+        let isShortInterval: Bool
+        if let previousTimestamp {
+            let elapsed = timestamp - previousTimestamp
+            isShortInterval = elapsed > 0 && elapsed <= maximumShortInterval
+        } else {
+            isShortInterval = false
+        }
+        if isShortInterval, let validAngle, let previousAngle {
+            angleChange = abs(validAngle - previousAngle)
+        } else {
+            angleChange = nil
+        }
+        if isShortInterval, let validHeight, let previousHeight {
+            heightChange = abs(validHeight - previousHeight)
+        } else {
+            heightChange = nil
+        }
+        let hasExtremeJump = (angleChange ?? 0) >= extremeAngleJump
+            && (heightChange ?? 0) >= extremeHeightJump
+
+        return Vision3DLegQuality(
+            twoDimensionalConfidence: confidence,
+            twoDimensionalAngle: twoDimensionalAngle,
+            threeDimensionalAngle: validAngle,
+            threeDimensionalHipKneeRatio: validHeight,
+            angleDifference: angleDifference,
+            previousAngleChange: angleChange,
+            previousHeightChange: heightChange,
+            hasExtremeThreeDimensionalJump: hasExtremeJump
+        )
+    }
+
+    private func validatedAngle(_ value: Double?) -> Double? {
+        guard let value, value.isFinite, (0...180).contains(value) else { return nil }
+        return value
+    }
+
+    private func validatedHeight(_ value: Double?) -> Double? {
+        guard let value, value.isFinite, (-1...1).contains(value) else { return nil }
+        return value
+    }
+}
+
 struct SquatDiagnostics {
     let analysis: PoseAnalysis?
     let phase: SquatPhase
