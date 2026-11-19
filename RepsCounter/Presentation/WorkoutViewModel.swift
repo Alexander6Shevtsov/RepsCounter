@@ -238,6 +238,7 @@ final class WorkoutViewModel {
     private var observationGapCount = 0
     private var latestMeasurementIssue: LegMeasurementIssue?
     private var depthAttemptTracker = SquatDepthAttemptTracker()
+    private var poseReplayRecorder = PoseReplayRecorder()
     #endif
 
     private let persistence: any WorkoutStoring
@@ -288,6 +289,22 @@ final class WorkoutViewModel {
         updateTask?.cancel()
     }
 
+    #if DEBUG
+    var isPoseReplayRecording: Bool { poseReplayRecorder.isRecording }
+    var poseReplayEventCount: Int { poseReplayRecorder.eventCount }
+
+    func startPoseReplayRecording() -> Bool {
+        guard hasStarted, !isPaused, !isFinished else { return false }
+        return poseReplayRecorder.start(at: timeSource.currentTime)
+    }
+
+    func stopPoseReplayRecording() throws -> Data? {
+        guard poseReplayRecorder.isRecording else { return nil }
+        poseReplayRecorder.stop()
+        return try poseReplayRecorder.encodedSession()
+    }
+    #endif
+
     func process(_ pose: BodyPose?) {
         guard !isPaused, !isFinished else { return }
         let currentTime = timeSource.currentTime
@@ -298,6 +315,9 @@ final class WorkoutViewModel {
         depthAttemptTracker.recordPose(at: currentTime)
         #endif
         expireTracking(at: currentTime)
+        #if DEBUG
+        poseReplayRecorder.append(pose, at: currentTime)
+        #endif
         let analysis = analyzer.analyze(pose)
         hasPose = analysis.smoothedAngle != nil
         lastPoseTime = hasPose ? currentTime : nil
@@ -501,6 +521,7 @@ final class WorkoutViewModel {
 
     private func resetTracking() {
         #if DEBUG
+        poseReplayRecorder.markReset(at: timeSource.currentTime)
         depthAttemptTracker.interrupt(.trackingReset)
         depthAttemptTracker.resetPoseClock()
         #endif
