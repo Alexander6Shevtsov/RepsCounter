@@ -282,11 +282,8 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
                 let bilateralScore = try PoseReplayRunner.score(
                     bilateral, against: session.annotations
                 )
-                summary += """
-
-                \nОбычный TP/FP/FN: \(originalScore.truePositives)/\(originalScore.falsePositives)/\(originalScore.falseNegatives)
-                Две ноги TP/FP/FN: \(bilateralScore.truePositives)/\(bilateralScore.falsePositives)/\(bilateralScore.falseNegatives)
-                """
+                summary += "\nОбычный TP/FP/FN: \(originalScore.truePositives)/\(originalScore.falsePositives)/\(originalScore.falseNegatives)"
+                summary += "\nДве ноги TP/FP/FN: \(bilateralScore.truePositives)/\(bilateralScore.falsePositives)/\(bilateralScore.falseNegatives)"
             }
             showPoseReplayMessage(summary)
         } catch {
