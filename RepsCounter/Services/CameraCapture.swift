@@ -149,13 +149,31 @@ final class CameraSessionNotifications: Sendable {
 	}
 }
 
+struct VisionFramePacer {
+    let minimumInterval: Duration
+    private var previousAcceptedAt: ContinuousClock.Instant?
+
+    init(minimumInterval: Duration = .milliseconds(60)) {
+        self.minimumInterval = minimumInterval
+    }
+
+    mutating func shouldAnalyze(at timestamp: ContinuousClock.Instant) -> Bool {
+        if let previousAcceptedAt,
+           previousAcceptedAt.duration(to: timestamp) < minimumInterval {
+            return false
+        }
+        previousAcceptedAt = timestamp
+        return true
+    }
+}
+
 private final class CameraFrameProcessor: NSObject,
 	AVCaptureVideoDataOutputSampleBufferDelegate, Sendable
 {
 	private struct FrameState {
 		let detector = PoseDetector()
 		var isActive = true
-		var previousAnalysisTime: ContinuousClock.Instant?
+		var framePacer = VisionFramePacer()
 	}
 
 	private let generation: UInt64
@@ -188,12 +206,7 @@ private final class CameraFrameProcessor: NSObject,
 		processing.withLockUnchecked { state in
 			let capturedAt = ContinuousClock.now
 			guard state.isActive else { return }
-			if let previousTime = state.previousAnalysisTime,
-				previousTime.duration(to: capturedAt) < .milliseconds(80)
-			{
-				return
-			}
-			state.previousAnalysisTime = capturedAt
+			guard state.framePacer.shouldAnalyze(at: capturedAt) else { return }
 			guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer)
 			else { return }
 			let pose = state.detector.detect(
