@@ -38,7 +38,11 @@ struct PoseReplayPose: Codable {
         aspectRatio = Double(pose.aspectRatio)
         rotationAngle = Double(pose.rotationAngle)
         points = PoseReplayJoint.allCases.compactMap { joint in
-            guard let point = pose.joints[joint.bodyJoint] else { return nil }
+            guard let point = pose.joints[joint.bodyJoint],
+                  point.location.x.isFinite, point.location.y.isFinite,
+                  point.confidence.isFinite, (0...1).contains(point.confidence) else {
+                return nil
+            }
             return PoseReplayPoint(
                 joint: joint,
                 horizontalPosition: Double(point.location.x),
