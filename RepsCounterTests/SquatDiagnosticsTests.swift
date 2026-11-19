@@ -10,6 +10,26 @@ import XCTest
 @testable import RepsCounter
 
 final class SquatDiagnosticsTests: XCTestCase {
+    func testPoseRateTracksActualFramesAndResetsOnCameraGap() {
+        var tracker = PoseFrameRateTracker()
+        for frameNumber in 0...20 {
+            tracker.record(at: Double(frameNumber) * 0.05)
+        }
+        XCTAssertEqual(tracker.rate ?? 0, 20, accuracy: 0.1)
+
+        tracker.reset()
+        XCTAssertNil(tracker.rate)
+
+        tracker.record(at: 4)
+        tracker.record(at: 4)
+        XCTAssertNil(tracker.rate)
+        tracker.record(at: 4.6)
+        XCTAssertEqual(tracker.rate ?? 0, 1.67, accuracy: 0.02)
+
+        tracker.record(at: 2)
+        XCTAssertNil(tracker.rate)
+    }
+
     @MainActor
     func testLegChangeCannotCompletePreviousLoweredMovement() {
         let fixture = SquatTrackingFixture()
@@ -205,6 +225,7 @@ final class SquatDiagnosticsTests: XCTestCase {
         let label = try XCTUnwrap(allSubviews(in: panel).first { $0.accessibilityIdentifier == "squatDiagnosticsText" } as? UILabel)
         XCTAssertTrue(label.text?.contains("Нога: правая") == true)
         XCTAssertTrue(label.text?.contains("confidence 0.90") == true)
+        XCTAssertTrue(label.text?.contains("Обработано поз/с:") == true)
         XCTAssertTrue(label.text?.contains("raw 165.0°") == true)
         XCTAssertTrue(label.text?.contains("EMA 165.0°") == true)
         XCTAssertTrue(label.text?.contains("Таз−колено: +0.97 бедра") == true)
