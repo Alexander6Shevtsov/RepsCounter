@@ -4,6 +4,37 @@ import XCTest
 
 #if DEBUG
 final class PoseReplayTests: XCTestCase {
+    @MainActor
+    func testReplayFromActualWorkoutViewModelMatchesProductionCount() throws {
+        let clock = PoseReplayClock()
+        let store = PoseReplayStore()
+        let viewModel = WorkoutViewModel(persistence: store, timeSource: clock)
+        defer { viewModel.finish() }
+        XCTAssertFalse(viewModel.isPoseReplayRecording)
+        XCTAssertTrue(viewModel.startPoseReplayRecording())
+
+        let standingPose = SquatPoseFixture.pose(leftAngle: 170)
+        let loweredPose = SquatPoseFixture.pose(leftAngle: 90)
+        for (pose, numberOfFrames) in [
+            (standingPose, 24),
+            (loweredPose, 24),
+            (standingPose, 24)
+        ] {
+            for _ in 0..<numberOfFrames {
+                clock.currentTime += 0.08
+                viewModel.process(pose)
+            }
+        }
+        XCTAssertEqual(viewModel.poseReplayEventCount, 72)
+        let data = try XCTUnwrap(viewModel.stopPoseReplayRecording())
+        XCTAssertFalse(viewModel.isPoseReplayRecording)
+        let session = try JSONDecoder().decode(PoseReplaySession.self, from: data)
+        let replayed = try PoseReplayRunner.replay(session)
+        XCTAssertEqual(replayed.countedAtSeconds.count, 1)
+        XCTAssertEqual(viewModel.latestDiagnostics?.phase, .standing)
+        XCTAssertEqual(viewModel.latestDiagnostics?.recentDepthAttempts.last?.outcome, .counted)
+    }
+
     func testCapturedNumericObservationsReplayDeterministically() throws {
         var recorder = PoseReplayRecorder()
         XCTAssertTrue(recorder.start(at: 10))
@@ -189,3 +220,22 @@ final class PoseReplayTests: XCTestCase {
     }
 }
 #endif
+
+@MainActor
+private final class PoseReplayClock: WorkoutTimeSource {
+    var currentTime: TimeInterval = 0
+    var date: Date { Date(timeIntervalSince1970: 0) }
+}
+
+@MainActor
+private final class PoseReplayStore: WorkoutStoring {
+    private var summaries: [WorkoutSummary] = []
+
+    func save(_ summary: WorkoutSummary) throws {
+        summaries.append(summary)
+    }
+
+    func history() throws -> [WorkoutSummary] {
+        summaries
+    }
+}
