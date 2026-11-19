@@ -80,7 +80,7 @@ final class BilateralLiveCounterTests: XCTestCase {
             leftAngle: 90, rightAngle: 90,
             leftConfidence: 0.49, rightConfidence: 0.94
         )
-        for (pose, frames) in [(standing, 20), (lowered, 20), (standing, 4)] {
+        for (pose, frames) in [(standing, 20), (lowered, 20), (standing, 6)] {
             for _ in 0..<frames {
                 currentTime += 0.08
                 _ = counter.process(pose, at: currentTime)
