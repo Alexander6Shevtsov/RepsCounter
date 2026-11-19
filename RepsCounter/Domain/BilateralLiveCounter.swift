@@ -32,7 +32,8 @@ private struct BilateralLegTracker {
         }
         let selectedPose = onlySelectedLeg(in: pose)
         guard hasReliableJoints(selectedPose) else {
-            if let lastValidTime,
+            if isTemporaryLandmarkLoss(selectedPose),
+               let lastValidTime,
                missingSampleCount == 0,
                timestamp >= lastValidTime,
                timestamp - lastValidTime <= maximumMissingDuration {
@@ -93,6 +94,20 @@ private struct BilateralLegTracker {
                 && point.location.x.isFinite
                 && point.location.y.isFinite
         }
+    }
+
+    private func isTemporaryLandmarkLoss(_ pose: BodyPose?) -> Bool {
+        guard let pose else { return true }
+        guard pose.aspectRatio.isFinite, pose.aspectRatio > 0 else { return false }
+        guard pose.joints.values.allSatisfy({ point in
+            point.location.x.isFinite
+                && point.location.y.isFinite
+                && point.confidence.isFinite
+                && point.confidence >= 0
+                && point.confidence <= 1
+        }) else { return false }
+        return pose.joints.count < 3
+            || pose.joints.values.contains { $0.confidence < 0.5 }
     }
 
     private func onlySelectedLeg(in pose: BodyPose?) -> BodyPose? {
