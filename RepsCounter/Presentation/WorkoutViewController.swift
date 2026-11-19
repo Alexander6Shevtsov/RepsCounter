@@ -21,6 +21,7 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
     #if DEBUG
     private let diagnosticsButton = UIButton(type: .system)
     private let diagnosticsView = SquatDiagnosticsView()
+    private let poseReplayButton = UIButton(type: .system)
     #endif
     private var lastPose: BodyPose?
     private var lastState: WorkoutViewState?
@@ -127,6 +128,7 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
         dashboard.onFinish = { [weak self] in self?.finishWorkout() }
         #if DEBUG
         configureDiagnostics()
+        configurePoseReplayCapture()
         #endif
     }
 
@@ -154,6 +156,83 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
             diagnosticsView.widthAnchor.constraint(equalToConstant: 250),
             diagnosticsView.heightAnchor.constraint(equalToConstant: 170)
         ])
+    }
+
+    private func configurePoseReplayCapture() {
+        poseReplayButton.titleLabel?.font = .systemFont(ofSize: 12, weight: .bold)
+        poseReplayButton.backgroundColor = WorkoutAppearance.surface
+        poseReplayButton.layer.cornerRadius = 16
+        poseReplayButton.accessibilityIdentifier = "poseReplayCaptureButton"
+        poseReplayButton.widthAnchor.constraint(equalToConstant: 44).isActive = true
+        poseReplayButton.heightAnchor.constraint(equalToConstant: 48).isActive = true
+        poseReplayButton.addTarget(
+            self,
+            action: #selector(togglePoseReplayCapture),
+            for: .touchUpInside
+        )
+        dashboard.toolbar.insertArrangedSubview(poseReplayButton, at: 2)
+        updatePoseReplayCaptureButton()
+    }
+
+    private func updatePoseReplayCaptureButton() {
+        let isRecording = viewModel.isPoseReplayRecording
+        poseReplayButton.setTitle(isRecording ? "STOP" : "REC", for: .normal)
+        poseReplayButton.setTitleColor(isRecording ? .systemRed : .white, for: .normal)
+        poseReplayButton.accessibilityLabel = isRecording
+            ? "Остановить запись позы и экспортировать JSON"
+            : "Начать запись числовых данных позы"
+    }
+
+    @objc private func togglePoseReplayCapture() {
+        if viewModel.isPoseReplayRecording {
+            do {
+                guard let data = try viewModel.stopPoseReplayRecording() else { return }
+                updatePoseReplayCaptureButton()
+                try sharePoseReplay(data)
+            } catch {
+                updatePoseReplayCaptureButton()
+                showPoseReplayMessage("Не удалось экспортировать запись: \(error.localizedDescription)")
+            }
+            return
+        }
+        let consent = UIAlertController(
+            title: "Запись данных позы",
+            message: "Будут записаны координаты суставов ног и время кадров. Это данные о движениях тела. Видео не сохраняется, JSON экспортируется только вручную. Записывайте после нажатия «Старт».",
+            preferredStyle: .alert
+        )
+        consent.addAction(UIAlertAction(title: "Отмена", style: .cancel))
+        consent.addAction(UIAlertAction(title: "Начать запись", style: .default) { [weak self] _ in
+            guard let self else { return }
+            if self.viewModel.startPoseReplayRecording() {
+                self.updatePoseReplayCaptureButton()
+            } else {
+                self.showPoseReplayMessage("Сначала запустите тренировку кнопкой «Старт».")
+            }
+        })
+        present(consent, animated: true)
+    }
+
+    private func sharePoseReplay(_ data: Data) throws {
+        let exportURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("RepsCounter-PoseReplay-\(UUID().uuidString).json")
+        try data.write(to: exportURL, options: .atomic)
+        let share = UIActivityViewController(activityItems: [exportURL], applicationActivities: nil)
+        share.popoverPresentationController?.sourceView = poseReplayButton
+        share.popoverPresentationController?.sourceRect = poseReplayButton.bounds
+        share.completionWithItemsHandler = { _, _, _, _ in
+            try? FileManager.default.removeItem(at: exportURL)
+        }
+        present(share, animated: true)
+    }
+
+    private func showPoseReplayMessage(_ message: String) {
+        let alert = UIAlertController(
+            title: "Pose Replay",
+            message: message,
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: "ОК", style: .default))
+        present(alert, animated: true)
     }
 
     @objc private func toggleDiagnostics() {
