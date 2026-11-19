@@ -376,6 +376,49 @@ final class PoseReplayTests: XCTestCase {
         XCTAssertEqual(score.falseNegatives, 0)
     }
 
+    func testBilateralFusionDoesNotMergeDistinctQuickRepetitions() {
+        let candidates = [
+            PoseReplayLegCount(
+                leg: .right, countedAtSeconds: 5.0, loweredAtSeconds: 4.0
+            ),
+            PoseReplayLegCount(
+                leg: .left, countedAtSeconds: 5.4, loweredAtSeconds: 5.1
+            )
+        ]
+        let combined = PoseReplayBilateralRunner.mergeMatchingMovements(candidates)
+        XCTAssertEqual(combined.count, 2)
+        XCTAssertEqual(combined[0].contributingLegs, [.right])
+        XCTAssertEqual(combined[1].contributingLegs, [.left])
+    }
+
+    func testBilateralFusionMergesStaggeredObservationsOfSameRepetition() {
+        let candidates = [
+            PoseReplayLegCount(
+                leg: .right, countedAtSeconds: 5.0, loweredAtSeconds: 4.0
+            ),
+            PoseReplayLegCount(
+                leg: .left, countedAtSeconds: 5.4, loweredAtSeconds: 4.25
+            )
+        ]
+        let combined = PoseReplayBilateralRunner.mergeMatchingMovements(candidates)
+        XCTAssertEqual(combined.count, 1)
+        XCTAssertEqual(combined.first?.contributingLegs, [.right, .left])
+        XCTAssertEqual(combined.first?.countedAtSeconds ?? 0, 5.0, accuracy: 0.001)
+    }
+
+    func testBilateralFusionNeverMergesTwoCountsFromSameLeg() {
+        let candidates = [
+            PoseReplayLegCount(
+                leg: .left, countedAtSeconds: 5.0, loweredAtSeconds: 4.0
+            ),
+            PoseReplayLegCount(
+                leg: .left, countedAtSeconds: 5.5, loweredAtSeconds: 4.5
+            )
+        ]
+        let combined = PoseReplayBilateralRunner.mergeMatchingMovements(candidates)
+        XCTAssertEqual(combined.count, 2)
+    }
+
     func testRecordingIsBoundedAndNeverStartsWithoutExplicitAction() throws {
         var recorder = PoseReplayRecorder()
         recorder.append(SquatPoseFixture.pose(), at: 0)
