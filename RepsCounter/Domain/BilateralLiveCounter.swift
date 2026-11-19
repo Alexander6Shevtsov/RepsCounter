@@ -19,6 +19,8 @@ private struct BilateralLegTracker {
     private var counter = SquatCounter(maximumHipKneeHeightRatio: 0.35)
     private var lastValidTime: TimeInterval?
     private var loweredAt: TimeInterval?
+    private var missingSampleCount = 0
+    private let maximumMissingDuration: TimeInterval = 0.22
 
     init(leg: BodyLeg) {
         self.leg = leg
@@ -28,7 +30,25 @@ private struct BilateralLegTracker {
         if let lastValidTime, timestamp - lastValidTime > 0.25 {
             resetMovement()
         }
-        let analysis = analyzer.analyze(onlySelectedLeg(in: pose))
+        let selectedPose = onlySelectedLeg(in: pose)
+        guard hasReliableJoints(selectedPose) else {
+            if let lastValidTime,
+               missingSampleCount == 0,
+               timestamp >= lastValidTime,
+               timestamp - lastValidTime <= maximumMissingDuration {
+                missingSampleCount = 1
+                return nil
+            }
+            resetMovement()
+            return nil
+        }
+        if missingSampleCount > 0,
+           let lastValidTime,
+           timestamp - lastValidTime > maximumMissingDuration {
+            resetMovement()
+        }
+        missingSampleCount = 0
+        let analysis = analyzer.analyze(selectedPose)
         if analysis.requiresMovementReset {
             counter.resetMovement()
             loweredAt = nil
@@ -59,6 +79,20 @@ private struct BilateralLegTracker {
         counter.resetMovement()
         lastValidTime = nil
         loweredAt = nil
+        missingSampleCount = 0
+    }
+
+    private func hasReliableJoints(_ pose: BodyPose?) -> Bool {
+        guard let pose,
+              pose.aspectRatio.isFinite, pose.aspectRatio > 0,
+              pose.joints.count == 3 else { return false }
+        return pose.joints.values.allSatisfy { point in
+            point.confidence.isFinite
+                && point.confidence >= 0.5
+                && point.confidence <= 1
+                && point.location.x.isFinite
+                && point.location.y.isFinite
+        }
     }
 
     private func onlySelectedLeg(in pose: BodyPose?) -> BodyPose? {
