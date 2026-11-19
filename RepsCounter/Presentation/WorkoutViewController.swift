@@ -7,6 +7,9 @@
 
 import AVFoundation
 import UIKit
+#if DEBUG
+import UniformTypeIdentifiers
+#endif
 
 final class WorkoutViewController: UIViewController, UIAdaptivePresentationControllerDelegate {
     var onNewWorkout: (() -> Void)?
@@ -170,6 +173,14 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
             action: #selector(togglePoseReplayCapture),
             for: .touchUpInside
         )
+        poseReplayButton.menu = UIMenu(children: [
+            UIAction(
+                title: "Открыть Replay JSON",
+                image: UIImage(systemName: "doc.text.magnifyingglass")
+            ) { [weak self] _ in
+                self?.openPoseReplayDocument()
+            }
+        ])
         dashboard.toolbar.insertArrangedSubview(poseReplayButton, at: 2)
         updatePoseReplayCaptureButton()
     }
@@ -210,6 +221,77 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
             }
         })
         present(consent, animated: true)
+    }
+
+    private func openPoseReplayDocument() {
+        guard !viewModel.isPoseReplayRecording else {
+            showPoseReplayMessage("Сначала остановите запись кнопкой STOP.")
+            return
+        }
+        let documentPicker = UIDocumentPickerViewController(
+            forOpeningContentTypes: [.json],
+            asCopy: true
+        )
+        documentPicker.delegate = self
+        documentPicker.allowsMultipleSelection = false
+        present(documentPicker, animated: true)
+    }
+
+    fileprivate func analyzePoseReplay(at url: URL) {
+        let hasPermission = url.startAccessingSecurityScopedResource()
+        defer {
+            if hasPermission {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+        do {
+            let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+            if let fileSize = attributes[.size] as? Int,
+               fileSize > 10_000_000 {
+                showPoseReplayMessage("JSON превышает максимальный размер 10 МБ.")
+                return
+            }
+            let data = try Data(contentsOf: url)
+            guard data.count <= 10_000_000 else {
+                showPoseReplayMessage("JSON превышает максимальный размер 10 МБ.")
+                return
+            }
+            let session = try JSONDecoder().decode(PoseReplaySession.self, from: data)
+            let result = try PoseReplayBilateralRunner.replay(session)
+            var summary = """
+            Обычный 2D: \(result.baselineCountedAtSeconds.count)
+            Левая нога: \(result.leftCountedAtSeconds.count)
+            Правая нога: \(result.rightCountedAtSeconds.count)
+            Объединено: \(result.combinedEvents.count)
+            Убрано дублей: \(result.mergedDuplicateEvents)
+            """
+            if session.annotations.isEmpty {
+                summary += "\nНет ручной разметки: точность пока неизвестна."
+            } else {
+                let original = PoseReplayResult(
+                    countedAtSeconds: result.baselineCountedAtSeconds,
+                    depthSamples: []
+                )
+                let bilateral = PoseReplayResult(
+                    countedAtSeconds: result.countedAtSeconds,
+                    depthSamples: []
+                )
+                let originalScore = try PoseReplayRunner.score(
+                    original, against: session.annotations
+                )
+                let bilateralScore = try PoseReplayRunner.score(
+                    bilateral, against: session.annotations
+                )
+                summary += """
+
+                \nОбычный TP/FP/FN: \(originalScore.truePositives)/\(originalScore.falsePositives)/\(originalScore.falseNegatives)
+                Две ноги TP/FP/FN: \(bilateralScore.truePositives)/\(bilateralScore.falsePositives)/\(bilateralScore.falseNegatives)
+                """
+            }
+            showPoseReplayMessage(summary)
+        } catch {
+            showPoseReplayMessage("Не удалось прочитать Replay JSON: \(error.localizedDescription)")
+        }
     }
 
     private func sharePoseReplay(_ data: Data) throws {
@@ -335,3 +417,15 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
         }
     }
 }
+
+#if DEBUG
+extension WorkoutViewController: UIDocumentPickerDelegate {
+    func documentPicker(
+        _ controller: UIDocumentPickerViewController,
+        didPickDocumentsAt urls: [URL]
+    ) {
+        guard let selectedURL = urls.first else { return }
+        analyzePoseReplay(at: selectedURL)
+    }
+}
+#endif
