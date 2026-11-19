@@ -14,7 +14,7 @@ enum WorkoutSaveState: Equatable {
     case failed(String)
 }
 
-struct WorkoutViewState {
+struct WorkoutViewState: Equatable {
     let repetitions: Int
     let totalRepetitions: Int
     let currentSet: Int
@@ -225,7 +225,10 @@ struct SquatDepthAttemptTracker {
 
 @MainActor
 final class WorkoutViewModel {
-    var onChange: ((WorkoutViewState) -> Void)?
+    var onChange: ((WorkoutViewState) -> Void)? {
+        didSet { lastPublishedState = nil }
+    }
+    private var lastPublishedState: WorkoutViewState?
     private(set) var finishedSummary: WorkoutSummary?
 
     #if DEBUG
@@ -609,7 +612,7 @@ final class WorkoutViewModel {
         latestDiagnostics = diagnostics
         onDiagnosticsChange?(diagnostics)
         #endif
-        onChange?(WorkoutViewState(
+        let nextState = WorkoutViewState(
             repetitions: repetitionsInSet,
             totalRepetitions: totalRepetitions,
             currentSet: currentSet,
@@ -623,6 +626,9 @@ final class WorkoutViewModel {
             isFinished: isFinished,
             poseDetected: hasPose,
             saveState: saveState
-        ))
+        )
+        guard lastPublishedState != nextState else { return }
+        lastPublishedState = nextState
+        onChange?(nextState)
     }
 }
