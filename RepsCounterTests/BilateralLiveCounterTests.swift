@@ -121,6 +121,33 @@ final class BilateralLiveCounterTests: XCTestCase {
         XCTAssertEqual(counter.mergedDuplicates, 0)
     }
 
+    func testInvalidPoseGeometryImmediatelyAbortsLoweredMovement() {
+        var counter = BilateralLiveCounter()
+        var currentTime: TimeInterval = 0
+        let standingPose = SquatPoseFixture.pose(leftAngle: 170, rightAngle: 170)
+        let loweredPose = SquatPoseFixture.pose(leftAngle: 90, rightAngle: 90)
+
+        for (pose, frameCount) in [(standingPose, 20), (loweredPose, 20)] {
+            for _ in 0..<frameCount {
+                currentTime += 0.08
+                _ = counter.process(pose, at: currentTime)
+            }
+        }
+        let invalidPose = BodyPose(
+            joints: loweredPose.joints,
+            aspectRatio: .nan
+        )
+        currentTime += 0.08
+        _ = counter.process(invalidPose, at: currentTime)
+        for _ in 0..<20 {
+            currentTime += 0.08
+            _ = counter.process(standingPose, at: currentTime)
+        }
+
+        XCTAssertEqual(counter.repetitions, 0)
+        XCTAssertEqual(counter.mergedDuplicates, 0)
+    }
+
     func testShorterAnalysisIntervalsStillCountFullButRejectPartialSquats() {
         var counter = BilateralLiveCounter()
         var currentTime: TimeInterval = 0
