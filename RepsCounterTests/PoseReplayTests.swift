@@ -238,11 +238,11 @@ final class PoseReplayTests: XCTestCase {
         var recorder = PoseReplayRecorder()
         XCTAssertTrue(recorder.start(at: 0))
         var timestamp = 0.0
-        let cycles: [(Bool, Float, Float)] = [
-            (false, 0.49, 0.93),
-            (true, 0.94, 0.49)
+        let cycles: [(leftConfidence: Float, rightConfidence: Float)] = [
+            (0.49, 0.93),
+            (0.94, 0.49)
         ]
-        for (_, leftConfidence, rightConfidence) in cycles {
+        for (leftConfidence, rightConfidence) in cycles {
             for (angle, frames) in [(170.0, 20), (90.0, 20), (170.0, 20)] {
                 for _ in 0..<frames {
                     timestamp += 0.08
