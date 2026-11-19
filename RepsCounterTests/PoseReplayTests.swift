@@ -208,6 +208,174 @@ final class PoseReplayTests: XCTestCase {
         XCTAssertThrowsError(try PoseReplayRunner.replay(outOfOrder))
     }
 
+    func testBilateralShadowMergesBothLegsForOneRealMovement() throws {
+        var recorder = PoseReplayRecorder()
+        XCTAssertTrue(recorder.start(at: 0))
+        var timestamp = 0.0
+        for (angle, frames) in [(170.0, 20), (90.0, 20), (170.0, 20)] {
+            for _ in 0..<frames {
+                timestamp += 0.08
+                recorder.append(
+                    SquatPoseFixture.pose(leftAngle: angle, rightAngle: angle),
+                    at: timestamp
+                )
+            }
+        }
+        recorder.stop()
+
+        let firstRun = try PoseReplayBilateralRunner.replay(recorder.session)
+        let secondRun = try PoseReplayBilateralRunner.replay(recorder.session)
+        XCTAssertEqual(firstRun.baselineCountedAtSeconds.count, 1)
+        XCTAssertEqual(firstRun.leftCountedAtSeconds.count, 1)
+        XCTAssertEqual(firstRun.rightCountedAtSeconds.count, 1)
+        XCTAssertEqual(firstRun.countedAtSeconds.count, 1)
+        XCTAssertEqual(firstRun.mergedDuplicateEvents, 1)
+        XCTAssertEqual(firstRun.combinedEvents.first?.contributingLegs.count, 2)
+        XCTAssertEqual(firstRun.countedAtSeconds, secondRun.countedAtSeconds)
+    }
+
+    func testBilateralShadowFindsSeparateRepetitionsOnDifferentReliableLegs() throws {
+        var recorder = PoseReplayRecorder()
+        XCTAssertTrue(recorder.start(at: 0))
+        var timestamp = 0.0
+        let cycles: [(Bool, Float, Float)] = [
+            (false, 0.49, 0.93),
+            (true, 0.94, 0.49)
+        ]
+        for (_, leftConfidence, rightConfidence) in cycles {
+            for (angle, frames) in [(170.0, 20), (90.0, 20), (170.0, 20)] {
+                for _ in 0..<frames {
+                    timestamp += 0.08
+                    recorder.append(
+                        SquatPoseFixture.pose(
+                            leftAngle: angle,
+                            rightAngle: angle,
+                            leftConfidence: leftConfidence,
+                            rightConfidence: rightConfidence
+                        ),
+                        at: timestamp
+                    )
+                }
+            }
+        }
+        recorder.stop()
+
+        let result = try PoseReplayBilateralRunner.replay(recorder.session)
+        XCTAssertEqual(result.leftCountedAtSeconds.count, 1)
+        XCTAssertEqual(result.rightCountedAtSeconds.count, 1)
+        XCTAssertEqual(result.countedAtSeconds.count, 2)
+        XCTAssertEqual(result.mergedDuplicateEvents, 0)
+        XCTAssertEqual(result.combinedEvents[0].contributingLegs, [.right])
+        XCTAssertEqual(result.combinedEvents[1].contributingLegs, [.left])
+    }
+
+    func testBilateralShadowDoesNotCreateSecondEventFromPartialOppositeLeg() throws {
+        var recorder = PoseReplayRecorder()
+        XCTAssertTrue(recorder.start(at: 0))
+        var timestamp = 0.0
+        for (leftAngle, rightAngle, frames) in [
+            (170.0, 170.0, 20),
+            (120.0, 90.0, 20),
+            (170.0, 170.0, 20)
+        ] {
+            for _ in 0..<frames {
+                timestamp += 0.08
+                recorder.append(
+                    SquatPoseFixture.pose(
+                        leftAngle: leftAngle, rightAngle: rightAngle
+                    ),
+                    at: timestamp
+                )
+            }
+        }
+        recorder.stop()
+
+        let result = try PoseReplayBilateralRunner.replay(recorder.session)
+        XCTAssertTrue(result.leftCountedAtSeconds.isEmpty)
+        XCTAssertEqual(result.rightCountedAtSeconds.count, 1)
+        XCTAssertEqual(result.countedAtSeconds.count, 1)
+        XCTAssertEqual(result.combinedEvents.first?.contributingLegs, [.right])
+    }
+
+    func testBilateralShadowResetsBothLegsAcrossTrackingInterruption() throws {
+        var recorder = PoseReplayRecorder()
+        XCTAssertTrue(recorder.start(at: 0))
+        var timestamp = 0.0
+        for _ in 0..<20 {
+            timestamp += 0.08
+            recorder.append(SquatPoseFixture.pose(leftAngle: 170, rightAngle: 170), at: timestamp)
+        }
+        for _ in 0..<20 {
+            timestamp += 0.08
+            recorder.append(SquatPoseFixture.pose(leftAngle: 90, rightAngle: 90), at: timestamp)
+        }
+        timestamp += 0.02
+        recorder.markReset(at: timestamp)
+        for _ in 0..<20 {
+            timestamp += 0.08
+            recorder.append(SquatPoseFixture.pose(leftAngle: 170, rightAngle: 170), at: timestamp)
+        }
+        recorder.stop()
+
+        let result = try PoseReplayBilateralRunner.replay(recorder.session)
+        XCTAssertTrue(result.countedAtSeconds.isEmpty)
+        XCTAssertTrue(result.leftCountedAtSeconds.isEmpty)
+        XCTAssertTrue(result.rightCountedAtSeconds.isEmpty)
+    }
+
+    func testBilateralShadowGapCannotFinishPriorSquat() throws {
+        var recorder = PoseReplayRecorder()
+        XCTAssertTrue(recorder.start(at: 0))
+        var timestamp = 0.0
+        for _ in 0..<20 {
+            timestamp += 0.08
+            recorder.append(SquatPoseFixture.pose(leftAngle: 170, rightAngle: 170), at: timestamp)
+        }
+        for _ in 0..<20 {
+            timestamp += 0.08
+            recorder.append(SquatPoseFixture.pose(leftAngle: 90, rightAngle: 90), at: timestamp)
+        }
+        timestamp += 0.40
+        for _ in 0..<20 {
+            timestamp += 0.08
+            recorder.append(SquatPoseFixture.pose(leftAngle: 170, rightAngle: 170), at: timestamp)
+        }
+        recorder.stop()
+
+        let result = try PoseReplayBilateralRunner.replay(recorder.session)
+        XCTAssertTrue(result.countedAtSeconds.isEmpty)
+        XCTAssertEqual(result.mergedDuplicateEvents, 0)
+    }
+
+    func testBilateralShadowCanBeScoredOnlyWithManualAnnotations() throws {
+        var recorder = PoseReplayRecorder()
+        XCTAssertTrue(recorder.start(at: 0))
+        var timestamp = 0.0
+        for (angle, frames) in [(170.0, 20), (90.0, 20), (170.0, 20)] {
+            for _ in 0..<frames {
+                timestamp += 0.08
+                recorder.append(
+                    SquatPoseFixture.pose(leftAngle: angle, rightAngle: angle),
+                    at: timestamp
+                )
+            }
+        }
+        recorder.stop()
+        let shadow = try PoseReplayBilateralRunner.replay(recorder.session)
+        let result = PoseReplayResult(
+            countedAtSeconds: shadow.countedAtSeconds,
+            depthSamples: []
+        )
+        XCTAssertThrowsError(try PoseReplayRunner.score(result, against: []))
+        let annotations = [
+            PoseReplayAnnotation(startSeconds: 0, endSeconds: 5, isFullSquat: true)
+        ]
+        let score = try PoseReplayRunner.score(result, against: annotations)
+        XCTAssertEqual(score.truePositives, 1)
+        XCTAssertEqual(score.falsePositives, 0)
+        XCTAssertEqual(score.falseNegatives, 0)
+    }
+
     func testRecordingIsBoundedAndNeverStartsWithoutExplicitAction() throws {
         var recorder = PoseReplayRecorder()
         recorder.append(SquatPoseFixture.pose(), at: 0)
