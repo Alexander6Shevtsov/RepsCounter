@@ -323,4 +323,188 @@ enum PoseReplayRunner {
         }
     }
 }
+struct PoseReplayLegCount {
+    let leg: BodyLeg
+    let countedAtSeconds: TimeInterval
+    let loweredAtSeconds: TimeInterval
+}
+
+struct PoseReplayBilateralEvent {
+    let countedAtSeconds: TimeInterval
+    let loweredAtSeconds: TimeInterval
+    let contributingLegs: [BodyLeg]
+}
+
+struct PoseReplayBilateralResult {
+    let baselineCountedAtSeconds: [TimeInterval]
+    let leftCountedAtSeconds: [TimeInterval]
+    let rightCountedAtSeconds: [TimeInterval]
+    let combinedEvents: [PoseReplayBilateralEvent]
+    let mergedDuplicateEvents: Int
+
+    var countedAtSeconds: [TimeInterval] {
+        combinedEvents.map(\.countedAtSeconds)
+    }
+}
+
+private struct PoseReplayIndependentLeg {
+    let leg: BodyLeg
+    private var analyzer = PoseAnalyzer()
+    private var counter = SquatCounter(maximumHipKneeHeightRatio: 0.35)
+    private var lastValidTimestamp: TimeInterval?
+    private var loweredAtSeconds: TimeInterval?
+
+    init(leg: BodyLeg) {
+        self.leg = leg
+    }
+
+    mutating func process(_ event: PoseReplayEvent) -> PoseReplayLegCount? {
+        guard event.kind == .pose else {
+            resetMovement()
+            return nil
+        }
+
+        if let lastValidTimestamp,
+           event.seconds - lastValidTimestamp > 0.25 {
+            resetMovement()
+        }
+
+        let restrictedPose = restrictToLeg(event.pose?.restore())
+        let analysis = analyzer.analyze(restrictedPose)
+        if analysis.requiresMovementReset {
+            counter.resetMovement()
+            loweredAtSeconds = nil
+        }
+
+        let previousPhase = counter.phase
+        let counted = counter.process(
+            measuredAngle: analysis.measuredAngle,
+            smoothedAngle: analysis.smoothedAngle,
+            hipKneeHeightRatio: analysis.hipKneeHeightRatio
+        )
+        lastValidTimestamp = analysis.smoothedAngle == nil
+            ? nil : event.seconds
+
+        if previousPhase != .lowered, counter.phase == .lowered {
+            loweredAtSeconds = event.seconds
+        }
+
+        if counted {
+            let loweredAt = loweredAtSeconds ?? event.seconds
+            loweredAtSeconds = nil
+            return PoseReplayLegCount(
+                leg: leg,
+                countedAtSeconds: event.seconds,
+                loweredAtSeconds: loweredAt
+            )
+        }
+
+        if previousPhase == .lowered, counter.phase != .lowered {
+            loweredAtSeconds = nil
+        }
+        return nil
+    }
+
+    private mutating func resetMovement() {
+        analyzer.reset()
+        counter.resetMovement()
+        lastValidTimestamp = nil
+        loweredAtSeconds = nil
+    }
+
+    private func restrictToLeg(_ pose: BodyPose?) -> BodyPose? {
+        guard let pose else { return nil }
+        let hipJoint: BodyJoint
+        let kneeJoint: BodyJoint
+        let ankleJoint: BodyJoint
+        switch leg {
+        case .left:
+            hipJoint = .leftHip
+            kneeJoint = .leftKnee
+            ankleJoint = .leftAnkle
+        case .right:
+            hipJoint = .rightHip
+            kneeJoint = .rightKnee
+            ankleJoint = .rightAnkle
+        }
+
+        var selectedJoints: [BodyJoint: JointPoint] = [:]
+        for joint in [hipJoint, kneeJoint, ankleJoint] {
+            if let point = pose.joints[joint] {
+                selectedJoints[joint] = point
+            }
+        }
+        return BodyPose(
+            joints: selectedJoints,
+            aspectRatio: pose.aspectRatio,
+            rotationAngle: pose.rotationAngle
+        )
+    }
+}
+
+enum PoseReplayBilateralRunner {
+    static func replay(_ session: PoseReplaySession) throws -> PoseReplayBilateralResult {
+        let baseline = try PoseReplayRunner.replay(session)
+        var leftTracker = PoseReplayIndependentLeg(leg: .left)
+        var rightTracker = PoseReplayIndependentLeg(leg: .right)
+        var candidates: [PoseReplayLegCount] = []
+
+        for event in session.events {
+            if let candidate = leftTracker.process(event) {
+                candidates.append(candidate)
+            }
+            if let candidate = rightTracker.process(event) {
+                candidates.append(candidate)
+            }
+        }
+
+        let chronologicalCandidates = candidates.sorted {
+            $0.countedAtSeconds < $1.countedAtSeconds
+        }
+        let combined = mergeMatchingMovements(chronologicalCandidates)
+        return PoseReplayBilateralResult(
+            baselineCountedAtSeconds: baseline.countedAtSeconds,
+            leftCountedAtSeconds: chronologicalCandidates.compactMap {
+                $0.leg == .left ? $0.countedAtSeconds : nil
+            },
+            rightCountedAtSeconds: chronologicalCandidates.compactMap {
+                $0.leg == .right ? $0.countedAtSeconds : nil
+            },
+            combinedEvents: combined,
+            mergedDuplicateEvents: candidates.count - combined.count
+        )
+    }
+
+    private static func mergeMatchingMovements(
+        _ candidates: [PoseReplayLegCount]
+    ) -> [PoseReplayBilateralEvent] {
+        let maximumCompletionDifference = 0.75
+        var combined: [PoseReplayBilateralEvent] = []
+
+        for candidate in candidates {
+            if let previous = combined.last,
+               let lastIndex = combined.indices.last,
+               !previous.contributingLegs.contains(candidate.leg),
+               candidate.countedAtSeconds - previous.countedAtSeconds <= maximumCompletionDifference,
+               candidate.loweredAtSeconds <= previous.countedAtSeconds,
+               candidate.countedAtSeconds >= previous.loweredAtSeconds {
+                combined[lastIndex] = PoseReplayBilateralEvent(
+                    countedAtSeconds: previous.countedAtSeconds,
+                    loweredAtSeconds: min(previous.loweredAtSeconds, candidate.loweredAtSeconds),
+                    contributingLegs: previous.contributingLegs + [candidate.leg]
+                )
+            } else {
+                combined.append(
+                    PoseReplayBilateralEvent(
+                        countedAtSeconds: candidate.countedAtSeconds,
+                        loweredAtSeconds: candidate.loweredAtSeconds,
+                        contributingLegs: [candidate.leg]
+                    )
+                )
+            }
+        }
+        return combined
+    }
+}
+
 #endif
