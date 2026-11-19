@@ -71,6 +71,7 @@ final class SquatDiagnosticsView: UIVisualEffectView {
             : "в ходе"
         let attemptNumber = attempt.map { "#\($0.number)" } ?? "—"
         let lines = [
+            "Обработано поз/с: \(frameRateText(diagnostics.poseFramesPerSecond))",
             "Сбросы И:\(diagnostics.measurementLossCount) Н:\(diagnostics.legChangeCount) Г:\(diagnostics.observationGapCount)",
             "raw \(angleText(analysis?.measuredAngle)) · EMA \(angleText(analysis?.smoothedAngle))",
             "Таз−колено: \(hipKneeText(analysis?.hipKneeHeightRatio)) бедра",
@@ -84,6 +85,11 @@ final class SquatDiagnosticsView: UIVisualEffectView {
             "Последняя потеря: \(measurementIssueText(diagnostics.latestMeasurementIssue))"
         ]
         textLabel.text = lines.joined(separator: "\n")
+    }
+
+    private func frameRateText(_ frameRate: Double?) -> String {
+        guard let frameRate, frameRate.isFinite else { return "—" }
+        return String(format: "%.1f", frameRate)
     }
 
     private func angleText(_ angle: Double?) -> String {
