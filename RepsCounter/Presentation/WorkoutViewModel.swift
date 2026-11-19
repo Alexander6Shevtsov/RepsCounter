@@ -238,6 +238,8 @@ final class WorkoutViewModel {
     private var observationGapCount = 0
     private var latestMeasurementIssue: LegMeasurementIssue?
     private var depthAttemptTracker = SquatDepthAttemptTracker()
+    private var bilateralCounter = BilateralLiveCounter()
+    private(set) var usesBilateralCounting = false
     #endif
 
     private let persistence: any WorkoutStoring
@@ -286,6 +288,26 @@ final class WorkoutViewModel {
 
     deinit {
         updateTask?.cancel()
+    }
+
+    #if DEBUG
+    @discardableResult
+    func setBilateralCountingEnabled(_ enabled: Bool) -> Bool {
+        guard !hasStarted, !isFinished else { return false }
+        usesBilateralCounting = enabled
+        bilateralCounter.reset()
+        counter.reset()
+        resetTracking()
+        publish()
+        return true
+    }
+    #endif
+
+    private var repetitionsInSet: Int {
+        #if DEBUG
+        if usesBilateralCounting { return bilateralCounter.repetitions }
+        #endif
+        return counter.repetitions
     }
 
     func process(_ pose: BodyPose?) {
@@ -350,20 +372,34 @@ final class WorkoutViewModel {
         )
         if counter.phase != .seekingStanding { trackingReset = nil }
         #endif
-        if counted {
-            totalRepetitions += 1
-            if counter.repetitions >= targetRepetitions {
-                completedSets += 1
-                if completedSets == targetSets {
-                    finish()
-                    return
-                }
-                restDeadline = activeTime + TimeInterval(restDuration)
-                counter.reset()
-                resetTracking()
-            }
-        }
+        #if DEBUG
+        let newRepetitions = usesBilateralCounting
+            ? bilateralCounter.process(pose, at: currentTime) : (counted ? 1 : 0)
+        #else
+        let newRepetitions = counted ? 1 : 0
+        #endif
+        if applyNewRepetitions(newRepetitions, activeTime: activeTime) { return }
         publish(activeTime: activeTime)
+    }
+
+    @discardableResult
+    private func applyNewRepetitions(_ amount: Int, activeTime: TimeInterval) -> Bool {
+        guard amount > 0 else { return false }
+        totalRepetitions += amount
+        if repetitionsInSet >= targetRepetitions {
+            completedSets += 1
+            if completedSets >= targetSets {
+                finish()
+                return true
+            }
+            restDeadline = activeTime + TimeInterval(restDuration)
+            counter.reset()
+            #if DEBUG
+            bilateralCounter.reset()
+            #endif
+            resetTracking()
+        }
+        return false
     }
 
     func togglePause() {
@@ -395,6 +431,12 @@ final class WorkoutViewModel {
         guard !isFinished, !isPaused else { return }
         let activeTime = activeDuration(at: timeSource.currentTime)
         advanceRest(at: activeTime)
+        #if DEBUG
+        if usesBilateralCounting {
+            let pendingRepetitions = bilateralCounter.finishPending()
+            if applyNewRepetitions(pendingRepetitions, activeTime: activeTime) { return }
+        }
+        #endif
         accumulatedActiveTime = activeTime
         activeStartedAt = nil
         isPaused = true
@@ -423,13 +465,18 @@ final class WorkoutViewModel {
         guard !isFinished else { return }
         let activeTime = activeDuration(at: timeSource.currentTime)
         advanceRest(at: activeTime)
+        #if DEBUG
+        if usesBilateralCounting {
+            totalRepetitions += bilateralCounter.finishPending()
+        }
+        #endif
         accumulatedActiveTime = activeTime
         activeStartedAt = nil
         finishedSummary = WorkoutSummary(
             date: startedAt,
             duration: max(0, Int(activeTime)),
             repetitions: totalRepetitions,
-            sets: min(targetSets, completedSets + (counter.repetitions > 0 ? 1 : 0))
+            sets: min(targetSets, completedSets + (repetitionsInSet > 0 ? 1 : 0))
         )
         isFinished = true
         #if DEBUG
@@ -470,6 +517,12 @@ final class WorkoutViewModel {
         let activeTime = activeDuration(at: currentTime)
         advanceRest(at: activeTime)
         expireTracking(at: currentTime)
+        #if DEBUG
+        if usesBilateralCounting, restDeadline == nil {
+            let newRepetitions = bilateralCounter.flush(at: currentTime)
+            if applyNewRepetitions(newRepetitions, activeTime: activeTime) { return }
+        }
+        #endif
         publish(activeTime: activeTime)
     }
 
@@ -505,6 +558,9 @@ final class WorkoutViewModel {
         depthAttemptTracker.resetPoseClock()
         #endif
         counter.resetMovement()
+        #if DEBUG
+        bilateralCounter.resetMovement()
+        #endif
         analyzer.reset()
         lastPoseTime = nil
         hasPose = false
@@ -572,7 +628,7 @@ final class WorkoutViewModel {
         onDiagnosticsChange?(diagnostics)
         #endif
         onChange?(WorkoutViewState(
-            repetitions: counter.repetitions,
+            repetitions: repetitionsInSet,
             totalRepetitions: totalRepetitions,
             currentSet: currentSet,
             targetSets: targetSets,
