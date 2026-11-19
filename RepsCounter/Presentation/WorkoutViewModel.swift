@@ -93,6 +93,7 @@ struct SquatDiagnostics {
     let lastDepthAttempt: SquatDepthAttempt?
     let recentDepthAttempts: [SquatDepthAttempt]
     let poseFramesPerSecond: Double?
+    let bilateral: BilateralCounterTelemetry?
 }
 
 enum SquatDepthBreak: Equatable {
@@ -641,7 +642,8 @@ final class WorkoutViewModel {
             activeDepthAttempt: depthAttemptTracker.activeAttempt,
             lastDepthAttempt: depthAttemptTracker.lastAttempt,
             recentDepthAttempts: depthAttemptTracker.recentAttempts,
-            poseFramesPerSecond: poseFrameRate.rate
+            poseFramesPerSecond: poseFrameRate.rate,
+            bilateral: usesBilateralCounting ? bilateralCounter.telemetry : nil
         )
         latestDiagnostics = diagnostics
         onDiagnosticsChange?(diagnostics)
