@@ -230,6 +230,7 @@ enum PoseReplayRunner {
         _ result: PoseReplayResult,
         against annotations: [PoseReplayAnnotation]
     ) throws -> PoseReplayScore {
+        guard !annotations.isEmpty else { throw PoseReplayError.invalidAnnotations }
         try validateAnnotations(annotations)
         var truePositives = 0
         var falsePositives = 0
