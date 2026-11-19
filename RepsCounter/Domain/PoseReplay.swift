@@ -475,7 +475,7 @@ enum PoseReplayBilateralRunner {
         )
     }
 
-    private static func mergeMatchingMovements(
+    static func mergeMatchingMovements(
         _ candidates: [PoseReplayLegCount]
     ) -> [PoseReplayBilateralEvent] {
         let maximumCompletionDifference = 0.75
@@ -486,8 +486,8 @@ enum PoseReplayBilateralRunner {
                let lastIndex = combined.indices.last,
                !previous.contributingLegs.contains(candidate.leg),
                candidate.countedAtSeconds - previous.countedAtSeconds <= maximumCompletionDifference,
-               candidate.loweredAtSeconds <= previous.countedAtSeconds,
-               candidate.countedAtSeconds >= previous.loweredAtSeconds {
+               candidate.loweredAtSeconds < previous.countedAtSeconds,
+               candidate.countedAtSeconds > previous.loweredAtSeconds {
                 combined[lastIndex] = PoseReplayBilateralEvent(
                     countedAtSeconds: previous.countedAtSeconds,
                     loweredAtSeconds: min(previous.loweredAtSeconds, candidate.loweredAtSeconds),
