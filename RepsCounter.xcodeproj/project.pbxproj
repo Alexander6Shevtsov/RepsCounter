@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		ABCD00000000000000000012 /* PoseReplay.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABCD00000000000000000011 /* PoseReplay.swift */; };
+		ABCD00000000000000000014 /* PoseReplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABCD00000000000000000013 /* PoseReplayTests.swift */; };
 		03AE83AB4B0D430FBBDB5918 /* SquatObservationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2BEA99FF162F4CF4A9A454D3 /* SquatObservationTests.swift */; };
 		1980374DFEF2F4E0B9D0EC3B /* JointAngleCalculatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C994DEE4E31E70958E6E1331 /* JointAngleCalculatorTests.swift */; };
 		240E30981A73335B6FA7EA3E /* BodyPose.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2BBC466B1B168F85AB8B5F30 /* BodyPose.swift */; };
@@ -59,6 +61,8 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		ABCD00000000000000000011 /* PoseReplay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PoseReplay.swift; sourceTree = "<group>"; };
+		ABCD00000000000000000013 /* PoseReplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PoseReplayTests.swift; sourceTree = "<group>"; };
 		05232313959416543EB6E7D5 /* PoseOverlayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PoseOverlayView.swift; sourceTree = "<group>"; };
 		0C1D9030A183E961C8846F11 /* PoseAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PoseAnalyzer.swift; sourceTree = "<group>"; };
 		1E95EE8FFAA44C00808E9868 /* PoseAnalyzerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PoseAnalyzerTests.swift; sourceTree = "<group>"; };
@@ -138,6 +142,7 @@
 			children = (
 				9FB0C521967141EC88880471 /* CameraPosition.swift */,
 				2BBC466B1B168F85AB8B5F30 /* BodyPose.swift */,
+				ABCD00000000000000000011 /* PoseReplay.swift */,
 				AB5CCD47F29DE3E65ED0A282 /* JointAngleCalculator.swift */,
 				0C1D9030A183E961C8846F11 /* PoseAnalyzer.swift */,
 				32F232DBF0781617121E18A9 /* SquatCounter.swift */,
@@ -204,6 +209,7 @@
 				2BEA99FF162F4CF4A9A454D3 /* SquatObservationTests.swift */,
 				6A064275C5674B5AA4151381 /* SquatDiagnosticsTests.swift */,
 				1E95EE8FFAA44C00808E9868 /* PoseAnalyzerTests.swift */,
+				ABCD00000000000000000013 /* PoseReplayTests.swift */,
 				F0CD6D819AB342E584CA1B72 /* PoseGeometryTests.swift */,
 				E3B92F89AF8C4BEB8D861716 /* CameraSwitchingTests.swift */,
 				A05CA0000000000000000004 /* WorkoutCameraTests.swift */,
@@ -344,6 +350,7 @@
 				240E30981A73335B6FA7EA3E /* BodyPose.swift in Sources */,
 				F24966A18EBE0D245097C4D1 /* JointAngleCalculator.swift in Sources */,
 				E211AA1A93D61AD6A9173309 /* PoseAnalyzer.swift in Sources */,
+				ABCD00000000000000000012 /* PoseReplay.swift in Sources */,
 				F117A360A71C4D52A28B11AA /* SquatCounter.swift in Sources */,
 				AD9374468C095AFA1B1C4B83 /* CameraPreviewView.swift in Sources */,
 				D6FD2959225B3D20D9C7C193 /* PoseOverlayView.swift in Sources */,
@@ -366,6 +373,7 @@
 				03AE83AB4B0D430FBBDB5918 /* SquatObservationTests.swift in Sources */,
 				24F4904B022A49BA9C044BA5 /* SquatDiagnosticsTests.swift in Sources */,
 				93A05246BDF641B6BDF1EB94 /* PoseAnalyzerTests.swift in Sources */,
+				ABCD00000000000000000014 /* PoseReplayTests.swift in Sources */,
 				93EDEDB783324D05823EB3BF /* PoseGeometryTests.swift in Sources */,
 				BD034665816F429781575D7A /* CameraSwitchingTests.swift in Sources */,
 				A05CB0000000000000000004 /* WorkoutCameraTests.swift in Sources */,
