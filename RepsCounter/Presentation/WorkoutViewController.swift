@@ -21,6 +21,7 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
     #if DEBUG
     private let diagnosticsButton = UIButton(type: .system)
     private let diagnosticsView = SquatDiagnosticsView()
+    private let bilateralModeButton = UIButton(type: .system)
     #endif
     private var lastPose: BodyPose?
     private var lastState: WorkoutViewState?
@@ -127,6 +128,7 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
         dashboard.onFinish = { [weak self] in self?.finishWorkout() }
         #if DEBUG
         configureDiagnostics()
+        configureBilateralMode()
         #endif
     }
 
@@ -156,6 +158,37 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
         ])
     }
 
+    private func configureBilateralMode() {
+        bilateralModeButton.setTitle("2Н", for: .normal)
+        bilateralModeButton.titleLabel?.font = .systemFont(ofSize: 16, weight: .bold)
+        bilateralModeButton.backgroundColor = WorkoutAppearance.surface
+        bilateralModeButton.layer.cornerRadius = 16
+        bilateralModeButton.accessibilityIdentifier = "bilateralCountingToggle"
+        bilateralModeButton.accessibilityLabel = "Двухногий экспериментальный счётчик"
+        bilateralModeButton.widthAnchor.constraint(equalToConstant: 44).isActive = true
+        bilateralModeButton.heightAnchor.constraint(equalToConstant: 48).isActive = true
+        bilateralModeButton.addTarget(
+            self,
+            action: #selector(toggleBilateralCounting),
+            for: .touchUpInside
+        )
+        dashboard.toolbar.insertArrangedSubview(bilateralModeButton, at: 2)
+        updateBilateralModeButton()
+    }
+
+    private func updateBilateralModeButton() {
+        let enabled = viewModel.usesBilateralCounting
+        bilateralModeButton.setTitleColor(enabled ? WorkoutAppearance.accent : .white, for: .normal)
+        bilateralModeButton.accessibilityValue = enabled ? "Включён" : "Выключен"
+        bilateralModeButton.isEnabled = lastState?.hasStarted != true
+    }
+
+    @objc private func toggleBilateralCounting() {
+        let nextEnabled = !viewModel.usesBilateralCounting
+        guard viewModel.setBilateralCountingEnabled(nextEnabled) else { return }
+        updateBilateralModeButton()
+    }
+
     @objc private func toggleDiagnostics() {
         diagnosticsView.isHidden.toggle()
         diagnosticsButton.accessibilityValue = diagnosticsView.isHidden ? "Выключена" : "Включена"
@@ -170,6 +203,9 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
             guard let self else { return }
             let previousSaveState = lastState?.saveState
             lastState = state
+            #if DEBUG
+            updateBilateralModeButton()
+            #endif
             updateCameraMessage()
             if state.isFinished { cameraCoordinator.stopAfterFinish() }
             if previousSaveState != state.saveState {
