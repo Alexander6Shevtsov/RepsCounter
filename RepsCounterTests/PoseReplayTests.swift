@@ -188,6 +188,11 @@ final class PoseReplayTests: XCTestCase {
         XCTAssertTrue(result.countedAtSeconds.isEmpty)
     }
 
+    func testUnannotatedRecordingCannotClaimAccuracy() {
+        let result = PoseReplayResult(countedAtSeconds: [1.0], depthSamples: [])
+        XCTAssertThrowsError(try PoseReplayRunner.score(result, against: []))
+    }
+
     func testBadReplayVersionAndTimelineAreRejected() {
         let badVersion = PoseReplaySession(schemaVersion: 5, events: [], annotations: [])
         XCTAssertThrowsError(try PoseReplayRunner.replay(badVersion))
