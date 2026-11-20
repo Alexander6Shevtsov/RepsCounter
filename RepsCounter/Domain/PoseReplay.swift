@@ -507,4 +507,169 @@ enum PoseReplayBilateralRunner {
     }
 }
 
+
+struct PoseReplayDepthAttemptComparison {
+    let isFullSquat: Bool
+    let kneeOnly: Bool
+    let legacyProjected: Bool
+    let hipCenterBelowKnee: Bool
+}
+
+enum PoseReplayDepthGate: CaseIterable {
+    case kneeOnly
+    case legacyProjected
+    case hipCenterBelowKnee
+}
+
+struct PoseReplayDepthGateScore {
+    let fullSatisfied: Int
+    let fullMissed: Int
+    let partialAccepted: Int
+    let partialRejected: Int
+}
+
+struct PoseReplayDepthAuditReport {
+    let attempts: [PoseReplayDepthAttemptComparison]
+
+    func score(for gate: PoseReplayDepthGate) -> PoseReplayDepthGateScore {
+        var fullSatisfied = 0
+        var fullMissed = 0
+        var partialAccepted = 0
+        var partialRejected = 0
+
+        for attempt in attempts {
+            let satisfied: Bool
+            switch gate {
+            case .kneeOnly: satisfied = attempt.kneeOnly
+            case .legacyProjected: satisfied = attempt.legacyProjected
+            case .hipCenterBelowKnee: satisfied = attempt.hipCenterBelowKnee
+            }
+            if attempt.isFullSquat {
+                if satisfied { fullSatisfied += 1 }
+                else { fullMissed += 1 }
+            } else {
+                if satisfied { partialAccepted += 1 }
+                else { partialRejected += 1 }
+            }
+        }
+
+        return PoseReplayDepthGateScore(
+            fullSatisfied: fullSatisfied,
+            fullMissed: fullMissed,
+            partialAccepted: partialAccepted,
+            partialRejected: partialRejected
+        )
+    }
+}
+
+enum PoseReplayDepthAudit {
+    private struct KneeObservation {
+        let kneeAngle: Double
+        let signedHipKneeHeight: Double
+        let normalizedThighHeight: Double
+    }
+
+    static func evaluate(_ session: PoseReplaySession) throws -> PoseReplayDepthAuditReport {
+        guard !session.annotations.isEmpty else { throw PoseReplayError.invalidAnnotations }
+        _ = try PoseReplayRunner.replay(session)
+        let comparisons = session.annotations.map { annotation in
+            compare(annotation: annotation, events: session.events)
+        }
+        return PoseReplayDepthAuditReport(attempts: comparisons)
+    }
+
+    private static func compare(
+        annotation: PoseReplayAnnotation,
+        events: [PoseReplayEvent]
+    ) -> PoseReplayDepthAttemptComparison {
+        var consecutiveFrames = [Int](repeating: 0, count: 6)
+        var gateSatisfied = [Bool](repeating: false, count: 3)
+        var previousTimestamp: TimeInterval?
+
+        for event in events where event.seconds >= annotation.startSeconds
+            && event.seconds < annotation.endSeconds {
+            if event.kind == .reset
+                || (previousTimestamp.map { event.seconds - $0 > 0.25 } ?? false) {
+                consecutiveFrames = [Int](repeating: 0, count: 6)
+            }
+            previousTimestamp = event.seconds
+
+            for (sideIndex, side) in [BodyLeg.left, .right].enumerated() {
+                let observation = observe(event.pose, side: side)
+                for (gateIndex, gate) in PoseReplayDepthGate.allCases.enumerated() {
+                    let satisfied = observation.map { measurement in
+                        passes(measurement, gate: gate)
+                    } ?? false
+                    let index = sideIndex * 3 + gateIndex
+                    consecutiveFrames[index] = satisfied ? consecutiveFrames[index] + 1 : 0
+                    if consecutiveFrames[index] >= 3 {
+                        gateSatisfied[gateIndex] = true
+                    }
+                }
+            }
+        }
+
+        return PoseReplayDepthAttemptComparison(
+            isFullSquat: annotation.isFullSquat,
+            kneeOnly: gateSatisfied[0],
+            legacyProjected: gateSatisfied[1],
+            hipCenterBelowKnee: gateSatisfied[2]
+        )
+    }
+
+    private static func passes(_ measurement: KneeObservation, gate: PoseReplayDepthGate) -> Bool {
+        guard measurement.kneeAngle <= 105 else { return false }
+        switch gate {
+        case .kneeOnly: return true
+        case .legacyProjected: return measurement.normalizedThighHeight <= 0.35
+        case .hipCenterBelowKnee: return measurement.signedHipKneeHeight <= 0
+        }
+    }
+
+    private static func observe(_ pose: PoseReplayPose?, side: BodyLeg) -> KneeObservation? {
+        guard let pose, pose.aspectRatio.isFinite, pose.aspectRatio > 0 else { return nil }
+        let hipJoint: PoseReplayJoint = side == .left ? .leftHip : .rightHip
+        let kneeJoint: PoseReplayJoint = side == .left ? .leftKnee : .rightKnee
+        let ankleJoint: PoseReplayJoint = side == .left ? .leftAnkle : .rightAnkle
+        guard let hipPoint = pose.points.first(where: { $0.joint == hipJoint }),
+              let kneePoint = pose.points.first(where: { $0.joint == kneeJoint }),
+              let anklePoint = pose.points.first(where: { $0.joint == ankleJoint }),
+              [hipPoint, kneePoint, anklePoint].allSatisfy({
+                  $0.confidence.isFinite && (0.5...1).contains($0.confidence)
+                      && $0.horizontalPosition.isFinite && $0.verticalPosition.isFinite
+              }) else { return nil }
+
+        let aspectRatio = CGFloat(pose.aspectRatio)
+        let measuredAngle = JointAngleCalculator.angle(
+            first: CGPoint(
+                x: CGFloat(hipPoint.horizontalPosition) * aspectRatio,
+                y: CGFloat(hipPoint.verticalPosition)
+            ),
+            vertex: CGPoint(
+                x: CGFloat(kneePoint.horizontalPosition) * aspectRatio,
+                y: CGFloat(kneePoint.verticalPosition)
+            ),
+            third: CGPoint(
+                x: CGFloat(anklePoint.horizontalPosition) * aspectRatio,
+                y: CGFloat(anklePoint.verticalPosition)
+            )
+        )
+        guard let measuredAngle, measuredAngle.isFinite else { return nil }
+
+        let horizontalDifference =
+            (hipPoint.horizontalPosition - kneePoint.horizontalPosition) * pose.aspectRatio
+        let verticalDifference = hipPoint.verticalPosition - kneePoint.verticalPosition
+        let projectedThighLength = hypot(horizontalDifference, verticalDifference)
+        guard projectedThighLength.isFinite, projectedThighLength > 0.000_001 else {
+            return nil
+        }
+
+        return KneeObservation(
+            kneeAngle: measuredAngle,
+            signedHipKneeHeight: verticalDifference,
+            normalizedThighHeight: verticalDifference / projectedThighLength
+        )
+    }
+}
+
 #endif
