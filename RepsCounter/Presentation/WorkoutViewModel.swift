@@ -14,7 +14,7 @@ enum WorkoutSaveState: Equatable {
     case failed(String)
 }
 
-struct WorkoutViewState {
+struct WorkoutViewState: Equatable {
     let repetitions: Int
     let totalRepetitions: Int
     let currentSet: Int
@@ -46,6 +46,35 @@ enum SquatTrackingReset: Equatable {
     case observationGap
 }
 
+struct PoseFrameRateTracker {
+    private var recentTimestamps: [TimeInterval] = []
+    private(set) var rate: Double?
+
+    mutating func record(at timestamp: TimeInterval) {
+        guard timestamp.isFinite, timestamp >= 0 else { return }
+        if let previous = recentTimestamps.last {
+            if timestamp == previous { return }
+            if timestamp < previous { reset() }
+        }
+        recentTimestamps.append(timestamp)
+        while let first = recentTimestamps.first, timestamp - first > 1 {
+            recentTimestamps.removeFirst()
+        }
+        guard let first = recentTimestamps.first,
+              recentTimestamps.count >= 2,
+              timestamp - first >= 0.5 else {
+            rate = nil
+            return
+        }
+        rate = Double(recentTimestamps.count - 1) / (timestamp - first)
+    }
+
+    mutating func reset() {
+        recentTimestamps.removeAll()
+        rate = nil
+    }
+}
+
 struct SquatDiagnostics {
     let analysis: PoseAnalysis?
     let phase: SquatPhase
@@ -63,6 +92,8 @@ struct SquatDiagnostics {
     let activeDepthAttempt: SquatDepthAttempt?
     let lastDepthAttempt: SquatDepthAttempt?
     let recentDepthAttempts: [SquatDepthAttempt]
+    let poseFramesPerSecond: Double?
+    let bilateral: BilateralCounterTelemetry?
 }
 
 enum SquatDepthBreak: Equatable {
@@ -225,7 +256,10 @@ struct SquatDepthAttemptTracker {
 
 @MainActor
 final class WorkoutViewModel {
-    var onChange: ((WorkoutViewState) -> Void)?
+    var onChange: ((WorkoutViewState) -> Void)? {
+        didSet { lastPublishedState = nil }
+    }
+    private var lastPublishedState: WorkoutViewState?
     private(set) var finishedSummary: WorkoutSummary?
 
     #if DEBUG
@@ -238,6 +272,7 @@ final class WorkoutViewModel {
     private var observationGapCount = 0
     private var latestMeasurementIssue: LegMeasurementIssue?
     private var depthAttemptTracker = SquatDepthAttemptTracker()
+    private var poseFrameRate = PoseFrameRateTracker()
     #endif
     private var bilateralCounter = BilateralLiveCounter()
     private(set) var usesBilateralCounting = false
@@ -314,6 +349,7 @@ final class WorkoutViewModel {
         guard restDeadline == nil else { return }
         #if DEBUG
         depthAttemptTracker.recordPose(at: currentTime)
+        poseFrameRate.record(at: currentTime)
         #endif
         expireTracking(at: currentTime)
         let analysis = analyzer.analyze(pose)
@@ -540,6 +576,7 @@ final class WorkoutViewModel {
         #if DEBUG
         depthAttemptTracker.interrupt(.trackingReset)
         depthAttemptTracker.resetPoseClock()
+        poseFrameRate.reset()
         #endif
         counter.resetMovement()
         bilateralCounter.resetMovement()
@@ -604,12 +641,14 @@ final class WorkoutViewModel {
             latestMeasurementIssue: latestMeasurementIssue,
             activeDepthAttempt: depthAttemptTracker.activeAttempt,
             lastDepthAttempt: depthAttemptTracker.lastAttempt,
-            recentDepthAttempts: depthAttemptTracker.recentAttempts
+            recentDepthAttempts: depthAttemptTracker.recentAttempts,
+            poseFramesPerSecond: poseFrameRate.rate,
+            bilateral: usesBilateralCounting ? bilateralCounter.telemetry : nil
         )
         latestDiagnostics = diagnostics
         onDiagnosticsChange?(diagnostics)
         #endif
-        onChange?(WorkoutViewState(
+        let nextState = WorkoutViewState(
             repetitions: repetitionsInSet,
             totalRepetitions: totalRepetitions,
             currentSet: currentSet,
@@ -623,6 +662,9 @@ final class WorkoutViewModel {
             isFinished: isFinished,
             poseDetected: hasPose,
             saveState: saveState
-        ))
+        )
+        guard lastPublishedState != nextState else { return }
+        lastPublishedState = nextState
+        onChange?(nextState)
     }
 }

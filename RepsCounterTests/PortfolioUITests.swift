@@ -11,6 +11,46 @@ import XCTest
 
 final class PortfolioUITests: XCTestCase {
     @MainActor
+    func testPoseGuidanceChangesVisibilityWithoutMovingDashboardCards() throws {
+        let dashboard = WorkoutDashboardView()
+        dashboard.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
+        dashboard.render(state(pose: false), cameraState: .running)
+        dashboard.layoutIfNeeded()
+
+        let label = try label("workoutGuidance", in: dashboard)
+        var ancestor = label.superview
+        var guidanceCard: UIVisualEffectView?
+        while let current = ancestor {
+            if let surface = current as? UIVisualEffectView {
+                guidanceCard = surface
+                break
+            }
+            ancestor = current.superview
+        }
+        let card = try XCTUnwrap(guidanceCard)
+        let originalFrame = card.convert(card.bounds, to: dashboard)
+        XCTAssertFalse(card.isHidden)
+        XCTAssertEqual(card.alpha, 1)
+
+        dashboard.render(state(pose: true), cameraState: .running)
+        dashboard.layoutIfNeeded()
+        let hiddenFrame = card.convert(card.bounds, to: dashboard)
+        XCTAssertFalse(card.isHidden)
+        XCTAssertEqual(card.alpha, 0)
+        XCTAssertTrue(card.accessibilityElementsHidden)
+        XCTAssertEqual(hiddenFrame.minY, originalFrame.minY, accuracy: 0.5)
+        XCTAssertEqual(hiddenFrame.height, originalFrame.height, accuracy: 0.5)
+
+        dashboard.render(state(pose: false), cameraState: .running)
+        dashboard.layoutIfNeeded()
+        let restoredFrame = card.convert(card.bounds, to: dashboard)
+        XCTAssertEqual(card.alpha, 1)
+        XCTAssertFalse(card.accessibilityElementsHidden)
+        XCTAssertEqual(restoredFrame.minY, originalFrame.minY, accuracy: 0.5)
+        XCTAssertEqual(restoredFrame.height, originalFrame.height, accuracy: 0.5)
+    }
+
+    @MainActor
     func testDashboardUsesDeliveredWorkoutValuesInsteadOfConceptExamples() throws {
         let dashboard = WorkoutDashboardView()
         dashboard.render(state(), cameraState: .running)

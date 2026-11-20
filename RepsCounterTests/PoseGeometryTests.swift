@@ -11,6 +11,62 @@ import XCTest
 @testable import RepsCounter
 
 final class PoseGeometryTests: XCTestCase {
+    func testOverlayHoldsOneMissingBodyFrameThenClearsExpiredSkeleton() {
+        var tracker = PoseOverlayPointTracker()
+        let pose = BodyPose(
+            joints: [
+                .leftHip: JointPoint(location: CGPoint(x: 0.4, y: 0.7), confidence: 0.95),
+                .leftKnee: JointPoint(location: CGPoint(x: 0.5, y: 0.5), confidence: 0.95)
+            ],
+            aspectRatio: 1
+        )
+
+        let initialPoints = tracker.update(pose, at: 1)
+        XCTAssertEqual(initialPoints.count, 2)
+        let brieflyMissing = tracker.update(nil, at: 1.08)
+        XCTAssertEqual(brieflyMissing.count, 2)
+        XCTAssertEqual(brieflyMissing[.leftHip], initialPoints[.leftHip])
+
+        let expired = tracker.update(nil, at: 1.2)
+        XCTAssertTrue(expired.isEmpty)
+    }
+
+    func testOverlaySmoothsVisibleLandmarksButNotUnreliableSamples() {
+        var tracker = PoseOverlayPointTracker()
+        let original = BodyPose(
+            joints: [.leftHip: JointPoint(location: CGPoint(x: 0.2, y: 0.5), confidence: 0.9)],
+            aspectRatio: 1
+        )
+        let moved = BodyPose(
+            joints: [.leftHip: JointPoint(location: CGPoint(x: 0.4, y: 0.5), confidence: 0.9)],
+            aspectRatio: 1
+        )
+        let uncertain = BodyPose(
+            joints: [.leftHip: JointPoint(location: CGPoint(x: 0.9, y: 0.5), confidence: 0.2)],
+            aspectRatio: 1
+        )
+        _ = tracker.update(original, at: 1)
+        let smoothed = tracker.update(moved, at: 1.06)
+        XCTAssertEqual(smoothed[.leftHip]?.x ?? 0, 0.34, accuracy: 0.0001)
+
+        let held = tracker.update(uncertain, at: 1.12)
+        XCTAssertEqual(held[.leftHip], smoothed[.leftHip])
+        XCTAssertTrue(tracker.update(nil, at: 1.27).isEmpty)
+    }
+
+    func testOverlayClearsStalePointsAfterCameraGapOrExplicitReset() {
+        var tracker = PoseOverlayPointTracker()
+        let pose = BodyPose(
+            joints: [.rightKnee: JointPoint(location: CGPoint(x: 0.5, y: 0.5), confidence: 0.9)],
+            aspectRatio: 1
+        )
+        _ = tracker.update(pose, at: 1)
+        XCTAssertTrue(tracker.update(nil, at: 2).isEmpty)
+        XCTAssertEqual(tracker.update(pose, at: 3).count, 1)
+        tracker.reset()
+        XCTAssertTrue(tracker.update(nil, at: 3.02).isEmpty)
+    }
+
     func testUprightVisionCornersMapBackToLegacyNinetyDegreeCaptureCoordinates() {
         let samples: [(CGPoint, CGPoint)] = [
             (CGPoint(x: 0, y: 0), CGPoint(x: 1, y: 1)),

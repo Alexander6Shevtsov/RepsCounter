@@ -12,6 +12,28 @@ import os
 @testable import RepsCounter
 
 final class CameraLifecycleTests: XCTestCase {
+    func testVisionFramePacerAcceptsAtMostOneFramePerSixtyMilliseconds() {
+        var pacer = VisionFramePacer()
+        let startingTime = ContinuousClock.now
+
+        XCTAssertTrue(pacer.shouldAnalyze(at: startingTime))
+        XCTAssertFalse(pacer.shouldAnalyze(at: startingTime.advanced(by: .milliseconds(30))))
+        XCTAssertFalse(pacer.shouldAnalyze(at: startingTime.advanced(by: .milliseconds(59))))
+        XCTAssertTrue(pacer.shouldAnalyze(at: startingTime.advanced(by: .milliseconds(60))))
+        XCTAssertFalse(pacer.shouldAnalyze(at: startingTime.advanced(by: .milliseconds(90))))
+        XCTAssertTrue(pacer.shouldAnalyze(at: startingTime.advanced(by: .milliseconds(120))))
+    }
+
+    func testVisionFramePacerResumesImmediatelyAfterLongCaptureGap() {
+        var pacer = VisionFramePacer()
+        let startingTime = ContinuousClock.now
+
+        XCTAssertTrue(pacer.shouldAnalyze(at: startingTime))
+        XCTAssertTrue(pacer.shouldAnalyze(at: startingTime.advanced(by: .seconds(2))))
+        XCTAssertFalse(pacer.shouldAnalyze(at: startingTime.advanced(by: .seconds(2) + .milliseconds(40))))
+        XCTAssertTrue(pacer.shouldAnalyze(at: startingTime.advanced(by: .seconds(2) + .milliseconds(70))))
+    }
+
     @MainActor
     func testAuthorizedStartMakesCameraReadyExactlyOnce() async {
         let fixture = CameraFixture()

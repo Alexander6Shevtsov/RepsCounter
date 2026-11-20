@@ -11,6 +11,41 @@ import XCTest
 
 final class WorkoutTimingTests: XCTestCase {
     @MainActor
+    func testUnchangedPoseSkipsDashboardUpdatesButPreservesElapsedTime() {
+        let fixture = WorkoutTimingFixture()
+        defer { fixture.viewModel.finish() }
+        var publishedStates: [WorkoutViewState] = []
+        fixture.viewModel.onChange = { publishedStates.append($0) }
+
+        let standingPose = SquatPoseFixture.pose(leftAngle: 170, rightAngle: 170)
+        fixture.viewModel.process(standingPose)
+        let firstPublishCount = publishedStates.count
+        XCTAssertEqual(firstPublishCount, 1)
+
+        for _ in 0..<40 {
+            fixture.viewModel.process(standingPose)
+        }
+        XCTAssertEqual(publishedStates.count, firstPublishCount)
+
+        fixture.timeSource.advance(by: 1)
+        fixture.viewModel.refreshTime()
+        XCTAssertEqual(publishedStates.count, firstPublishCount + 1)
+        XCTAssertEqual(publishedStates.last?.elapsedSeconds, 1)
+    }
+
+    @MainActor
+    func testNewDashboardObserverReceivesCurrentStateAfterRebinding() {
+        let fixture = WorkoutTimingFixture()
+        defer { fixture.viewModel.finish() }
+        var publishedStates: [WorkoutViewState] = []
+        fixture.viewModel.onChange = { publishedStates.append($0) }
+        fixture.viewModel.refreshTime()
+
+        XCTAssertEqual(publishedStates.count, 1)
+        XCTAssertEqual(publishedStates.last?.totalRepetitions, 0)
+    }
+
+    @MainActor
     func testManualStartExcludesCameraSetupAndPauseFromWorkoutDuration() throws {
         let timeSource = MutableWorkoutTimeSource()
         let persistence = WorkoutTimingStore(failureCount: 0)

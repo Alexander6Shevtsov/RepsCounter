@@ -12,6 +12,14 @@ import Vision
 
 final class PoseDetector {
     private let request = VNDetectHumanBodyPoseRequest()
+    private static let mappings: [(BodyJoint, VNHumanBodyPoseObservation.JointName)] = [
+        (.leftShoulder, .leftShoulder), (.rightShoulder, .rightShoulder),
+        (.leftElbow, .leftElbow), (.rightElbow, .rightElbow),
+        (.leftWrist, .leftWrist), (.rightWrist, .rightWrist),
+        (.leftHip, .leftHip), (.rightHip, .rightHip),
+        (.leftKnee, .leftKnee), (.rightKnee, .rightKnee),
+        (.leftAnkle, .leftAnkle), (.rightAnkle, .rightAnkle)
+    ]
 
     func detect(pixelBuffer: CVPixelBuffer, rotationAngle: CGFloat = 90) -> BodyPose? {
         let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: PoseGeometry.visionOrientation, options: [:])
@@ -19,17 +27,8 @@ final class PoseDetector {
             try handler.perform([request])
             guard let observation = request.results?.first else { return nil }
 
-            let mappings: [(BodyJoint, VNHumanBodyPoseObservation.JointName)] = [
-                (.leftShoulder, .leftShoulder), (.rightShoulder, .rightShoulder),
-                (.leftElbow, .leftElbow), (.rightElbow, .rightElbow),
-                (.leftWrist, .leftWrist), (.rightWrist, .rightWrist),
-                (.leftHip, .leftHip), (.rightHip, .rightHip),
-                (.leftKnee, .leftKnee), (.rightKnee, .rightKnee),
-                (.leftAnkle, .leftAnkle), (.rightAnkle, .rightAnkle)
-            ]
-
             var joints: [BodyJoint: JointPoint] = [:]
-            for mapping in mappings {
+            for mapping in Self.mappings {
                 guard let recognizedPoint = try? observation.recognizedPoint(mapping.1) else {
                     continue
                 }

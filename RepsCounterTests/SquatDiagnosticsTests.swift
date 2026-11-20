@@ -10,6 +10,93 @@ import XCTest
 @testable import RepsCounter
 
 final class SquatDiagnosticsTests: XCTestCase {
+    func testPoseRateTracksActualFramesAndResetsOnCameraGap() {
+        var tracker = PoseFrameRateTracker()
+        for frameNumber in 0...20 {
+            tracker.record(at: Double(frameNumber) * 0.05)
+        }
+        XCTAssertEqual(tracker.rate ?? 0, 20, accuracy: 0.1)
+
+        tracker.reset()
+        XCTAssertNil(tracker.rate)
+
+        tracker.record(at: 4)
+        tracker.record(at: 4)
+        XCTAssertNil(tracker.rate)
+        tracker.record(at: 4.6)
+        XCTAssertEqual(tracker.rate ?? 0, 1.67, accuracy: 0.02)
+
+        tracker.record(at: 2)
+        XCTAssertNil(tracker.rate)
+    }
+
+    #if DEBUG
+    @MainActor
+    func testDebugPanelShowsActualBilateralLegTelemetryInsteadOfLegacyData() throws {
+        let store = SquatTrackingStore()
+        let clock = SquatTrackingClock()
+        let viewModel = WorkoutViewModel(
+            persistence: store,
+            timeSource: clock,
+            cameraReady: false,
+            startsAutomatically: false
+        )
+        defer { viewModel.finish() }
+        XCTAssertTrue(viewModel.setBilateralCountingEnabled(true))
+        viewModel.setCameraReady(true)
+        viewModel.resume()
+        let pose = SquatPoseFixture.pose(
+            leftAngle: 170, rightAngle: 170,
+            leftConfidence: 0.93, rightConfidence: 0.49
+        )
+        for _ in 0..<20 {
+            clock.currentTime += 0.08
+            viewModel.process(pose)
+        }
+        let diagnostics = try XCTUnwrap(viewModel.latestDiagnostics)
+        let bilateral = try XCTUnwrap(diagnostics.bilateral)
+        XCTAssertEqual(bilateral.left.phase, .standing)
+        XCTAssertEqual(bilateral.right.event, .reset(.lowConfidence))
+        XCTAssertEqual(bilateral.left.measuredAngle ?? 0, 170, accuracy: 0.01)
+        XCTAssertNil(bilateral.right.measuredAngle)
+
+        let panel = SquatDiagnosticsView()
+        panel.render(diagnostics)
+        let textLabel = try XCTUnwrap(
+            allSubviews(in: panel).first {
+                $0.accessibilityIdentifier == "squatDiagnosticsText"
+            } as? UILabel
+        )
+        let display = try XCTUnwrap(textLabel.text)
+        XCTAssertTrue(display.contains("2Н · Обработано поз/с:"))
+        XCTAssertTrue(display.contains("Л: raw 170.0°"))
+        XCTAssertTrue(display.contains("П: raw —"))
+        XCTAssertTrue(display.contains("низкая уверенность"))
+        XCTAssertFalse(display.contains("Сбросы И:"))
+    }
+
+    @MainActor
+    func testLegacyDiagnosticsDoNotPresentBilateralTelemetry() throws {
+        let viewModel = WorkoutViewModel(
+            persistence: SquatTrackingStore(),
+            timeSource: SquatTrackingClock()
+        )
+        defer { viewModel.finish() }
+        viewModel.process(SquatPoseFixture.pose(leftAngle: 170, rightAngle: 170))
+        let diagnostics = try XCTUnwrap(viewModel.latestDiagnostics)
+        XCTAssertNil(diagnostics.bilateral)
+        let panel = SquatDiagnosticsView()
+        panel.render(diagnostics)
+        let textLabel = try XCTUnwrap(
+            allSubviews(in: panel).first {
+                $0.accessibilityIdentifier == "squatDiagnosticsText"
+            } as? UILabel
+        )
+        XCTAssertTrue(textLabel.text?.contains("Сбросы И:") == true)
+        XCTAssertFalse(textLabel.text?.contains("2Н ·") == true)
+    }
+    #endif
+
     @MainActor
     func testLegChangeCannotCompletePreviousLoweredMovement() {
         let fixture = SquatTrackingFixture()
@@ -205,6 +292,7 @@ final class SquatDiagnosticsTests: XCTestCase {
         let label = try XCTUnwrap(allSubviews(in: panel).first { $0.accessibilityIdentifier == "squatDiagnosticsText" } as? UILabel)
         XCTAssertTrue(label.text?.contains("Нога: правая") == true)
         XCTAssertTrue(label.text?.contains("confidence 0.90") == true)
+        XCTAssertTrue(label.text?.contains("Обработано поз/с:") == true)
         XCTAssertTrue(label.text?.contains("raw 165.0°") == true)
         XCTAssertTrue(label.text?.contains("EMA 165.0°") == true)
         XCTAssertTrue(label.text?.contains("Таз−колено: +0.97 бедра") == true)

@@ -23,6 +23,109 @@ final class BilateralLiveCounterTests: XCTestCase {
         }
     }
 
+
+    #if DEBUG
+    func testDebugTelemetryKeepsBothLegMeasurementsIndependent() {
+        var counter = BilateralLiveCounter()
+        let pose = SquatPoseFixture.pose(
+            leftAngle: 170, rightAngle: 120,
+            leftConfidence: 0.93, rightConfidence: 0.85
+        )
+        for frameNumber in 1...20 {
+            _ = counter.process(pose, at: Double(frameNumber) * 0.08)
+        }
+        let diagnostics = counter.telemetry
+        XCTAssertEqual(diagnostics.left.measuredAngle ?? 0, 170, accuracy: 0.01)
+        XCTAssertEqual(diagnostics.right.measuredAngle ?? 0, 120, accuracy: 0.01)
+        XCTAssertEqual(diagnostics.left.confidence ?? 0, 0.93, accuracy: 0.001)
+        XCTAssertEqual(diagnostics.right.confidence ?? 0, 0.85, accuracy: 0.001)
+        XCTAssertEqual(diagnostics.left.phase, .standing)
+        XCTAssertEqual(diagnostics.right.phase, .seekingStanding)
+        XCTAssertEqual(diagnostics.left.event, .tracking)
+        XCTAssertEqual(diagnostics.right.event, .tracking)
+    }
+
+    func testDebugTelemetryShowsBriefLossAndSecondMissingFrameReset() {
+        var counter = BilateralLiveCounter()
+        var currentTime: TimeInterval = 0
+        let standingPose = SquatPoseFixture.pose(leftAngle: 170, rightAngle: 170)
+        let loweredPose = SquatPoseFixture.pose(leftAngle: 90, rightAngle: 90)
+        for (pose, frameCount) in [(standingPose, 20), (loweredPose, 20)] {
+            for _ in 0..<frameCount {
+                currentTime += 0.08
+                _ = counter.process(pose, at: currentTime)
+            }
+        }
+        XCTAssertEqual(counter.telemetry.left.phase, .lowered)
+        XCTAssertEqual(counter.telemetry.right.phase, .lowered)
+
+        currentTime += 0.08
+        _ = counter.process(nil, at: currentTime)
+        XCTAssertEqual(counter.telemetry.left.phase, .lowered)
+        XCTAssertEqual(counter.telemetry.left.event, .briefLoss)
+        XCTAssertEqual(counter.telemetry.left.missedFrames, 1)
+        XCTAssertNil(counter.telemetry.left.measuredAngle)
+
+        currentTime += 0.08
+        _ = counter.process(nil, at: currentTime)
+        XCTAssertEqual(counter.telemetry.left.phase, .seekingStanding)
+        XCTAssertEqual(counter.telemetry.right.phase, .seekingStanding)
+        XCTAssertEqual(counter.telemetry.left.event, .reset(.missingJoint))
+        XCTAssertEqual(counter.telemetry.left.lastReset, .missingJoint)
+        XCTAssertEqual(counter.telemetry.left.resetCount, 1)
+        XCTAssertEqual(counter.telemetry.pendingCount, 0)
+    }
+
+    func testDebugTelemetryExplainsLowConfidenceOnOnlyOneLeg() {
+        var counter = BilateralLiveCounter()
+        let pose = SquatPoseFixture.pose(
+            leftAngle: 170, rightAngle: 170,
+            leftConfidence: 0.49, rightConfidence: 0.94
+        )
+        for frameNumber in 1...20 {
+            _ = counter.process(pose, at: Double(frameNumber) * 0.08)
+        }
+        let diagnostics = counter.telemetry
+        XCTAssertEqual(diagnostics.left.event, .reset(.lowConfidence))
+        XCTAssertEqual(diagnostics.left.confidence ?? 0, 0.49, accuracy: 0.001)
+        XCTAssertNil(diagnostics.left.measuredAngle)
+        XCTAssertEqual(diagnostics.right.phase, .standing)
+        XCTAssertEqual(diagnostics.right.confidence ?? 0, 0.94, accuracy: 0.001)
+    }
+
+    func testDebugTelemetryTracksCandidatesAndMergedDuplicates() {
+        var counter = BilateralLiveCounter()
+        var currentTime: TimeInterval = 0
+        feed(&counter, clock: &currentTime)
+        let diagnostics = counter.telemetry
+        XCTAssertEqual(diagnostics.left.candidateCount, 1)
+        XCTAssertEqual(diagnostics.right.candidateCount, 1)
+        XCTAssertEqual(diagnostics.mergedDuplicates, 1)
+        XCTAssertEqual(diagnostics.repetitions, 1)
+        XCTAssertEqual(diagnostics.pendingCount, 0)
+    }
+
+    func testDebugTelemetryIdentifiesInvalidGeometryReset() {
+        var counter = BilateralLiveCounter()
+        var currentTime: TimeInterval = 0
+        let standingPose = SquatPoseFixture.pose(leftAngle: 170, rightAngle: 170)
+        let loweredPose = SquatPoseFixture.pose(leftAngle: 90, rightAngle: 90)
+        for (pose, frameCount) in [(standingPose, 20), (loweredPose, 20)] {
+            for _ in 0..<frameCount {
+                currentTime += 0.08
+                _ = counter.process(pose, at: currentTime)
+            }
+        }
+        let invalidPose = BodyPose(joints: loweredPose.joints, aspectRatio: .nan)
+        currentTime += 0.08
+        _ = counter.process(invalidPose, at: currentTime)
+        XCTAssertEqual(counter.telemetry.left.lastReset, .invalidGeometry)
+        XCTAssertEqual(counter.telemetry.right.lastReset, .invalidGeometry)
+        XCTAssertEqual(counter.telemetry.left.phase, .seekingStanding)
+        XCTAssertEqual(counter.telemetry.left.event, .reset(.invalidGeometry))
+    }
+    #endif
+
     func testBothLegsCountOneRepetitionWithoutDuplicate() {
         var counter = BilateralLiveCounter()
         var currentTime: TimeInterval = 0
@@ -39,6 +142,131 @@ final class BilateralLiveCounterTests: XCTestCase {
         feed(&counter, clock: &currentTime, rightConfidence: 0.49)
         XCTAssertEqual(counter.repetitions, 2)
         XCTAssertEqual(counter.mergedDuplicates, 0)
+    }
+
+    func testSingleMissingPoseDuringLoweredPhasePreservesRepetition() {
+        var counter = BilateralLiveCounter()
+        var currentTime: TimeInterval = 0
+        let standingPose = SquatPoseFixture.pose(leftAngle: 170, rightAngle: 170)
+        let loweredPose = SquatPoseFixture.pose(leftAngle: 90, rightAngle: 90)
+
+        for (pose, frameCount) in [(standingPose, 20), (loweredPose, 20)] {
+            for _ in 0..<frameCount {
+                currentTime += 0.08
+                _ = counter.process(pose, at: currentTime)
+            }
+        }
+        currentTime += 0.08
+        _ = counter.process(nil, at: currentTime)
+        for _ in 0..<20 {
+            currentTime += 0.08
+            _ = counter.process(standingPose, at: currentTime)
+        }
+
+        XCTAssertEqual(counter.repetitions, 1)
+        XCTAssertEqual(counter.mergedDuplicates, 1)
+    }
+
+    func testTwoMissingPosesInterruptLoweredPhaseWithoutLateCount() {
+        var counter = BilateralLiveCounter()
+        var currentTime: TimeInterval = 0
+        let standingPose = SquatPoseFixture.pose(leftAngle: 170, rightAngle: 170)
+        let loweredPose = SquatPoseFixture.pose(leftAngle: 90, rightAngle: 90)
+
+        for (pose, frameCount) in [(standingPose, 20), (loweredPose, 20)] {
+            for _ in 0..<frameCount {
+                currentTime += 0.08
+                _ = counter.process(pose, at: currentTime)
+            }
+        }
+        for _ in 0..<2 {
+            currentTime += 0.08
+            _ = counter.process(nil, at: currentTime)
+        }
+        for _ in 0..<20 {
+            currentTime += 0.08
+            _ = counter.process(standingPose, at: currentTime)
+        }
+
+        XCTAssertEqual(counter.repetitions, 0)
+        XCTAssertEqual(counter.mergedDuplicates, 0)
+    }
+
+    func testSingleLowConfidenceFrameIsIgnoredWithoutLosingLoweredPhase() {
+        var counter = BilateralLiveCounter()
+        var currentTime: TimeInterval = 0
+        let standingPose = SquatPoseFixture.pose(
+            leftAngle: 170, rightAngle: 170,
+            leftConfidence: 0.49, rightConfidence: 0.93
+        )
+        let loweredPose = SquatPoseFixture.pose(
+            leftAngle: 90, rightAngle: 90,
+            leftConfidence: 0.49, rightConfidence: 0.93
+        )
+        let unreliablePose = SquatPoseFixture.pose(
+            leftAngle: 90, rightAngle: 90,
+            leftConfidence: 0.49, rightConfidence: 0.49
+        )
+        for (pose, frameCount) in [(standingPose, 20), (loweredPose, 20)] {
+            for _ in 0..<frameCount {
+                currentTime += 0.08
+                _ = counter.process(pose, at: currentTime)
+            }
+        }
+        currentTime += 0.08
+        _ = counter.process(unreliablePose, at: currentTime)
+        for _ in 0..<20 {
+            currentTime += 0.08
+            _ = counter.process(standingPose, at: currentTime)
+        }
+
+        XCTAssertEqual(counter.repetitions, 1)
+        XCTAssertEqual(counter.mergedDuplicates, 0)
+    }
+
+    func testInvalidPoseGeometryImmediatelyAbortsLoweredMovement() {
+        var counter = BilateralLiveCounter()
+        var currentTime: TimeInterval = 0
+        let standingPose = SquatPoseFixture.pose(leftAngle: 170, rightAngle: 170)
+        let loweredPose = SquatPoseFixture.pose(leftAngle: 90, rightAngle: 90)
+
+        for (pose, frameCount) in [(standingPose, 20), (loweredPose, 20)] {
+            for _ in 0..<frameCount {
+                currentTime += 0.08
+                _ = counter.process(pose, at: currentTime)
+            }
+        }
+        let invalidPose = BodyPose(
+            joints: loweredPose.joints,
+            aspectRatio: .nan
+        )
+        currentTime += 0.08
+        _ = counter.process(invalidPose, at: currentTime)
+        for _ in 0..<20 {
+            currentTime += 0.08
+            _ = counter.process(standingPose, at: currentTime)
+        }
+
+        XCTAssertEqual(counter.repetitions, 0)
+        XCTAssertEqual(counter.mergedDuplicates, 0)
+    }
+
+    func testShorterAnalysisIntervalsStillCountFullButRejectPartialSquats() {
+        var counter = BilateralLiveCounter()
+        var currentTime: TimeInterval = 0
+        for (angle, frameCount) in [
+            (170.0, 20), (90.0, 20), (170.0, 20),
+            (120.0, 20), (170.0, 20)
+        ] {
+            let pose = SquatPoseFixture.pose(leftAngle: angle, rightAngle: angle)
+            for _ in 0..<frameCount {
+                currentTime += 0.06
+                _ = counter.process(pose, at: currentTime)
+            }
+        }
+
+        XCTAssertEqual(counter.repetitions, 1)
+        XCTAssertEqual(counter.mergedDuplicates, 1)
     }
 
     func testPartialMovementsCannotCount() {

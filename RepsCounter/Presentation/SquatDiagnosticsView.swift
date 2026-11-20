@@ -45,6 +45,10 @@ final class SquatDiagnosticsView: UIVisualEffectView {
     required init?(coder: NSCoder) { nil }
 
     func render(_ diagnostics: SquatDiagnostics) {
+        if let bilateral = diagnostics.bilateral {
+            renderBilateral(bilateral, frameRate: diagnostics.poseFramesPerSecond)
+            return
+        }
         let analysis = diagnostics.analysis
         let selectedName: String
         let selectedMeasurement: LegMeasurement?
@@ -71,6 +75,7 @@ final class SquatDiagnosticsView: UIVisualEffectView {
             : "в ходе"
         let attemptNumber = attempt.map { "#\($0.number)" } ?? "—"
         let lines = [
+            "Обработано поз/с: \(frameRateText(diagnostics.poseFramesPerSecond))",
             "Сбросы И:\(diagnostics.measurementLossCount) Н:\(diagnostics.legChangeCount) Г:\(diagnostics.observationGapCount)",
             "raw \(angleText(analysis?.measuredAngle)) · EMA \(angleText(analysis?.smoothedAngle))",
             "Таз−колено: \(hipKneeText(analysis?.hipKneeHeightRatio)) бедра",
@@ -84,6 +89,68 @@ final class SquatDiagnosticsView: UIVisualEffectView {
             "Последняя потеря: \(measurementIssueText(diagnostics.latestMeasurementIssue))"
         ]
         textLabel.text = lines.joined(separator: "\n")
+    }
+
+    private func renderBilateral(_ telemetry: BilateralCounterTelemetry, frameRate: Double?) {
+        let lines = [
+            "2Н · Обработано поз/с: \(frameRateText(frameRate))",
+            "Повторы: \(telemetry.repetitions) · ожидают: \(telemetry.pendingCount) · пары: \(telemetry.mergedDuplicates)",
+            legSummary("Л", telemetry: telemetry.left),
+            legPhase("Л", telemetry: telemetry.left),
+            legEvent("Л", telemetry: telemetry.left),
+            legSummary("П", telemetry: telemetry.right),
+            legPhase("П", telemetry: telemetry.right),
+            legEvent("П", telemetry: telemetry.right)
+        ]
+        textLabel.text = lines.joined(separator: "\n")
+    }
+
+    private func legSummary(_ label: String, telemetry: BilateralLegTelemetry) -> String {
+        "\(label): raw \(angleText(telemetry.measuredAngle)) EMA \(angleText(telemetry.smoothedAngle))"
+            + " · ТК \(hipKneeText(telemetry.hipKneeHeightRatio))"
+            + " · c \(confidenceText(telemetry.confidence))"
+    }
+
+    private func legPhase(_ label: String, telemetry: BilateralLegTelemetry) -> String {
+        "\(label): \(telemetry.phase) · \(telemetry.decision)"
+            + " · пропуск \(telemetry.missedFrames)"
+    }
+
+    private func legEvent(_ label: String, telemetry: BilateralLegTelemetry) -> String {
+        let lastReset = telemetry.lastReset.map { resetText($0) } ?? "—"
+        return "\(label): \(eventText(telemetry.event))"
+            + " · сброс \(lastReset) [\(telemetry.resetCount)]"
+            + " · кандид. \(telemetry.candidateCount)"
+    }
+
+    private func eventText(_ event: BilateralTrackingEvent) -> String {
+        switch event {
+        case .waiting: return "ожидание"
+        case .tracking: return "наблюдение"
+        case .briefLoss: return "1 пропуск сохранён"
+        case .candidate: return "кандидат подтверждён"
+        case .reset(let reason): return "сброс: \(resetText(reason))"
+        }
+    }
+
+    private func resetText(_ reason: BilateralTrackingResetReason) -> String {
+        switch reason {
+        case .observationGap: return "разрыв времени"
+        case .missingJoint: return "нет сустава"
+        case .lowConfidence: return "низкая уверенность"
+        case .invalidGeometry: return "геометрия"
+        case .externalReset: return "пауза/перезапуск"
+        }
+    }
+
+    private func confidenceText(_ confidence: Float?) -> String {
+        guard let confidence, confidence.isFinite else { return "—" }
+        return String(format: "%.2f", confidence)
+    }
+
+    private func frameRateText(_ frameRate: Double?) -> String {
+        guard let frameRate, frameRate.isFinite else { return "—" }
+        return String(format: "%.1f", frameRate)
     }
 
     private func angleText(_ angle: Double?) -> String {
