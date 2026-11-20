@@ -22,6 +22,7 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
     #if DEBUG
     private let diagnosticsButton = UIButton(type: .system)
     private let diagnosticsView = SquatDiagnosticsView()
+    private var lastDiagnosticsRenderAt: TimeInterval?
     #endif
     private var lastPose: BodyPose?
     private var lastState: WorkoutViewState?
@@ -49,6 +50,10 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
         #if DEBUG
         viewModel.onDiagnosticsChange = { [weak self] diagnostics in
             guard let self, !self.diagnosticsView.isHidden else { return }
+            let currentTime = ProcessInfo.processInfo.systemUptime
+            if let lastDiagnosticsRenderAt = self.lastDiagnosticsRenderAt,
+               currentTime - lastDiagnosticsRenderAt < 0.2 { return }
+            self.lastDiagnosticsRenderAt = currentTime
             self.diagnosticsView.render(diagnostics)
         }
         #endif
@@ -59,7 +64,12 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
         }
         cameraCoordinator.onCameraStateChange = { [weak self] state in
             guard let self else { return }
-            if state == .running { self.configurePreview() }
+            if state == .running {
+                self.configurePreview()
+            } else {
+                self.lastPose = nil
+                self.overlayView.reset()
+            }
             self.updateCameraMessage()
         }
         viewModel.setCameraReady(false)
@@ -74,7 +84,7 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         if camera.state == .running { configurePreview() }
-        overlayView.render(lastPose, previewLayer: cameraView.previewLayer)
+        overlayView.redraw(previewLayer: cameraView.previewLayer)
     }
 
     func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
@@ -207,6 +217,7 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
 
     @objc private func toggleDiagnostics() {
         diagnosticsView.isHidden.toggle()
+        lastDiagnosticsRenderAt = nil
         diagnosticsButton.accessibilityValue = diagnosticsView.isHidden ? "Выключена" : "Включена"
         if !diagnosticsView.isHidden, let diagnostics = viewModel.latestDiagnostics {
             diagnosticsView.render(diagnostics)
