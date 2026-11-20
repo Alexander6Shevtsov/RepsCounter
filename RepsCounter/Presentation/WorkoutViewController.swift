@@ -261,6 +261,7 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
             let adaptive = try PoseReplayAdaptiveDepthAudit.replay(session)
             let graceful = try PoseReplayAdaptiveDepthAudit.replayWithGrace(session)
             let asymmetric = try PoseReplayAsymmetricDepthAudit.replay(session)
+            let guardComparison = try PoseReplayGuardIntegrationAudit.replay(session)
             var summary = """
             Обычный 2D: \(result.baselineCountedAtSeconds.count)
             Левая нога: \(result.leftCountedAtSeconds.count)
@@ -273,6 +274,9 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
             Удержано кадров ноги: \(graceful.heldLegFrames)
             Асимметрия 2D (тень): \(asymmetric.countedAtSeconds.count)
             Доп. кандидатов: \(asymmetric.supplementalAtSeconds.count)
+            Guard 2H (тень): \(guardComparison.guardedCountedAtSeconds.count)
+            Guard откл.: Л \(guardComparison.rejectedLeftCandidates) · П \(guardComparison.rejectedRightCandidates)
+            Guard дублей: \(guardComparison.mergedDuplicates)
             """
             if session.annotations.isEmpty {
                 summary += "\nНет ручной разметки: точность пока неизвестна."
@@ -297,6 +301,10 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
                     countedAtSeconds: asymmetric.countedAtSeconds,
                     depthSamples: []
                 )
+                let guardedReplay = PoseReplayResult(
+                    countedAtSeconds: guardComparison.guardedCountedAtSeconds,
+                    depthSamples: []
+                )
                 let originalScore = try PoseReplayRunner.score(
                     original, against: session.annotations
                 )
@@ -312,11 +320,15 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
                 let asymmetricScore = try PoseReplayRunner.score(
                     asymmetricReplay, against: session.annotations
                 )
+                let guardedScore = try PoseReplayRunner.score(
+                    guardedReplay, against: session.annotations
+                )
                 summary += "\nОбычный TP/FP/FN: \(originalScore.truePositives)/\(originalScore.falsePositives)/\(originalScore.falseNegatives)"
                 summary += "\nДве ноги TP/FP/FN: \(bilateralScore.truePositives)/\(bilateralScore.falsePositives)/\(bilateralScore.falseNegatives)"
                 summary += "\nАдаптивный TP/FP/FN: \(adaptiveScore.truePositives)/\(adaptiveScore.falsePositives)/\(adaptiveScore.falseNegatives)"
                 summary += "\nGrace TP/FP/FN: \(graceScore.truePositives)/\(graceScore.falsePositives)/\(graceScore.falseNegatives)"
                 summary += "\nАсимметрия TP/FP/FN: \(asymmetricScore.truePositives)/\(asymmetricScore.falsePositives)/\(asymmetricScore.falseNegatives)"
+                summary += "\nGuard 2H TP/FP/FN: \(guardedScore.truePositives)/\(guardedScore.falsePositives)/\(guardedScore.falseNegatives)"
                 let depthReport = try PoseReplayDepthAudit.evaluate(session)
                 let angleOnly = depthReport.score(for: .kneeOnly)
                 let projected = depthReport.score(for: .legacyProjected)
