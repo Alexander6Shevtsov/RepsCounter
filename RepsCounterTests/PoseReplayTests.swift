@@ -734,6 +734,24 @@ final class PoseReplayTests: XCTestCase {
         XCTAssertEqual(asymmetric.countedAtSeconds.count, 0)
     }
 
+    func testAsymmetricEvaluationDoesNotHideLateBoundaryEvent() throws {
+        let annotations = [
+            PoseReplayAnnotation(
+                startSeconds: 30.25,
+                endSeconds: 32.30,
+                isFullSquat: true
+            )
+        ]
+        let result = PoseReplayResult(
+            countedAtSeconds: [32.332],
+            depthSamples: []
+        )
+        let score = try PoseReplayRunner.score(result, against: annotations)
+        XCTAssertEqual(score.truePositives, 0)
+        XCTAssertEqual(score.falsePositives, 1)
+        XCTAssertEqual(score.falseNegatives, 1)
+    }
+
     private func graceSession(unreliableFrames: [Int]) -> PoseReplaySession {
         var session = adaptiveSession(
             standingFirst: true,
