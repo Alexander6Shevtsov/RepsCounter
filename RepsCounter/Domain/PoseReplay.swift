@@ -887,4 +887,163 @@ enum PoseReplayAdaptiveDepthAudit {
     }
 }
 
+
+struct PoseReplayAsymmetricResult {
+    let countedAtSeconds: [TimeInterval]
+    let supplementalAtSeconds: [TimeInterval]
+}
+
+enum PoseReplayAsymmetricDepthAudit {
+    private struct SideCandidate {
+        let seconds: TimeInterval
+        let hasAsymmetricSupport: Bool
+    }
+
+    private static let maximumTransientLoss: TimeInterval = 0.23
+    private static let minimumHipDescent = 0.44
+    private static let minimumOppositeAngle = 145.0
+    private static let duplicateTolerance: TimeInterval = 0.75
+
+    static func replay(_ session: PoseReplaySession) throws -> PoseReplayAsymmetricResult {
+        let baseline = try PoseReplayAdaptiveDepthAudit.replayWithGrace(session)
+        let extraCandidates = sideCandidates(in: session, bodyLeg: .left)
+            + sideCandidates(in: session, bodyLeg: .right)
+        let supported = extraCandidates
+            .filter { $0.hasAsymmetricSupport }
+            .map(\.seconds)
+            .sorted()
+        var countedAtSeconds = baseline.countedAtSeconds.sorted()
+        var supplementalAtSeconds: [TimeInterval] = []
+
+        for timestamp in supported {
+            guard !countedAtSeconds.contains(where: {
+                abs($0 - timestamp) <= duplicateTolerance
+            }) else { continue }
+            countedAtSeconds.append(timestamp)
+            supplementalAtSeconds.append(timestamp)
+        }
+        countedAtSeconds.sort()
+        return PoseReplayAsymmetricResult(
+            countedAtSeconds: countedAtSeconds,
+            supplementalAtSeconds: supplementalAtSeconds
+        )
+    }
+
+    private static func sideCandidates(
+        in session: PoseReplaySession,
+        bodyLeg: BodyLeg
+    ) -> [SideCandidate] {
+        let hipJoint: BodyJoint = bodyLeg == .left ? .leftHip : .rightHip
+        let ankleJoint: BodyJoint = bodyLeg == .left ? .leftAnkle : .rightAnkle
+        var counter = SquatCounter(maximumHipKneeHeightRatio: 0.35)
+        var smoothedAngle: Double?
+        var standingHeight: Double?
+        var lastReliableTimestamp: TimeInterval?
+        var hasAsymmetricSupport = false
+        var candidates: [SideCandidate] = []
+
+        for event in session.events {
+            if event.kind == .reset {
+                counter.resetMovement()
+                smoothedAngle = nil
+                standingHeight = nil
+                lastReliableTimestamp = nil
+                hasAsymmetricSupport = false
+                continue
+            }
+
+            let pose = event.pose?.restore()
+            let analysis = PoseAnalyzer().analyze(pose)
+            let measurement = bodyLeg == .left
+                ? analysis.leftMeasurement : analysis.rightMeasurement
+            let opposite = bodyLeg == .left
+                ? analysis.rightMeasurement : analysis.leftMeasurement
+            guard measurement.isReliable,
+                  let measuredAngle = measurement.angle,
+                  let pose,
+                  let hipPoint = pose.joints[hipJoint],
+                  let anklePoint = pose.joints[ankleJoint] else {
+                if let lastReliableTimestamp,
+                   event.seconds - lastReliableTimestamp <= maximumTransientLoss {
+                    continue
+                }
+                counter.resetMovement()
+                smoothedAngle = nil
+                standingHeight = nil
+                lastReliableTimestamp = nil
+                hasAsymmetricSupport = false
+                continue
+            }
+
+            if let lastReliableTimestamp,
+               event.seconds - lastReliableTimestamp > 0.25 {
+                counter.resetMovement()
+                smoothedAngle = nil
+                standingHeight = nil
+                hasAsymmetricSupport = false
+            }
+
+            smoothedAngle = smoothedAngle.map {
+                0.35 * measuredAngle + 0.65 * $0
+            } ?? measuredAngle
+            let height = Double(hipPoint.location.y - anklePoint.location.y)
+            guard height.isFinite, height > 0.05 else {
+                counter.resetMovement()
+                smoothedAngle = nil
+                standingHeight = nil
+                lastReliableTimestamp = nil
+                hasAsymmetricSupport = false
+                continue
+            }
+
+            if measuredAngle >= 160 {
+                standingHeight = standingHeight.map {
+                    0.92 * $0 + 0.08 * height
+                } ?? height
+            }
+            let kneeJoint: BodyJoint = bodyLeg == .left ? .leftKnee : .rightKnee
+            let hipKneeHeightRatio: Double?
+            if let kneePoint = pose.joints[kneeJoint],
+               pose.aspectRatio.isFinite, pose.aspectRatio > 0 {
+                let horizontal = Double(hipPoint.location.x - kneePoint.location.x)
+                    * Double(pose.aspectRatio)
+                let vertical = Double(hipPoint.location.y - kneePoint.location.y)
+                let projectedLength = hypot(horizontal, vertical)
+                hipKneeHeightRatio = projectedLength > 0.000_001
+                    ? vertical / projectedLength : nil
+            } else {
+                hipKneeHeightRatio = nil
+            }
+            let normalizedDescent = standingHeight.map {
+                ($0 - height) / $0
+            }
+            let supported = measuredAngle <= 105
+                && (hipKneeHeightRatio.map { $0 <= 0.35 } ?? false)
+                && (normalizedDescent.map { $0 >= minimumHipDescent } ?? false)
+                && opposite.isReliable
+                && (opposite.angle.map { $0 >= minimumOppositeAngle } ?? false)
+            if supported {
+                hasAsymmetricSupport = true
+            }
+
+            let counted = counter.process(
+                measuredAngle: measuredAngle,
+                smoothedAngle: smoothedAngle,
+                hipKneeHeightRatio: hipKneeHeightRatio
+            )
+            if counted {
+                candidates.append(
+                    SideCandidate(
+                        seconds: event.seconds,
+                        hasAsymmetricSupport: hasAsymmetricSupport
+                    )
+                )
+                hasAsymmetricSupport = false
+            }
+            lastReliableTimestamp = event.seconds
+        }
+        return candidates
+    }
+}
+
 #endif
