@@ -726,10 +726,10 @@ enum PoseReplayAdaptiveDepthAudit {
             }
 
             let leftSample = sample(
-                pose, leg: .left, measurement: analysis.leftMeasurement
+                pose, bodyLeg: .left, measurement: analysis.leftMeasurement
             )
             let rightSample = sample(
-                pose, leg: .right, measurement: analysis.rightMeasurement
+                pose, bodyLeg: .right, measurement: analysis.rightMeasurement
             )
             leftStandingHeight = updatedStandingHeight(
                 leftStandingHeight, sample: leftSample
@@ -781,13 +781,13 @@ enum PoseReplayAdaptiveDepthAudit {
 
     private static func sample(
         _ pose: BodyPose?,
-        leg: BodyLeg,
+        bodyLeg: BodyLeg,
         measurement: LegMeasurement
     ) -> LegSample? {
         guard measurement.isReliable, let kneeAngle = measurement.angle,
               let pose else { return nil }
-        let hipJoint: BodyJoint = leg == .left ? .leftHip : .rightHip
-        let ankleJoint: BodyJoint = leg == .left ? .leftAnkle : .rightAnkle
+        let hipJoint: BodyJoint = bodyLeg == .left ? .leftHip : .rightHip
+        let ankleJoint: BodyJoint = bodyLeg == .left ? .leftAnkle : .rightAnkle
         guard let hipPoint = pose.joints[hipJoint],
               let anklePoint = pose.joints[ankleJoint] else { return nil }
         let height = Double(hipPoint.location.y - anklePoint.location.y)
