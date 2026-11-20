@@ -1046,4 +1046,67 @@ enum PoseReplayAsymmetricDepthAudit {
     }
 }
 
+
+struct PoseReplayGuardComparison {
+    let baselineCountedAtSeconds: [TimeInterval]
+    let adaptiveCountedAtSeconds: [TimeInterval]
+    let graceCountedAtSeconds: [TimeInterval]
+    let asymmetricCountedAtSeconds: [TimeInterval]
+    let guardedCountedAtSeconds: [TimeInterval]
+    let mergedDuplicates: Int
+    let rejectedLeftCandidates: Int
+    let rejectedRightCandidates: Int
+}
+
+enum PoseReplayGuardIntegrationAudit {
+    static func replay(_ session: PoseReplaySession) throws -> PoseReplayGuardComparison {
+        let baseline = try PoseReplayRunner.replay(session)
+        let adaptive = try PoseReplayAdaptiveDepthAudit.replay(session)
+        let graceful = try PoseReplayAdaptiveDepthAudit.replayWithGrace(session)
+        let asymmetric = try PoseReplayAsymmetricDepthAudit.replay(session)
+        var counter = BilateralLiveCounter()
+        var guardedCountedAtSeconds: [TimeInterval] = []
+        var lastTimestamp: TimeInterval?
+
+        for event in session.events {
+            if event.kind == .reset {
+                guardedCountedAtSeconds.append(
+                    contentsOf: counter.pendingMovements.map(\.countedAt)
+                )
+                _ = counter.finishPending()
+                counter.resetMovement()
+                lastTimestamp = nil
+                continue
+            }
+
+            if let lastTimestamp, event.seconds - lastTimestamp > 0.25 {
+                counter.resetMovement()
+            }
+            let previousPending = counter.pendingMovements
+            let previousRepetitions = counter.repetitions
+            _ = counter.process(event.pose?.restore(), at: event.seconds)
+            let committed = counter.repetitions - previousRepetitions
+            guardedCountedAtSeconds.append(
+                contentsOf: previousPending.prefix(committed).map(\.countedAt)
+            )
+            lastTimestamp = event.seconds
+        }
+        guardedCountedAtSeconds.append(
+            contentsOf: counter.pendingMovements.map(\.countedAt)
+        )
+        _ = counter.finishPending()
+
+        return PoseReplayGuardComparison(
+            baselineCountedAtSeconds: baseline.countedAtSeconds,
+            adaptiveCountedAtSeconds: adaptive.countedAtSeconds,
+            graceCountedAtSeconds: graceful.countedAtSeconds,
+            asymmetricCountedAtSeconds: asymmetric.countedAtSeconds,
+            guardedCountedAtSeconds: guardedCountedAtSeconds,
+            mergedDuplicates: counter.mergedDuplicates,
+            rejectedLeftCandidates: counter.telemetry.rejectedLeftCandidates,
+            rejectedRightCandidates: counter.telemetry.rejectedRightCandidates
+        )
+    }
+}
+
 #endif
