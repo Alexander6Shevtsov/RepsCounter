@@ -610,6 +610,93 @@ final class PoseReplayTests: XCTestCase {
         XCTAssertEqual(adaptive.countedAtSeconds.count, 0)
     }
 
+    func testGraceRetainsLoweredPhaseAcrossSingleUnreliableFrame() throws {
+        let session = graceSession(unreliableFrames: [25])
+        let original = try PoseReplayRunner.replay(session)
+        let adaptive = try PoseReplayAdaptiveDepthAudit.replay(session)
+        let graceful = try PoseReplayAdaptiveDepthAudit.replayWithGrace(session)
+
+        XCTAssertEqual(original.countedAtSeconds.count, 0)
+        XCTAssertEqual(adaptive.countedAtSeconds.count, 0)
+        XCTAssertEqual(graceful.countedAtSeconds.count, 1)
+        XCTAssertEqual(graceful.heldLegFrames, 1)
+        XCTAssertEqual(graceful.assistedDepthFrames, 0)
+    }
+
+    func testGraceExpiresAfterSustainedUnreliableFrames() throws {
+        let session = graceSession(unreliableFrames: [24, 25, 26, 27, 28, 29])
+        let graceful = try PoseReplayAdaptiveDepthAudit.replayWithGrace(session)
+        XCTAssertEqual(graceful.countedAtSeconds.count, 0)
+        XCTAssertGreaterThan(graceful.heldLegFrames, 0)
+    }
+
+    func testGraceDoesNotCountTwoFrameShallowAttempt() throws {
+        let standingPose = adaptivePose(
+            loweredLeft: false, loweredRight: false,
+            legacyDepth: true, rightConfidence: 0.93
+        )
+        let loweredPose = adaptivePose(
+            loweredLeft: true, loweredRight: false,
+            legacyDepth: true, rightConfidence: 0.93
+        )
+        let unreliablePose = adaptivePose(
+            loweredLeft: true, loweredRight: false,
+            legacyDepth: true, rightConfidence: 0.93,
+            leftConfidence: 0.49
+        )
+        var recorder = PoseReplayRecorder()
+        _ = recorder.start(at: 0)
+        var currentTime = 0.0
+        for (pose, frameCount) in [
+            (standingPose, 20), (loweredPose, 2),
+            (unreliablePose, 1), (standingPose, 20)
+        ] {
+            for _ in 0..<frameCount {
+                currentTime += 0.08
+                recorder.append(pose, at: currentTime)
+            }
+        }
+        let graceful = try PoseReplayAdaptiveDepthAudit.replayWithGrace(recorder.session)
+        XCTAssertEqual(graceful.countedAtSeconds.count, 0)
+        XCTAssertEqual(graceful.heldLegFrames, 1)
+    }
+
+    func testGraceCannotCountAcrossExplicitReset() throws {
+        var session = graceSession(unreliableFrames: [25])
+        let resetTimestamp = session.events[26].seconds
+        session.events[26] = PoseReplayEvent(
+            seconds: resetTimestamp,
+            kind: .reset,
+            pose: nil
+        )
+        let graceful = try PoseReplayAdaptiveDepthAudit.replayWithGrace(session)
+        XCTAssertEqual(graceful.countedAtSeconds.count, 0)
+    }
+
+    private func graceSession(unreliableFrames: [Int]) -> PoseReplaySession {
+        var session = adaptiveSession(
+            standingFirst: true,
+            bothLowered: false,
+            legacyDepth: true
+        )
+        let unreliablePose = adaptivePose(
+            loweredLeft: true,
+            loweredRight: false,
+            legacyDepth: true,
+            rightConfidence: 0.93,
+            leftConfidence: 0.49
+        )
+        for frameIndex in unreliableFrames {
+            let timestamp = session.events[frameIndex].seconds
+            session.events[frameIndex] = PoseReplayEvent(
+                seconds: timestamp,
+                kind: .pose,
+                pose: PoseReplayPose(from: unreliablePose)
+            )
+        }
+        return session
+    }
+
     private func adaptiveSession(
         standingFirst: Bool,
         bothLowered: Bool,
@@ -647,7 +734,8 @@ final class PoseReplayTests: XCTestCase {
         loweredLeft: Bool,
         loweredRight: Bool,
         legacyDepth: Bool,
-        rightConfidence: Float
+        rightConfidence: Float,
+        leftConfidence: Float = 0.93
     ) -> BodyPose {
         var joints: [BodyJoint: JointPoint] = [:]
         for (bodyLeg, horizontalCenter, lowered) in [
@@ -657,7 +745,7 @@ final class PoseReplayTests: XCTestCase {
             let hipJoint: BodyJoint = bodyLeg == .left ? .leftHip : .rightHip
             let kneeJoint: BodyJoint = bodyLeg == .left ? .leftKnee : .rightKnee
             let ankleJoint: BodyJoint = bodyLeg == .left ? .leftAnkle : .rightAnkle
-            let confidence: Float = bodyLeg == .left ? 0.93 : rightConfidence
+            let confidence: Float = bodyLeg == .left ? leftConfidence : rightConfidence
             let hipPosition = lowered
                 ? CGPoint(x: horizontalCenter + 0.13, y: legacyDepth ? 0.47 : 0.50)
                 : CGPoint(x: horizontalCenter, y: 0.80)
