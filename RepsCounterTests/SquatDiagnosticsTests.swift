@@ -72,7 +72,53 @@ final class SquatDiagnosticsTests: XCTestCase {
         XCTAssertTrue(display.contains("Л: raw 170.0°"))
         XCTAssertTrue(display.contains("П: raw —"))
         XCTAssertTrue(display.contains("низкая уверенность"))
+        XCTAssertTrue(display.contains("Guard откл.: Л 0 · П 0"))
         XCTAssertFalse(display.contains("Сбросы И:"))
+    }
+
+    @MainActor
+    func testDebugPanelDisplaysCandidateRejectedByOppositeKnee() throws {
+        let clock = SquatTrackingClock()
+        let viewModel = WorkoutViewModel(
+            persistence: SquatTrackingStore(),
+            timeSource: clock,
+            cameraReady: false,
+            startsAutomatically: false
+        )
+        defer { viewModel.finish() }
+        XCTAssertTrue(viewModel.setBilateralCountingEnabled(true))
+        viewModel.setCameraReady(true)
+        viewModel.resume()
+
+        for (leftAngle, rightAngle, frameCount) in [
+            (170.0, 170.0, 20),
+            (90.0, 120.0, 20),
+            (170.0, 170.0, 20)
+        ] {
+            let pose = SquatPoseFixture.pose(
+                leftAngle: leftAngle,
+                rightAngle: rightAngle
+            )
+            for _ in 0..<frameCount {
+                clock.currentTime += 0.08
+                viewModel.process(pose)
+            }
+        }
+        let diagnostics = try XCTUnwrap(viewModel.latestDiagnostics)
+        let bilateral = try XCTUnwrap(diagnostics.bilateral)
+        XCTAssertEqual(bilateral.left.candidateCount, 1)
+        XCTAssertEqual(bilateral.rejectedLeftCandidates, 1)
+        XCTAssertEqual(bilateral.rejectedRightCandidates, 0)
+        XCTAssertEqual(bilateral.repetitions, 0)
+
+        let panel = SquatDiagnosticsView()
+        panel.render(diagnostics)
+        let textLabel = try XCTUnwrap(allSubviews(in: panel).first {
+            $0.accessibilityIdentifier == "squatDiagnosticsText"
+        } as? UILabel)
+        let display = try XCTUnwrap(textLabel.text)
+        XCTAssertTrue(display.contains("Guard откл.: Л 1 · П 0"))
+        XCTAssertTrue(display.contains("кандид. 1"))
     }
 
     @MainActor
