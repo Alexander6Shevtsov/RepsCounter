@@ -531,6 +531,149 @@ final class PoseReplayTests: XCTestCase {
         XCTAssertThrowsError(try PoseReplayDepthAudit.evaluate(session))
     }
 
+    func testAdaptiveShadowRecoversBilateralDepthWithoutChangingBaseline() throws {
+        let session = adaptiveSession(
+            standingFirst: true,
+            bothLowered: true,
+            legacyDepth: false
+        )
+        let original = try PoseReplayRunner.replay(session)
+        let adaptive = try PoseReplayAdaptiveDepthAudit.replay(session)
+        XCTAssertEqual(original.countedAtSeconds.count, 0)
+        XCTAssertEqual(adaptive.countedAtSeconds.count, 1)
+        XCTAssertGreaterThan(adaptive.assistedDepthFrames, 0)
+        let replayed = try PoseReplayRunner.replay(session)
+        XCTAssertEqual(replayed.countedAtSeconds, original.countedAtSeconds)
+    }
+
+    func testAdaptiveShadowRequiresReliableSecondLeg() throws {
+        let session = adaptiveSession(
+            standingFirst: true,
+            bothLowered: true,
+            legacyDepth: false,
+            rightConfidence: 0.49
+        )
+        let adaptive = try PoseReplayAdaptiveDepthAudit.replay(session)
+        XCTAssertEqual(adaptive.countedAtSeconds.count, 0)
+        XCTAssertEqual(adaptive.assistedDepthFrames, 0)
+    }
+
+    func testAdaptiveShadowRejectsOneSidedKneeBend() throws {
+        let session = adaptiveSession(
+            standingFirst: true,
+            bothLowered: false,
+            legacyDepth: false
+        )
+        let adaptive = try PoseReplayAdaptiveDepthAudit.replay(session)
+        XCTAssertEqual(adaptive.countedAtSeconds.count, 0)
+        XCTAssertEqual(adaptive.assistedDepthFrames, 0)
+    }
+
+    func testAdaptiveShadowNeedsStandingCalibration() throws {
+        let session = adaptiveSession(
+            standingFirst: false,
+            bothLowered: true,
+            legacyDepth: false
+        )
+        let adaptive = try PoseReplayAdaptiveDepthAudit.replay(session)
+        XCTAssertEqual(adaptive.countedAtSeconds.count, 0)
+        XCTAssertEqual(adaptive.assistedDepthFrames, 0)
+    }
+
+    func testAdaptiveShadowPreservesAlreadyValidDepth() throws {
+        let session = adaptiveSession(
+            standingFirst: true,
+            bothLowered: true,
+            legacyDepth: true
+        )
+        let original = try PoseReplayRunner.replay(session)
+        let adaptive = try PoseReplayAdaptiveDepthAudit.replay(session)
+        XCTAssertEqual(original.countedAtSeconds.count, 1)
+        XCTAssertEqual(adaptive.countedAtSeconds.count, 1)
+        XCTAssertEqual(adaptive.assistedDepthFrames, 0)
+    }
+
+    func testAdaptiveShadowDoesNotCountAcrossExplicitReset() throws {
+        var session = adaptiveSession(
+            standingFirst: true,
+            bothLowered: true,
+            legacyDepth: false
+        )
+        let resetIndex = 22
+        let resetTimestamp = session.events[resetIndex].seconds
+        session.events[resetIndex] = PoseReplayEvent(
+            seconds: resetTimestamp,
+            kind: .reset,
+            pose: nil
+        )
+        let adaptive = try PoseReplayAdaptiveDepthAudit.replay(session)
+        XCTAssertEqual(adaptive.countedAtSeconds.count, 0)
+    }
+
+    private func adaptiveSession(
+        standingFirst: Bool,
+        bothLowered: Bool,
+        legacyDepth: Bool,
+        rightConfidence: Float = 0.93
+    ) -> PoseReplaySession {
+        let standingPose = adaptivePose(
+            loweredLeft: false,
+            loweredRight: false,
+            legacyDepth: legacyDepth,
+            rightConfidence: rightConfidence
+        )
+        let loweredPose = adaptivePose(
+            loweredLeft: true,
+            loweredRight: bothLowered,
+            legacyDepth: legacyDepth,
+            rightConfidence: rightConfidence
+        )
+        var recorder = PoseReplayRecorder()
+        _ = recorder.start(at: 0)
+        var currentTime = 0.0
+        let phases: [(BodyPose, Int)] = standingFirst
+            ? [(standingPose, 20), (loweredPose, 20), (standingPose, 20)]
+            : [(loweredPose, 20), (standingPose, 20)]
+        for (pose, frameCount) in phases {
+            for _ in 0..<frameCount {
+                currentTime += 0.08
+                recorder.append(pose, at: currentTime)
+            }
+        }
+        return recorder.session
+    }
+
+    private func adaptivePose(
+        loweredLeft: Bool,
+        loweredRight: Bool,
+        legacyDepth: Bool,
+        rightConfidence: Float
+    ) -> BodyPose {
+        var joints: [BodyJoint: JointPoint] = [:]
+        for (leg, horizontalCenter, lowered) in [
+            (BodyLeg.left, 0.35, loweredLeft),
+            (BodyLeg.right, 0.65, loweredRight)
+        ] {
+            let hipJoint: BodyJoint = leg == .left ? .leftHip : .rightHip
+            let kneeJoint: BodyJoint = leg == .left ? .leftKnee : .rightKnee
+            let ankleJoint: BodyJoint = leg == .left ? .leftAnkle : .rightAnkle
+            let confidence: Float = leg == .left ? 0.93 : rightConfidence
+            let hipPosition = lowered
+                ? CGPoint(x: horizontalCenter + 0.13, y: legacyDepth ? 0.47 : 0.50)
+                : CGPoint(x: horizontalCenter, y: 0.80)
+            let kneePosition = lowered
+                ? CGPoint(x: horizontalCenter, y: 0.445)
+                : CGPoint(x: horizontalCenter, y: 0.50)
+            let anklePosition = lowered
+                ? CGPoint(x: horizontalCenter + 0.05, y: 0.25)
+                : CGPoint(x: horizontalCenter, y: 0.20)
+            joints[hipJoint] = JointPoint(location: hipPosition, confidence: confidence)
+            joints[kneeJoint] = JointPoint(location: kneePosition, confidence: confidence)
+            joints[ankleJoint] = JointPoint(location: anklePosition, confidence: confidence)
+        }
+        return BodyPose(joints: joints, aspectRatio: 1, rotationAngle: 90)
+    }
+
     private func depthAuditPose(
         hipPosition: CGPoint,
         kneePosition: CGPoint,
