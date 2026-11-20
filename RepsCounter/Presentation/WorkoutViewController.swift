@@ -260,6 +260,7 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
             let result = try PoseReplayBilateralRunner.replay(session)
             let adaptive = try PoseReplayAdaptiveDepthAudit.replay(session)
             let graceful = try PoseReplayAdaptiveDepthAudit.replayWithGrace(session)
+            let asymmetric = try PoseReplayAsymmetricDepthAudit.replay(session)
             var summary = """
             Обычный 2D: \(result.baselineCountedAtSeconds.count)
             Левая нога: \(result.leftCountedAtSeconds.count)
@@ -270,6 +271,8 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
             Доп. кадров глубины: \(adaptive.assistedDepthFrames)
             Grace 2D (тень): \(graceful.countedAtSeconds.count)
             Удержано кадров ноги: \(graceful.heldLegFrames)
+            Асимметрия 2D (тень): \(asymmetric.countedAtSeconds.count)
+            Доп. кандидатов: \(asymmetric.supplementalAtSeconds.count)
             """
             if session.annotations.isEmpty {
                 summary += "\nНет ручной разметки: точность пока неизвестна."
@@ -290,6 +293,10 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
                     countedAtSeconds: graceful.countedAtSeconds,
                     depthSamples: []
                 )
+                let asymmetricReplay = PoseReplayResult(
+                    countedAtSeconds: asymmetric.countedAtSeconds,
+                    depthSamples: []
+                )
                 let originalScore = try PoseReplayRunner.score(
                     original, against: session.annotations
                 )
@@ -302,10 +309,14 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
                 let graceScore = try PoseReplayRunner.score(
                     graceReplay, against: session.annotations
                 )
+                let asymmetricScore = try PoseReplayRunner.score(
+                    asymmetricReplay, against: session.annotations
+                )
                 summary += "\nОбычный TP/FP/FN: \(originalScore.truePositives)/\(originalScore.falsePositives)/\(originalScore.falseNegatives)"
                 summary += "\nДве ноги TP/FP/FN: \(bilateralScore.truePositives)/\(bilateralScore.falsePositives)/\(bilateralScore.falseNegatives)"
                 summary += "\nАдаптивный TP/FP/FN: \(adaptiveScore.truePositives)/\(adaptiveScore.falsePositives)/\(adaptiveScore.falseNegatives)"
                 summary += "\nGrace TP/FP/FN: \(graceScore.truePositives)/\(graceScore.falsePositives)/\(graceScore.falseNegatives)"
+                summary += "\nАсимметрия TP/FP/FN: \(asymmetricScore.truePositives)/\(asymmetricScore.falsePositives)/\(asymmetricScore.falseNegatives)"
                 let depthReport = try PoseReplayDepthAudit.evaluate(session)
                 let angleOnly = depthReport.score(for: .kneeOnly)
                 let projected = depthReport.score(for: .legacyProjected)
@@ -315,7 +326,7 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
                 summary += "\nНиз по высоте: полн. \(strictHeight.fullSatisfied), ложн. \(strictHeight.partialAccepted)"
                 summary += "\nЭто проверка нижней фазы, не итоговые повторы."
             }
-            summary += "\nАдаптивный и Grace только для Replay: счётчик тренировки не меняется."
+            summary += "\nВсе альтернативы только для Replay: счётчик тренировки не меняется."
             showPoseReplayMessage(summary)
         } catch {
             showPoseReplayMessage("Не удалось прочитать Replay JSON: \(error.localizedDescription)")
