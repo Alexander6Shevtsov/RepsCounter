@@ -676,6 +676,50 @@ enum PoseReplayDepthAudit {
 struct PoseReplayAdaptiveDepthResult {
     let countedAtSeconds: [TimeInterval]
     let assistedDepthFrames: Int
+    let heldLegFrames: Int
+}
+
+private final class PoseReplayGraceAnalyzer {
+    private let analyzer = PoseAnalyzer()
+    private var selectedLeg: BodyLeg?
+    private var lastReliableTimestamp: TimeInterval?
+    private(set) var heldFrames = 0
+
+    private let maximumTransientLoss: TimeInterval = 0.23
+
+    func analyze(
+        _ pose: BodyPose?,
+        at timestamp: TimeInterval
+    ) -> (analysis: PoseAnalysis?, expired: Bool) {
+        if let selectedLeg {
+            let probe = PoseAnalyzer().analyze(pose)
+            let measurement = selectedLeg == .left
+                ? probe.leftMeasurement : probe.rightMeasurement
+            if !measurement.isReliable {
+                if let lastReliableTimestamp,
+                   timestamp - lastReliableTimestamp <= maximumTransientLoss {
+                    heldFrames += 1
+                    return (nil, false)
+                }
+                reset()
+                let analysis = analyzer.analyze(pose)
+                self.selectedLeg = analysis.selectedLeg
+                lastReliableTimestamp = analysis.selectedLeg == nil ? nil : timestamp
+                return (analysis, true)
+            }
+        }
+
+        let analysis = analyzer.analyze(pose)
+        selectedLeg = analysis.selectedLeg
+        lastReliableTimestamp = analysis.selectedLeg == nil ? nil : timestamp
+        return (analysis, false)
+    }
+
+    func reset() {
+        analyzer.reset()
+        selectedLeg = nil
+        lastReliableTimestamp = nil
+    }
 }
 
 enum PoseReplayAdaptiveDepthAudit {
@@ -689,8 +733,22 @@ enum PoseReplayAdaptiveDepthAudit {
     private static let requiredBilateralFrames = 3
 
     static func replay(_ session: PoseReplaySession) throws -> PoseReplayAdaptiveDepthResult {
+        try replay(session, preserveTransientLeg: false)
+    }
+
+    static func replayWithGrace(
+        _ session: PoseReplaySession
+    ) throws -> PoseReplayAdaptiveDepthResult {
+        try replay(session, preserveTransientLeg: true)
+    }
+
+    private static func replay(
+        _ session: PoseReplaySession,
+        preserveTransientLeg: Bool
+    ) throws -> PoseReplayAdaptiveDepthResult {
         _ = try PoseReplayRunner.replay(session)
         let analyzer = PoseAnalyzer()
+        let graceAnalyzer = PoseReplayGraceAnalyzer()
         var counter = SquatCounter(maximumHipKneeHeightRatio: 0.35)
         var leftStandingHeight: Double?
         var rightStandingHeight: Double?
@@ -702,6 +760,7 @@ enum PoseReplayAdaptiveDepthAudit {
         for event in session.events {
             if event.kind == .reset {
                 analyzer.reset()
+                graceAnalyzer.reset()
                 counter.resetMovement()
                 leftStandingHeight = nil
                 rightStandingHeight = nil
@@ -712,6 +771,7 @@ enum PoseReplayAdaptiveDepthAudit {
 
             if let lastValidTimestamp, event.seconds - lastValidTimestamp > 0.25 {
                 analyzer.reset()
+                graceAnalyzer.reset()
                 counter.resetMovement()
                 leftStandingHeight = nil
                 rightStandingHeight = nil
@@ -719,8 +779,20 @@ enum PoseReplayAdaptiveDepthAudit {
             }
 
             let pose = event.pose?.restore()
-            let analysis = analyzer.analyze(pose)
-            if analysis.requiresMovementReset {
+            let analysis: PoseAnalysis
+            var expiredGrace = false
+            if preserveTransientLeg {
+                let observation = graceAnalyzer.analyze(pose, at: event.seconds)
+                guard let reliableAnalysis = observation.analysis else {
+                    consecutiveBilateralFrames = 0
+                    continue
+                }
+                analysis = reliableAnalysis
+                expiredGrace = observation.expired
+            } else {
+                analysis = analyzer.analyze(pose)
+            }
+            if analysis.requiresMovementReset || expiredGrace {
                 counter.resetMovement()
                 consecutiveBilateralFrames = 0
             }
@@ -775,7 +847,8 @@ enum PoseReplayAdaptiveDepthAudit {
 
         return PoseReplayAdaptiveDepthResult(
             countedAtSeconds: countedAtSeconds,
-            assistedDepthFrames: assistedDepthFrames
+            assistedDepthFrames: assistedDepthFrames,
+            heldLegFrames: preserveTransientLeg ? graceAnalyzer.heldFrames : 0
         )
     }
 
