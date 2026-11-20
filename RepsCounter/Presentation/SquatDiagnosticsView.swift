@@ -95,6 +95,7 @@ final class SquatDiagnosticsView: UIVisualEffectView {
         let lines = [
             "2Н · Обработано поз/с: \(frameRateText(frameRate))",
             "Повторы: \(telemetry.repetitions) · ожидают: \(telemetry.pendingCount) · пары: \(telemetry.mergedDuplicates)",
+            "Guard откл.: Л \(telemetry.rejectedLeftCandidates) · П \(telemetry.rejectedRightCandidates)",
             legSummary("Л", telemetry: telemetry.left),
             legPhase("Л", telemetry: telemetry.left),
             legEvent("Л", telemetry: telemetry.left),

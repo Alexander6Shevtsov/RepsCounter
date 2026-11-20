@@ -24,7 +24,168 @@ final class BilateralLiveCounterTests: XCTestCase {
     }
 
 
+
+    private func feedAsymmetric(
+        _ counter: inout BilateralLiveCounter,
+        clock: inout TimeInterval,
+        leftDepthAngle: Double,
+        rightDepthAngle: Double,
+        leftConfidence: Float = 0.93,
+        rightConfidence: Float = 0.93
+    ) {
+        for (leftAngle, rightAngle, frames) in [
+            (170.0, 170.0, 20),
+            (leftDepthAngle, rightDepthAngle, 20),
+            (170.0, 170.0, 20)
+        ] {
+            let pose = SquatPoseFixture.pose(
+                leftAngle: leftAngle,
+                rightAngle: rightAngle,
+                leftConfidence: leftConfidence,
+                rightConfidence: rightConfidence
+            )
+            for _ in 0..<frames {
+                clock += 0.08
+                _ = counter.process(pose, at: clock)
+            }
+        }
+    }
+
+    func testReliableRightKneeContradictsFalseLeftCandidate() {
+        var counter = BilateralLiveCounter()
+        var currentTime: TimeInterval = 0
+        feedAsymmetric(
+            &counter,
+            clock: &currentTime,
+            leftDepthAngle: 90,
+            rightDepthAngle: 120
+        )
+        XCTAssertEqual(counter.repetitions, 0)
+        XCTAssertEqual(counter.mergedDuplicates, 0)
+        XCTAssertTrue(counter.pendingMovements.isEmpty)
+    }
+
+    func testReliableLeftKneeContradictsFalseRightCandidate() {
+        var counter = BilateralLiveCounter()
+        var currentTime: TimeInterval = 0
+        feedAsymmetric(
+            &counter,
+            clock: &currentTime,
+            leftDepthAngle: 120,
+            rightDepthAngle: 90
+        )
+        XCTAssertEqual(counter.repetitions, 0)
+        XCTAssertTrue(counter.pendingMovements.isEmpty)
+    }
+
+    func testMissingOppositeLegPreservesSingleLegFallback() {
+        var counter = BilateralLiveCounter()
+        var currentTime: TimeInterval = 0
+        feedAsymmetric(
+            &counter,
+            clock: &currentTime,
+            leftDepthAngle: 90,
+            rightDepthAngle: 120,
+            rightConfidence: 0.49
+        )
+        XCTAssertEqual(counter.repetitions, 1)
+    }
+
+    func testLaterContradictedAttemptDoesNotInflateCompletedRepetition() {
+        var counter = BilateralLiveCounter()
+        var currentTime: TimeInterval = 0
+        feed(&counter, clock: &currentTime)
+        feedAsymmetric(
+            &counter,
+            clock: &currentTime,
+            leftDepthAngle: 90,
+            rightDepthAngle: 120
+        )
+        XCTAssertEqual(counter.repetitions, 1)
+        XCTAssertEqual(counter.mergedDuplicates, 1)
+    }
+
+
     #if DEBUG
+    func testGuardTelemetryIdentifiesRejectedLeftCandidate() {
+        var counter = BilateralLiveCounter()
+        var currentTime: TimeInterval = 0
+        feedAsymmetric(
+            &counter,
+            clock: &currentTime,
+            leftDepthAngle: 90,
+            rightDepthAngle: 120
+        )
+        let telemetry = counter.telemetry
+        XCTAssertEqual(telemetry.left.candidateCount, 1)
+        XCTAssertEqual(telemetry.right.candidateCount, 0)
+        XCTAssertEqual(telemetry.rejectedLeftCandidates, 1)
+        XCTAssertEqual(telemetry.rejectedRightCandidates, 0)
+        XCTAssertEqual(telemetry.repetitions, 0)
+    }
+
+    func testGuardTelemetryIdentifiesRejectedRightCandidate() {
+        var counter = BilateralLiveCounter()
+        var currentTime: TimeInterval = 0
+        feedAsymmetric(
+            &counter,
+            clock: &currentTime,
+            leftDepthAngle: 120,
+            rightDepthAngle: 90
+        )
+        let telemetry = counter.telemetry
+        XCTAssertEqual(telemetry.left.candidateCount, 0)
+        XCTAssertEqual(telemetry.right.candidateCount, 1)
+        XCTAssertEqual(telemetry.rejectedLeftCandidates, 0)
+        XCTAssertEqual(telemetry.rejectedRightCandidates, 1)
+        XCTAssertEqual(telemetry.repetitions, 0)
+    }
+
+    func testGuardTelemetryDoesNotRejectSingleReliableLeg() {
+        var counter = BilateralLiveCounter()
+        var currentTime: TimeInterval = 0
+        feedAsymmetric(
+            &counter,
+            clock: &currentTime,
+            leftDepthAngle: 90,
+            rightDepthAngle: 120,
+            rightConfidence: 0.49
+        )
+        let telemetry = counter.telemetry
+        XCTAssertEqual(telemetry.left.candidateCount, 1)
+        XCTAssertEqual(telemetry.rejectedLeftCandidates, 0)
+        XCTAssertEqual(telemetry.rejectedRightCandidates, 0)
+        XCTAssertEqual(telemetry.repetitions, 1)
+    }
+
+    func testGuardTelemetryCountsResetForNewWorkout() {
+        var counter = BilateralLiveCounter()
+        var currentTime: TimeInterval = 0
+        feedAsymmetric(
+            &counter,
+            clock: &currentTime,
+            leftDepthAngle: 90,
+            rightDepthAngle: 120
+        )
+        XCTAssertEqual(counter.telemetry.rejectedLeftCandidates, 1)
+        counter.resetMovement()
+        XCTAssertEqual(counter.telemetry.rejectedLeftCandidates, 1)
+        counter.reset()
+        XCTAssertEqual(counter.telemetry.rejectedLeftCandidates, 0)
+        XCTAssertEqual(counter.telemetry.rejectedRightCandidates, 0)
+        XCTAssertEqual(counter.telemetry.left.candidateCount, 0)
+    }
+
+    func testGuardTelemetryDoesNotRejectSynchronizedCandidates() {
+        var counter = BilateralLiveCounter()
+        var currentTime: TimeInterval = 0
+        feed(&counter, clock: &currentTime)
+        XCTAssertEqual(counter.telemetry.rejectedLeftCandidates, 0)
+        XCTAssertEqual(counter.telemetry.rejectedRightCandidates, 0)
+        XCTAssertEqual(counter.telemetry.mergedDuplicates, 1)
+        XCTAssertEqual(counter.telemetry.repetitions, 1)
+    }
+
     func testDebugTelemetryKeepsBothLegMeasurementsIndependent() {
         var counter = BilateralLiveCounter()
         let pose = SquatPoseFixture.pose(

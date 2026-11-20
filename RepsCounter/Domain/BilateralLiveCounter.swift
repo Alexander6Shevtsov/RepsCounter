@@ -51,6 +51,8 @@ struct BilateralCounterTelemetry {
     let repetitions: Int
     let pendingCount: Int
     let mergedDuplicates: Int
+    let rejectedLeftCandidates: Int
+    let rejectedRightCandidates: Int
 }
 #endif
 
@@ -61,7 +63,11 @@ private struct BilateralLegTracker {
     private var lastValidTime: TimeInterval?
     private var loweredAt: TimeInterval?
     private var missingSampleCount = 0
+    private var recentKneeAngles: [(timestamp: TimeInterval, angle: Double)] = []
     private let maximumMissingDuration: TimeInterval = 0.22
+    private let maximumEvidenceDuration: TimeInterval = 3.0
+    private let kneeEvidenceWindow: TimeInterval = 0.55
+    private let requiredContradictionFrames = 3
     #if DEBUG
     private var lastAnalysis: PoseAnalysis?
     private var latestConfidence: Float?
@@ -92,6 +98,7 @@ private struct BilateralLegTracker {
     }
 
     mutating func process(_ pose: BodyPose?, at timestamp: TimeInterval) -> BilateralSquatCandidate? {
+        recentKneeAngles.removeAll { timestamp - $0.timestamp > maximumEvidenceDuration }
         if let lastValidTime, timestamp - lastValidTime > 0.25 {
             resetMovement(reason: .observationGap)
         }
@@ -140,6 +147,10 @@ private struct BilateralLegTracker {
             #endif
             counter.resetMovement()
             loweredAt = nil
+            recentKneeAngles.removeAll()
+        }
+        if let measuredAngle = analysis.measuredAngle, !analysis.requiresMovementReset {
+            recentKneeAngles.append((timestamp: timestamp, angle: measuredAngle))
         }
         let previousPhase = counter.phase
         let counted = counter.process(
@@ -166,6 +177,16 @@ private struct BilateralLegTracker {
         return nil
     }
 
+    func hasContradictoryKneeEvidence(for candidate: BilateralSquatCandidate) -> Bool {
+        let windowStart = candidate.loweredAt - kneeEvidenceWindow
+        let windowEnd = min(candidate.countedAt, candidate.loweredAt + kneeEvidenceWindow)
+        let validAngles = recentKneeAngles.filter {
+            $0.timestamp >= windowStart && $0.timestamp <= windowEnd
+        }
+        return validAngles.count >= requiredContradictionFrames
+            && validAngles.allSatisfy { $0.angle > counter.loweredThreshold }
+    }
+
     mutating func resetMovement(reason: BilateralTrackingResetReason = .externalReset) {
         #if DEBUG
         if counter.phase != .seekingStanding || lastValidTime != nil {
@@ -181,6 +202,7 @@ private struct BilateralLegTracker {
         lastValidTime = nil
         loweredAt = nil
         missingSampleCount = 0
+        recentKneeAngles.removeAll()
     }
 
     #if DEBUG
@@ -260,24 +282,43 @@ struct BilateralLiveCounter {
     let maximumCompletionDifference: TimeInterval = 0.75
 
     #if DEBUG
+    private var rejectedLeftCandidates = 0
+    private var rejectedRightCandidates = 0
+
     var telemetry: BilateralCounterTelemetry {
         BilateralCounterTelemetry(
             left: leftTracker.telemetry,
             right: rightTracker.telemetry,
             repetitions: repetitions,
             pendingCount: pendingMovements.count,
-            mergedDuplicates: mergedDuplicates
+            mergedDuplicates: mergedDuplicates,
+            rejectedLeftCandidates: rejectedLeftCandidates,
+            rejectedRightCandidates: rejectedRightCandidates
         )
     }
     #endif
 
     mutating func process(_ pose: BodyPose?, at timestamp: TimeInterval) -> Int {
         guard timestamp.isFinite, timestamp >= 0 else { return 0 }
-        if let leftCandidate = leftTracker.process(pose, at: timestamp) {
-            append(leftCandidate)
+        let leftCandidate = leftTracker.process(pose, at: timestamp)
+        let rightCandidate = rightTracker.process(pose, at: timestamp)
+        if let leftCandidate {
+            if rightTracker.hasContradictoryKneeEvidence(for: leftCandidate) {
+                #if DEBUG
+                rejectedLeftCandidates += 1
+                #endif
+            } else {
+                append(leftCandidate)
+            }
         }
-        if let rightCandidate = rightTracker.process(pose, at: timestamp) {
-            append(rightCandidate)
+        if let rightCandidate {
+            if leftTracker.hasContradictoryKneeEvidence(for: rightCandidate) {
+                #if DEBUG
+                rejectedRightCandidates += 1
+                #endif
+            } else {
+                append(rightCandidate)
+            }
         }
         return flush(at: timestamp)
     }
@@ -312,6 +353,8 @@ struct BilateralLiveCounter {
         #if DEBUG
         leftTracker.clearTelemetry()
         rightTracker.clearTelemetry()
+        rejectedLeftCandidates = 0
+        rejectedRightCandidates = 0
         #endif
         repetitions = 0
         mergedDuplicates = 0
