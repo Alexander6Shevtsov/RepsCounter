@@ -1,3 +1,10 @@
+//
+//  PoseOverlayView.swift
+//  RepsCounter
+//
+//  Maintainer: Alexander Shevtsov
+//  Copyright © 2026 Alexander Shevtsov.
+
 import AVFoundation
 import UIKit
 
