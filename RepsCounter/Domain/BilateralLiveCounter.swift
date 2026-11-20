@@ -61,7 +61,11 @@ private struct BilateralLegTracker {
     private var lastValidTime: TimeInterval?
     private var loweredAt: TimeInterval?
     private var missingSampleCount = 0
+    private var recentKneeAngles: [(timestamp: TimeInterval, angle: Double)] = []
     private let maximumMissingDuration: TimeInterval = 0.22
+    private let maximumEvidenceDuration: TimeInterval = 3.0
+    private let kneeEvidenceWindow: TimeInterval = 0.55
+    private let requiredContradictionFrames = 3
     #if DEBUG
     private var lastAnalysis: PoseAnalysis?
     private var latestConfidence: Float?
@@ -92,6 +96,7 @@ private struct BilateralLegTracker {
     }
 
     mutating func process(_ pose: BodyPose?, at timestamp: TimeInterval) -> BilateralSquatCandidate? {
+        recentKneeAngles.removeAll { timestamp - $0.timestamp > maximumEvidenceDuration }
         if let lastValidTime, timestamp - lastValidTime > 0.25 {
             resetMovement(reason: .observationGap)
         }
@@ -140,6 +145,10 @@ private struct BilateralLegTracker {
             #endif
             counter.resetMovement()
             loweredAt = nil
+            recentKneeAngles.removeAll()
+        }
+        if let measuredAngle = analysis.measuredAngle, !analysis.requiresMovementReset {
+            recentKneeAngles.append((timestamp: timestamp, angle: measuredAngle))
         }
         let previousPhase = counter.phase
         let counted = counter.process(
@@ -166,6 +175,16 @@ private struct BilateralLegTracker {
         return nil
     }
 
+    func hasContradictoryKneeEvidence(for candidate: BilateralSquatCandidate) -> Bool {
+        let windowStart = candidate.loweredAt - kneeEvidenceWindow
+        let windowEnd = min(candidate.countedAt, candidate.loweredAt + kneeEvidenceWindow)
+        let validAngles = recentKneeAngles.filter {
+            $0.timestamp >= windowStart && $0.timestamp <= windowEnd
+        }
+        return validAngles.count >= requiredContradictionFrames
+            && validAngles.allSatisfy { $0.angle > counter.loweredThreshold }
+    }
+
     mutating func resetMovement(reason: BilateralTrackingResetReason = .externalReset) {
         #if DEBUG
         if counter.phase != .seekingStanding || lastValidTime != nil {
@@ -181,6 +200,7 @@ private struct BilateralLegTracker {
         lastValidTime = nil
         loweredAt = nil
         missingSampleCount = 0
+        recentKneeAngles.removeAll()
     }
 
     #if DEBUG
@@ -273,10 +293,12 @@ struct BilateralLiveCounter {
 
     mutating func process(_ pose: BodyPose?, at timestamp: TimeInterval) -> Int {
         guard timestamp.isFinite, timestamp >= 0 else { return 0 }
-        if let leftCandidate = leftTracker.process(pose, at: timestamp) {
+        let leftCandidate = leftTracker.process(pose, at: timestamp)
+        let rightCandidate = rightTracker.process(pose, at: timestamp)
+        if let leftCandidate, !rightTracker.hasContradictoryKneeEvidence(for: leftCandidate) {
             append(leftCandidate)
         }
-        if let rightCandidate = rightTracker.process(pose, at: timestamp) {
+        if let rightCandidate, !leftTracker.hasContradictoryKneeEvidence(for: rightCandidate) {
             append(rightCandidate)
         }
         return flush(at: timestamp)
