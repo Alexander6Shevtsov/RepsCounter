@@ -673,6 +673,67 @@ final class PoseReplayTests: XCTestCase {
         XCTAssertEqual(graceful.countedAtSeconds.count, 0)
     }
 
+    func testAsymmetricShadowCountsReliableDeepLegWhenBaselineTracksOpposite() throws {
+        let session = adaptiveSession(
+            standingFirst: true,
+            bothLowered: false,
+            legacyDepth: true,
+            rightConfidence: 0.93,
+            leftConfidence: 0.75
+        )
+        let baseline = try PoseReplayAdaptiveDepthAudit.replayWithGrace(session)
+        let asymmetric = try PoseReplayAsymmetricDepthAudit.replay(session)
+        XCTAssertEqual(baseline.countedAtSeconds.count, 0)
+        XCTAssertEqual(asymmetric.countedAtSeconds.count, 1)
+        XCTAssertEqual(asymmetric.supplementalAtSeconds.count, 1)
+    }
+
+    func testAsymmetricShadowRejectsShallowDepthWithoutChangingBaseline() throws {
+        let session = adaptiveSession(
+            standingFirst: true,
+            bothLowered: false,
+            legacyDepth: false,
+            rightConfidence: 0.93,
+            leftConfidence: 0.75
+        )
+        let asymmetric = try PoseReplayAsymmetricDepthAudit.replay(session)
+        XCTAssertTrue(asymmetric.countedAtSeconds.isEmpty)
+        XCTAssertTrue(asymmetric.supplementalAtSeconds.isEmpty)
+    }
+
+    func testAsymmetricShadowDoesNotDoubleCountValidBaseline() throws {
+        let session = adaptiveSession(
+            standingFirst: true,
+            bothLowered: false,
+            legacyDepth: true,
+            rightConfidence: 0.75,
+            leftConfidence: 0.93
+        )
+        let baseline = try PoseReplayAdaptiveDepthAudit.replayWithGrace(session)
+        let asymmetric = try PoseReplayAsymmetricDepthAudit.replay(session)
+        XCTAssertEqual(baseline.countedAtSeconds.count, 1)
+        XCTAssertEqual(asymmetric.countedAtSeconds.count, 1)
+        XCTAssertEqual(asymmetric.supplementalAtSeconds.count, 0)
+    }
+
+    func testAsymmetricShadowDoesNotBridgeExplicitReset() throws {
+        var session = adaptiveSession(
+            standingFirst: true,
+            bothLowered: false,
+            legacyDepth: true,
+            rightConfidence: 0.93,
+            leftConfidence: 0.75
+        )
+        let resetIndex = 26
+        session.events[resetIndex] = PoseReplayEvent(
+            seconds: session.events[resetIndex].seconds,
+            kind: .reset,
+            pose: nil
+        )
+        let asymmetric = try PoseReplayAsymmetricDepthAudit.replay(session)
+        XCTAssertEqual(asymmetric.countedAtSeconds.count, 0)
+    }
+
     private func graceSession(unreliableFrames: [Int]) -> PoseReplaySession {
         var session = adaptiveSession(
             standingFirst: true,
@@ -701,19 +762,22 @@ final class PoseReplayTests: XCTestCase {
         standingFirst: Bool,
         bothLowered: Bool,
         legacyDepth: Bool,
-        rightConfidence: Float = 0.93
+        rightConfidence: Float = 0.93,
+        leftConfidence: Float = 0.93
     ) -> PoseReplaySession {
         let standingPose = adaptivePose(
             loweredLeft: false,
             loweredRight: false,
             legacyDepth: legacyDepth,
-            rightConfidence: rightConfidence
+            rightConfidence: rightConfidence,
+            leftConfidence: leftConfidence
         )
         let loweredPose = adaptivePose(
             loweredLeft: true,
             loweredRight: bothLowered,
             legacyDepth: legacyDepth,
-            rightConfidence: rightConfidence
+            rightConfidence: rightConfidence,
+            leftConfidence: leftConfidence
         )
         var recorder = PoseReplayRecorder()
         _ = recorder.start(at: 0)
