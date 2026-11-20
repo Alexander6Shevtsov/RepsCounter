@@ -14,6 +14,13 @@ struct BilateralCombinedMovement {
 }
 
 
+#if DEBUG
+enum BilateralGuardPolicy {
+    case strict
+    case calibratedProjection
+}
+#endif
+
 enum BilateralTrackingResetReason: Equatable {
     case observationGap
     case missingJoint
@@ -64,6 +71,11 @@ private struct BilateralLegTracker {
     private var loweredAt: TimeInterval?
     private var missingSampleCount = 0
     private var recentKneeAngles: [(timestamp: TimeInterval, angle: Double)] = []
+    #if DEBUG
+    private var standingHipAnkleHeight: Double?
+    private var standingCalibrationFrames = 0
+    private var recentDepthEvidence: [(timestamp: TimeInterval, descent: Double)] = []
+    #endif
     private let maximumMissingDuration: TimeInterval = 0.22
     private let maximumEvidenceDuration: TimeInterval = 3.0
     private let kneeEvidenceWindow: TimeInterval = 0.55
@@ -99,6 +111,9 @@ private struct BilateralLegTracker {
 
     mutating func process(_ pose: BodyPose?, at timestamp: TimeInterval) -> BilateralSquatCandidate? {
         recentKneeAngles.removeAll { timestamp - $0.timestamp > maximumEvidenceDuration }
+        #if DEBUG
+        recentDepthEvidence.removeAll { timestamp - $0.timestamp > maximumEvidenceDuration }
+        #endif
         if let lastValidTime, timestamp - lastValidTime > 0.25 {
             resetMovement(reason: .observationGap)
         }
@@ -151,6 +166,14 @@ private struct BilateralLegTracker {
         }
         if let measuredAngle = analysis.measuredAngle, !analysis.requiresMovementReset {
             recentKneeAngles.append((timestamp: timestamp, angle: measuredAngle))
+            #if DEBUG
+            updateProjectionEvidence(
+                pose: selectedPose,
+                measuredAngle: measuredAngle,
+                heightRatio: analysis.hipKneeHeightRatio,
+                at: timestamp
+            )
+            #endif
         }
         let previousPhase = counter.phase
         let counted = counter.process(
@@ -187,6 +210,58 @@ private struct BilateralLegTracker {
             && validAngles.allSatisfy { $0.angle > counter.loweredThreshold }
     }
 
+    #if DEBUG
+    func hasCalibratedDepthEvidence(for candidate: BilateralSquatCandidate) -> Bool {
+        let windowStart = candidate.loweredAt - 0.55
+        let windowEnd = min(candidate.countedAt, candidate.loweredAt + 0.55)
+        let samples = recentDepthEvidence.filter {
+            $0.timestamp >= windowStart && $0.timestamp <= windowEnd
+        }
+        return samples.count >= 3
+            && (samples.map(\.descent).max() ?? 0) >= 0.44
+    }
+
+    func hasConsistentlyExtendedOppositeKnee(for candidate: BilateralSquatCandidate) -> Bool {
+        let windowStart = candidate.loweredAt - 0.55
+        let windowEnd = min(candidate.countedAt, candidate.loweredAt + 0.55)
+        let samples = recentKneeAngles.filter {
+            $0.timestamp >= windowStart && $0.timestamp <= windowEnd
+        }
+        return samples.count >= 3 && samples.allSatisfy { $0.angle >= 120 }
+    }
+
+    private mutating func updateProjectionEvidence(
+        pose: BodyPose?,
+        measuredAngle: Double,
+        heightRatio: Double?,
+        at timestamp: TimeInterval
+    ) {
+        let hipJoint: BodyJoint = leg == .left ? .leftHip : .rightHip
+        let ankleJoint: BodyJoint = leg == .left ? .leftAnkle : .rightAnkle
+        guard let hipPoint = pose?.joints[hipJoint],
+              let anklePoint = pose?.joints[ankleJoint] else { return }
+        let height = Double(hipPoint.location.y - anklePoint.location.y)
+        guard height.isFinite, height > 0.05 else { return }
+
+        if measuredAngle >= 160 {
+            standingCalibrationFrames = min(3, standingCalibrationFrames + 1)
+            standingHipAnkleHeight = standingHipAnkleHeight.map {
+                0.92 * $0 + 0.08 * height
+            } ?? height
+        }
+        guard standingCalibrationFrames >= 3,
+              measuredAngle <= 105,
+              let heightRatio, heightRatio <= 0.35,
+              let standingHipAnkleHeight, standingHipAnkleHeight > 0.05 else {
+            return
+        }
+        let descent = (standingHipAnkleHeight - height) / standingHipAnkleHeight
+        if descent.isFinite {
+            recentDepthEvidence.append((timestamp: timestamp, descent: descent))
+        }
+    }
+    #endif
+
     mutating func resetMovement(reason: BilateralTrackingResetReason = .externalReset) {
         #if DEBUG
         if counter.phase != .seekingStanding || lastValidTime != nil {
@@ -203,6 +278,11 @@ private struct BilateralLegTracker {
         loweredAt = nil
         missingSampleCount = 0
         recentKneeAngles.removeAll()
+        #if DEBUG
+        standingHipAnkleHeight = nil
+        standingCalibrationFrames = 0
+        recentDepthEvidence.removeAll()
+        #endif
     }
 
     #if DEBUG
@@ -279,6 +359,14 @@ struct BilateralLiveCounter {
     private(set) var mergedDuplicates = 0
     private(set) var pendingMovements: [BilateralCombinedMovement] = []
 
+    #if DEBUG
+    private var guardPolicy: BilateralGuardPolicy = .strict
+
+    init(guardPolicy: BilateralGuardPolicy = .strict) {
+        self.guardPolicy = guardPolicy
+    }
+    #endif
+
     let maximumCompletionDifference: TimeInterval = 0.75
 
     #if DEBUG
@@ -303,7 +391,9 @@ struct BilateralLiveCounter {
         let leftCandidate = leftTracker.process(pose, at: timestamp)
         let rightCandidate = rightTracker.process(pose, at: timestamp)
         if let leftCandidate {
-            if rightTracker.hasContradictoryKneeEvidence(for: leftCandidate) {
+            if shouldReject(
+                leftCandidate, candidateTracker: leftTracker, oppositeTracker: rightTracker
+            ) {
                 #if DEBUG
                 rejectedLeftCandidates += 1
                 #endif
@@ -312,7 +402,9 @@ struct BilateralLiveCounter {
             }
         }
         if let rightCandidate {
-            if leftTracker.hasContradictoryKneeEvidence(for: rightCandidate) {
+            if shouldReject(
+                rightCandidate, candidateTracker: rightTracker, oppositeTracker: leftTracker
+            ) {
                 #if DEBUG
                 rejectedRightCandidates += 1
                 #endif
@@ -359,6 +451,24 @@ struct BilateralLiveCounter {
         repetitions = 0
         mergedDuplicates = 0
         pendingMovements.removeAll()
+    }
+
+    private func shouldReject(
+        _ candidate: BilateralSquatCandidate,
+        candidateTracker: BilateralLegTracker,
+        oppositeTracker: BilateralLegTracker
+    ) -> Bool {
+        guard oppositeTracker.hasContradictoryKneeEvidence(for: candidate) else {
+            return false
+        }
+        #if DEBUG
+        if guardPolicy == .calibratedProjection
+            && candidateTracker.hasCalibratedDepthEvidence(for: candidate)
+            && oppositeTracker.hasConsistentlyExtendedOppositeKnee(for: candidate) {
+            return false
+        }
+        #endif
+        return true
     }
 
     private mutating func append(_ candidate: BilateralSquatCandidate) {
