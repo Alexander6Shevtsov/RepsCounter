@@ -51,6 +51,8 @@ struct BilateralCounterTelemetry {
     let repetitions: Int
     let pendingCount: Int
     let mergedDuplicates: Int
+    let rejectedLeftCandidates: Int
+    let rejectedRightCandidates: Int
 }
 #endif
 
@@ -280,13 +282,18 @@ struct BilateralLiveCounter {
     let maximumCompletionDifference: TimeInterval = 0.75
 
     #if DEBUG
+    private var rejectedLeftCandidates = 0
+    private var rejectedRightCandidates = 0
+
     var telemetry: BilateralCounterTelemetry {
         BilateralCounterTelemetry(
             left: leftTracker.telemetry,
             right: rightTracker.telemetry,
             repetitions: repetitions,
             pendingCount: pendingMovements.count,
-            mergedDuplicates: mergedDuplicates
+            mergedDuplicates: mergedDuplicates,
+            rejectedLeftCandidates: rejectedLeftCandidates,
+            rejectedRightCandidates: rejectedRightCandidates
         )
     }
     #endif
@@ -295,11 +302,23 @@ struct BilateralLiveCounter {
         guard timestamp.isFinite, timestamp >= 0 else { return 0 }
         let leftCandidate = leftTracker.process(pose, at: timestamp)
         let rightCandidate = rightTracker.process(pose, at: timestamp)
-        if let leftCandidate, !rightTracker.hasContradictoryKneeEvidence(for: leftCandidate) {
-            append(leftCandidate)
+        if let leftCandidate {
+            if rightTracker.hasContradictoryKneeEvidence(for: leftCandidate) {
+                #if DEBUG
+                rejectedLeftCandidates += 1
+                #endif
+            } else {
+                append(leftCandidate)
+            }
         }
-        if let rightCandidate, !leftTracker.hasContradictoryKneeEvidence(for: rightCandidate) {
-            append(rightCandidate)
+        if let rightCandidate {
+            if leftTracker.hasContradictoryKneeEvidence(for: rightCandidate) {
+                #if DEBUG
+                rejectedRightCandidates += 1
+                #endif
+            } else {
+                append(rightCandidate)
+            }
         }
         return flush(at: timestamp)
     }
@@ -334,6 +353,8 @@ struct BilateralLiveCounter {
         #if DEBUG
         leftTracker.clearTelemetry()
         rightTracker.clearTelemetry()
+        rejectedLeftCandidates = 0
+        rejectedRightCandidates = 0
         #endif
         repetitions = 0
         mergedDuplicates = 0
