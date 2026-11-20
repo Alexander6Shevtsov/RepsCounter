@@ -672,4 +672,146 @@ enum PoseReplayDepthAudit {
     }
 }
 
+
+struct PoseReplayAdaptiveDepthResult {
+    let countedAtSeconds: [TimeInterval]
+    let assistedDepthFrames: Int
+}
+
+enum PoseReplayAdaptiveDepthAudit {
+    private struct LegSample {
+        let kneeAngle: Double
+        let hipAnkleHeight: Double
+    }
+
+    private static let maximumAssistedRatio = 0.45
+    private static let minimumHipDescent = 0.34
+    private static let requiredBilateralFrames = 3
+
+    static func replay(_ session: PoseReplaySession) throws -> PoseReplayAdaptiveDepthResult {
+        _ = try PoseReplayRunner.replay(session)
+        let analyzer = PoseAnalyzer()
+        var counter = SquatCounter(maximumHipKneeHeightRatio: 0.35)
+        var leftStandingHeight: Double?
+        var rightStandingHeight: Double?
+        var lastValidTimestamp: TimeInterval?
+        var consecutiveBilateralFrames = 0
+        var assistedDepthFrames = 0
+        var countedAtSeconds: [TimeInterval] = []
+
+        for event in session.events {
+            if event.kind == .reset {
+                analyzer.reset()
+                counter.resetMovement()
+                leftStandingHeight = nil
+                rightStandingHeight = nil
+                lastValidTimestamp = nil
+                consecutiveBilateralFrames = 0
+                continue
+            }
+
+            if let lastValidTimestamp, event.seconds - lastValidTimestamp > 0.25 {
+                analyzer.reset()
+                counter.resetMovement()
+                leftStandingHeight = nil
+                rightStandingHeight = nil
+                consecutiveBilateralFrames = 0
+            }
+
+            let pose = event.pose?.restore()
+            let analysis = analyzer.analyze(pose)
+            if analysis.requiresMovementReset {
+                counter.resetMovement()
+                consecutiveBilateralFrames = 0
+            }
+
+            let leftSample = sample(
+                pose, leg: .left, measurement: analysis.leftMeasurement
+            )
+            let rightSample = sample(
+                pose, leg: .right, measurement: analysis.rightMeasurement
+            )
+            leftStandingHeight = updatedStandingHeight(
+                leftStandingHeight, sample: leftSample
+            )
+            rightStandingHeight = updatedStandingHeight(
+                rightStandingHeight, sample: rightSample
+            )
+
+            let bilateralSupport: Bool
+            if analysis.selectedLeg != nil,
+               let leftSample, let rightSample,
+               let leftDescent = descent(leftSample, standingHeight: leftStandingHeight),
+               let rightDescent = descent(rightSample, standingHeight: rightStandingHeight) {
+                bilateralSupport = leftSample.kneeAngle <= 105
+                    && rightSample.kneeAngle <= 105
+                    && leftDescent >= minimumHipDescent
+                    && rightDescent >= minimumHipDescent
+            } else {
+                bilateralSupport = false
+            }
+            consecutiveBilateralFrames = bilateralSupport
+                ? consecutiveBilateralFrames + 1 : 0
+
+            let existingRatio = analysis.hipKneeHeightRatio
+            let assistedDepth = existingRatio.map { ratio in
+                ratio > 0.35
+                    && ratio <= maximumAssistedRatio
+                    && consecutiveBilateralFrames >= requiredBilateralFrames
+            } ?? false
+            if assistedDepth {
+                assistedDepthFrames += 1
+            }
+            let effectiveRatio = assistedDepth ? 0.35 : existingRatio
+            if counter.process(
+                measuredAngle: analysis.measuredAngle,
+                smoothedAngle: analysis.smoothedAngle,
+                hipKneeHeightRatio: effectiveRatio
+            ) {
+                countedAtSeconds.append(event.seconds)
+            }
+            lastValidTimestamp = analysis.smoothedAngle == nil ? nil : event.seconds
+        }
+
+        return PoseReplayAdaptiveDepthResult(
+            countedAtSeconds: countedAtSeconds,
+            assistedDepthFrames: assistedDepthFrames
+        )
+    }
+
+    private static func sample(
+        _ pose: BodyPose?,
+        leg: BodyLeg,
+        measurement: LegMeasurement
+    ) -> LegSample? {
+        guard measurement.isReliable, let kneeAngle = measurement.angle,
+              let pose else { return nil }
+        let hipJoint: BodyJoint = leg == .left ? .leftHip : .rightHip
+        let ankleJoint: BodyJoint = leg == .left ? .leftAnkle : .rightAnkle
+        guard let hipPoint = pose.joints[hipJoint],
+              let anklePoint = pose.joints[ankleJoint] else { return nil }
+        let height = Double(hipPoint.location.y - anklePoint.location.y)
+        guard height.isFinite, height > 0.05 else { return nil }
+        return LegSample(kneeAngle: kneeAngle, hipAnkleHeight: height)
+    }
+
+    private static func updatedStandingHeight(
+        _ currentHeight: Double?,
+        sample: LegSample?
+    ) -> Double? {
+        guard let sample, sample.kneeAngle >= 160 else { return currentHeight }
+        return currentHeight.map {
+            0.92 * $0 + 0.08 * sample.hipAnkleHeight
+        } ?? sample.hipAnkleHeight
+    }
+
+    private static func descent(
+        _ sample: LegSample,
+        standingHeight: Double?
+    ) -> Double? {
+        guard let standingHeight, standingHeight > 0.05 else { return nil }
+        return (standingHeight - sample.hipAnkleHeight) / standingHeight
+    }
+}
+
 #endif
