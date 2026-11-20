@@ -419,6 +419,132 @@ final class PoseReplayTests: XCTestCase {
         XCTAssertEqual(combined.count, 2)
     }
 
+
+    func testDepthAuditSeparatesSyntheticFullAndShallowKneeBends() throws {
+        let fullPose = depthAuditPose(
+            hipPosition: CGPoint(x: 0.30, y: 0.54),
+            kneePosition: CGPoint(x: 0.50, y: 0.50),
+            anklePosition: CGPoint(x: 0.50, y: 0.20)
+        )
+        let shallowPose = depthAuditPose(
+            hipPosition: CGPoint(x: 0.40, y: 0.62),
+            kneePosition: CGPoint(x: 0.55, y: 0.50),
+            anklePosition: CGPoint(x: 0.40, y: 0.30)
+        )
+        let replayEvents = [
+            0.10, 0.20, 0.30, 0.40
+        ].map { timestamp in
+            PoseReplayEvent(
+                seconds: timestamp,
+                kind: .pose,
+                pose: PoseReplayPose(from: fullPose)
+            )
+        } + [1.10, 1.20, 1.30, 1.40].map { timestamp in
+            PoseReplayEvent(
+                seconds: timestamp,
+                kind: .pose,
+                pose: PoseReplayPose(from: shallowPose)
+            )
+        }
+        let session = PoseReplaySession(
+            schemaVersion: 1,
+            events: replayEvents,
+            annotations: [
+                PoseReplayAnnotation(startSeconds: 0, endSeconds: 1, isFullSquat: true),
+                PoseReplayAnnotation(startSeconds: 1, endSeconds: 2, isFullSquat: false)
+            ]
+        )
+        let baseline = try PoseReplayRunner.replay(session)
+        let report = try PoseReplayDepthAudit.evaluate(session)
+        let subsequentReplay = try PoseReplayRunner.replay(session)
+        XCTAssertEqual(baseline.countedAtSeconds, subsequentReplay.countedAtSeconds)
+        XCTAssertEqual(report.attempts.count, 2)
+
+        let angleOnly = report.score(for: .kneeOnly)
+        XCTAssertEqual(angleOnly.fullSatisfied, 1)
+        XCTAssertEqual(angleOnly.partialAccepted, 1)
+
+        let projected = report.score(for: .legacyProjected)
+        XCTAssertEqual(projected.fullSatisfied, 1)
+        XCTAssertEqual(projected.fullMissed, 0)
+        XCTAssertEqual(projected.partialAccepted, 0)
+        XCTAssertEqual(projected.partialRejected, 1)
+
+        let strictHeight = report.score(for: .hipCenterBelowKnee)
+        XCTAssertEqual(strictHeight.fullMissed, 1)
+        XCTAssertEqual(strictHeight.partialAccepted, 0)
+    }
+
+    func testDepthAuditRequiresThreeReliableConsecutiveSamples() throws {
+        let unreliablePose = depthAuditPose(
+            hipPosition: CGPoint(x: 0.30, y: 0.54),
+            kneePosition: CGPoint(x: 0.50, y: 0.50),
+            anklePosition: CGPoint(x: 0.50, y: 0.20),
+            kneeConfidence: 0.49
+        )
+        let replayEvents = [0.10, 0.20, 0.30, 0.40].map { timestamp in
+            PoseReplayEvent(
+                seconds: timestamp,
+                kind: .pose,
+                pose: PoseReplayPose(from: unreliablePose)
+            )
+        }
+        let session = PoseReplaySession(
+            schemaVersion: 1,
+            events: replayEvents,
+            annotations: [
+                PoseReplayAnnotation(startSeconds: 0, endSeconds: 1, isFullSquat: true)
+            ]
+        )
+        let report = try PoseReplayDepthAudit.evaluate(session)
+        XCTAssertEqual(report.score(for: .kneeOnly).fullMissed, 1)
+        XCTAssertEqual(report.score(for: .legacyProjected).fullMissed, 1)
+        XCTAssertEqual(report.score(for: .hipCenterBelowKnee).fullMissed, 1)
+    }
+
+    func testDepthAuditDoesNotCountSamplesAcrossReset() throws {
+        let fullPose = depthAuditPose(
+            hipPosition: CGPoint(x: 0.30, y: 0.54),
+            kneePosition: CGPoint(x: 0.50, y: 0.50),
+            anklePosition: CGPoint(x: 0.50, y: 0.20)
+        )
+        let replayEvents: [PoseReplayEvent] = [
+            PoseReplayEvent(seconds: 0.10, kind: .pose, pose: PoseReplayPose(from: fullPose)),
+            PoseReplayEvent(seconds: 0.20, kind: .pose, pose: PoseReplayPose(from: fullPose)),
+            PoseReplayEvent(seconds: 0.30, kind: .reset, pose: nil),
+            PoseReplayEvent(seconds: 0.40, kind: .pose, pose: PoseReplayPose(from: fullPose))
+        ]
+        let session = PoseReplaySession(
+            schemaVersion: 1,
+            events: replayEvents,
+            annotations: [
+                PoseReplayAnnotation(startSeconds: 0, endSeconds: 1, isFullSquat: true)
+            ]
+        )
+        let report = try PoseReplayDepthAudit.evaluate(session)
+        XCTAssertEqual(report.score(for: .kneeOnly).fullMissed, 1)
+        XCTAssertEqual(report.score(for: .legacyProjected).fullMissed, 1)
+    }
+
+    func testDepthAuditRejectsUnannotatedReplay() {
+        let session = PoseReplaySession(schemaVersion: 1, events: [], annotations: [])
+        XCTAssertThrowsError(try PoseReplayDepthAudit.evaluate(session))
+    }
+
+    private func depthAuditPose(
+        hipPosition: CGPoint,
+        kneePosition: CGPoint,
+        anklePosition: CGPoint,
+        kneeConfidence: Float = 0.93
+    ) -> BodyPose {
+        let joints: [BodyJoint: JointPoint] = [
+            .leftHip: JointPoint(location: hipPosition, confidence: 0.93),
+            .leftKnee: JointPoint(location: kneePosition, confidence: kneeConfidence),
+            .leftAnkle: JointPoint(location: anklePosition, confidence: 0.93)
+        ]
+        return BodyPose(joints: joints, aspectRatio: 1, rotationAngle: 90)
+    }
+
     func testRecordingIsBoundedAndNeverStartsWithoutExplicitAction() throws {
         var recorder = PoseReplayRecorder()
         recorder.append(SquatPoseFixture.pose(), at: 0)
