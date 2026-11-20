@@ -650,14 +650,14 @@ final class PoseReplayTests: XCTestCase {
         rightConfidence: Float
     ) -> BodyPose {
         var joints: [BodyJoint: JointPoint] = [:]
-        for (leg, horizontalCenter, lowered) in [
+        for (bodyLeg, horizontalCenter, lowered) in [
             (BodyLeg.left, 0.35, loweredLeft),
             (BodyLeg.right, 0.65, loweredRight)
         ] {
-            let hipJoint: BodyJoint = leg == .left ? .leftHip : .rightHip
-            let kneeJoint: BodyJoint = leg == .left ? .leftKnee : .rightKnee
-            let ankleJoint: BodyJoint = leg == .left ? .leftAnkle : .rightAnkle
-            let confidence: Float = leg == .left ? 0.93 : rightConfidence
+            let hipJoint: BodyJoint = bodyLeg == .left ? .leftHip : .rightHip
+            let kneeJoint: BodyJoint = bodyLeg == .left ? .leftKnee : .rightKnee
+            let ankleJoint: BodyJoint = bodyLeg == .left ? .leftAnkle : .rightAnkle
+            let confidence: Float = bodyLeg == .left ? 0.93 : rightConfidence
             let hipPosition = lowered
                 ? CGPoint(x: horizontalCenter + 0.13, y: legacyDepth ? 0.47 : 0.50)
                 : CGPoint(x: horizontalCenter, y: 0.80)
