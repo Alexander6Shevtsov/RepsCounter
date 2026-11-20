@@ -93,8 +93,13 @@ final class WorkoutDashboardView: UIView {
         restCard?.isHidden = !state.isResting
         let message = presentation(state, cameraState: cameraState)
         statusLabel.text = message.status
-        guidanceLabel.text = message.detail
-        guidanceCard.isHidden = message.detail.isEmpty
+        if !message.detail.isEmpty {
+            guidanceLabel.text = message.detail
+        } else if guidanceLabel.text == nil {
+            guidanceLabel.text = " "
+        }
+        guidanceCard.alpha = message.detail.isEmpty ? 0 : 1
+        guidanceCard.accessibilityElementsHidden = message.detail.isEmpty
         let primaryTitle = !state.hasStarted ? "Старт" : (state.isPaused ? "Продолжить" : "Пауза")
         setButton(pauseButton, title: primaryTitle, symbol: state.isPaused ? "play.fill" : "pause.fill", primary: true)
         pauseButton.isEnabled = !state.isFinished && cameraState != .requestingPermission && cameraState != .starting && cameraState != .switching
