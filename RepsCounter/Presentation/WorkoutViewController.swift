@@ -258,12 +258,15 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
             }
             let session = try JSONDecoder().decode(PoseReplaySession.self, from: data)
             let result = try PoseReplayBilateralRunner.replay(session)
+            let adaptive = try PoseReplayAdaptiveDepthAudit.replay(session)
             var summary = """
             Обычный 2D: \(result.baselineCountedAtSeconds.count)
             Левая нога: \(result.leftCountedAtSeconds.count)
             Правая нога: \(result.rightCountedAtSeconds.count)
             Объединено: \(result.combinedEvents.count)
             Убрано дублей: \(result.mergedDuplicateEvents)
+            Адаптивный 2D (тень): \(adaptive.countedAtSeconds.count)
+            Доп. кадров глубины: \(adaptive.assistedDepthFrames)
             """
             if session.annotations.isEmpty {
                 summary += "\nНет ручной разметки: точность пока неизвестна."
@@ -276,14 +279,22 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
                     countedAtSeconds: result.countedAtSeconds,
                     depthSamples: []
                 )
+                let adaptiveReplay = PoseReplayResult(
+                    countedAtSeconds: adaptive.countedAtSeconds,
+                    depthSamples: []
+                )
                 let originalScore = try PoseReplayRunner.score(
                     original, against: session.annotations
                 )
                 let bilateralScore = try PoseReplayRunner.score(
                     bilateral, against: session.annotations
                 )
+                let adaptiveScore = try PoseReplayRunner.score(
+                    adaptiveReplay, against: session.annotations
+                )
                 summary += "\nОбычный TP/FP/FN: \(originalScore.truePositives)/\(originalScore.falsePositives)/\(originalScore.falseNegatives)"
                 summary += "\nДве ноги TP/FP/FN: \(bilateralScore.truePositives)/\(bilateralScore.falsePositives)/\(bilateralScore.falseNegatives)"
+                summary += "\nАдаптивный TP/FP/FN: \(adaptiveScore.truePositives)/\(adaptiveScore.falsePositives)/\(adaptiveScore.falseNegatives)"
                 let depthReport = try PoseReplayDepthAudit.evaluate(session)
                 let angleOnly = depthReport.score(for: .kneeOnly)
                 let projected = depthReport.score(for: .legacyProjected)
@@ -293,6 +304,7 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
                 summary += "\nНиз по высоте: полн. \(strictHeight.fullSatisfied), ложн. \(strictHeight.partialAccepted)"
                 summary += "\nЭто проверка нижней фазы, не итоговые повторы."
             }
+            summary += "\nАдаптивный критерий только для Replay: счётчик тренировки не меняется."
             showPoseReplayMessage(summary)
         } catch {
             showPoseReplayMessage("Не удалось прочитать Replay JSON: \(error.localizedDescription)")
