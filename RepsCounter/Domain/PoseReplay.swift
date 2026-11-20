@@ -1053,24 +1053,56 @@ struct PoseReplayGuardComparison {
     let graceCountedAtSeconds: [TimeInterval]
     let asymmetricCountedAtSeconds: [TimeInterval]
     let guardedCountedAtSeconds: [TimeInterval]
+    let projectionGuardedCountedAtSeconds: [TimeInterval]
     let mergedDuplicates: Int
     let rejectedLeftCandidates: Int
     let rejectedRightCandidates: Int
+    let projectionRejectedLeftCandidates: Int
+    let projectionRejectedRightCandidates: Int
 }
 
 enum PoseReplayGuardIntegrationAudit {
+    private struct GuardEvents {
+        let countedAtSeconds: [TimeInterval]
+        let mergedDuplicates: Int
+        let rejectedLeftCandidates: Int
+        let rejectedRightCandidates: Int
+    }
+
     static func replay(_ session: PoseReplaySession) throws -> PoseReplayGuardComparison {
         let baseline = try PoseReplayRunner.replay(session)
         let adaptive = try PoseReplayAdaptiveDepthAudit.replay(session)
         let graceful = try PoseReplayAdaptiveDepthAudit.replayWithGrace(session)
         let asymmetric = try PoseReplayAsymmetricDepthAudit.replay(session)
-        var counter = BilateralLiveCounter()
-        var guardedCountedAtSeconds: [TimeInterval] = []
+        let strictGuard = replayGuard(session, policy: .strict)
+        let projectionGuard = replayGuard(session, policy: .calibratedProjection)
+
+        return PoseReplayGuardComparison(
+            baselineCountedAtSeconds: baseline.countedAtSeconds,
+            adaptiveCountedAtSeconds: adaptive.countedAtSeconds,
+            graceCountedAtSeconds: graceful.countedAtSeconds,
+            asymmetricCountedAtSeconds: asymmetric.countedAtSeconds,
+            guardedCountedAtSeconds: strictGuard.countedAtSeconds,
+            projectionGuardedCountedAtSeconds: projectionGuard.countedAtSeconds,
+            mergedDuplicates: strictGuard.mergedDuplicates,
+            rejectedLeftCandidates: strictGuard.rejectedLeftCandidates,
+            rejectedRightCandidates: strictGuard.rejectedRightCandidates,
+            projectionRejectedLeftCandidates: projectionGuard.rejectedLeftCandidates,
+            projectionRejectedRightCandidates: projectionGuard.rejectedRightCandidates
+        )
+    }
+
+    private static func replayGuard(
+        _ session: PoseReplaySession,
+        policy: BilateralGuardPolicy
+    ) -> GuardEvents {
+        var counter = BilateralLiveCounter(guardPolicy: policy)
+        var countedAtSeconds: [TimeInterval] = []
         var lastTimestamp: TimeInterval?
 
         for event in session.events {
             if event.kind == .reset {
-                guardedCountedAtSeconds.append(
+                countedAtSeconds.append(
                     contentsOf: counter.pendingMovements.map(\.countedAt)
                 )
                 _ = counter.finishPending()
@@ -1078,30 +1110,26 @@ enum PoseReplayGuardIntegrationAudit {
                 lastTimestamp = nil
                 continue
             }
-
             if let lastTimestamp, event.seconds - lastTimestamp > 0.25 {
                 counter.resetMovement()
             }
+
             let previousPending = counter.pendingMovements
             let previousRepetitions = counter.repetitions
             _ = counter.process(event.pose?.restore(), at: event.seconds)
             let committed = counter.repetitions - previousRepetitions
-            guardedCountedAtSeconds.append(
+            countedAtSeconds.append(
                 contentsOf: previousPending.prefix(committed).map(\.countedAt)
             )
             lastTimestamp = event.seconds
         }
-        guardedCountedAtSeconds.append(
+        countedAtSeconds.append(
             contentsOf: counter.pendingMovements.map(\.countedAt)
         )
         _ = counter.finishPending()
 
-        return PoseReplayGuardComparison(
-            baselineCountedAtSeconds: baseline.countedAtSeconds,
-            adaptiveCountedAtSeconds: adaptive.countedAtSeconds,
-            graceCountedAtSeconds: graceful.countedAtSeconds,
-            asymmetricCountedAtSeconds: asymmetric.countedAtSeconds,
-            guardedCountedAtSeconds: guardedCountedAtSeconds,
+        return GuardEvents(
+            countedAtSeconds: countedAtSeconds,
             mergedDuplicates: counter.mergedDuplicates,
             rejectedLeftCandidates: counter.telemetry.rejectedLeftCandidates,
             rejectedRightCandidates: counter.telemetry.rejectedRightCandidates
