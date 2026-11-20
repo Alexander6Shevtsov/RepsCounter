@@ -140,6 +140,7 @@ final class SquatDiagnosticsTests: XCTestCase {
         )
         XCTAssertTrue(textLabel.text?.contains("Сбросы И:") == true)
         XCTAssertFalse(textLabel.text?.contains("2Н ·") == true)
+        XCTAssertFalse(textLabel.text?.contains("Guard откл.:") == true)
     }
     #endif
 
