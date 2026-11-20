@@ -284,6 +284,14 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
                 )
                 summary += "\nОбычный TP/FP/FN: \(originalScore.truePositives)/\(originalScore.falsePositives)/\(originalScore.falseNegatives)"
                 summary += "\nДве ноги TP/FP/FN: \(bilateralScore.truePositives)/\(bilateralScore.falsePositives)/\(bilateralScore.falseNegatives)"
+                let depthReport = try PoseReplayDepthAudit.evaluate(session)
+                let angleOnly = depthReport.score(for: .kneeOnly)
+                let projected = depthReport.score(for: .legacyProjected)
+                let strictHeight = depthReport.score(for: .hipCenterBelowKnee)
+                summary += "\nНиз по углу: полн. \(angleOnly.fullSatisfied), ложн. \(angleOnly.partialAccepted)"
+                summary += "\nНиз по ТК 0,35: полн. \(projected.fullSatisfied), ложн. \(projected.partialAccepted)"
+                summary += "\nНиз по высоте: полн. \(strictHeight.fullSatisfied), ложн. \(strictHeight.partialAccepted)"
+                summary += "\nЭто проверка нижней фазы, не итоговые повторы."
             }
             showPoseReplayMessage(summary)
         } catch {
