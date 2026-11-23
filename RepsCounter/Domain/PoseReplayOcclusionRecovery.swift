@@ -74,6 +74,9 @@ enum PoseReplayOcclusionRecovery {
     private struct DepthEvidence {
         var frames = 0
         var lastVisible: TimeInterval?
+        // Non-nil only after a leg switch with two depth frames and a late supporting leg.
+        var delayedWitnessFrames: Int?
+        static let delayedWitnessWindow: TimeInterval = 0.5
         var holding = false
         var perspectiveFrames = 0
         var explainsMiss = false
@@ -87,8 +90,32 @@ enum PoseReplayOcclusionRecovery {
             let strongWitness = other.map {
                 otherDrop >= 0.44 || (otherDrop >= 0.34 && $0.kneeAngle <= thresholds.loweredThreshold)
             } ?? false
+            if let witnesses = delayedWitnessFrames {
+                if let lastVisible, time - lastVisible <= Self.delayedWitnessWindow, strongWitness {
+                    if leg == nil {
+                        delayedWitnessFrames = min(2, witnesses + 1)
+                        return
+                    }
+                    if witnesses >= 2 {
+                        // The normal visible-leg depth checks below must still pass on this frame.
+                        explainsMiss = true
+                        delayedWitnessFrames = nil
+                    } else {
+                        self = Self()
+                    }
+                } else {
+                    self = Self()
+                }
+            }
             if holding, let lastVisible, time - lastVisible > 0.8 { self = Self() }
             guard let leg else {
+                if frames == requiredFrames - 1, selectedOther, baseline.movementReset,
+                   !strongWitness, otherDrop >= 0.34, let lastVisible,
+                   time - lastVisible <= Self.delayedWitnessWindow {
+                    delayedWitnessFrames = 0
+                    perspectiveFrames = 0
+                    return
+                }
                 // Only suspend substantial evidence. Hidden frames never advance depth.
                 guard frames >= 2, strongWitness, holding || (selectedOther && baseline.movementReset),
                       let lastVisible, time - lastVisible <= 0.8 else {

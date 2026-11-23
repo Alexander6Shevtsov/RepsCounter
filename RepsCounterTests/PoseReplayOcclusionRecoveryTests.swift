@@ -207,6 +207,70 @@ final class PoseReplayOcclusionRecoveryTests: XCTestCase {
         }
     }
 
+    // Two real owner-side depth observations, then a switch with moderate corroboration.
+    private func pendingSwitch() -> Trace {
+        var f = Trace()
+        f.add(.up, .up, 5)
+        f.add(.deep, .moderate, 2)
+        f.add(.hiddenHip, .justBelowWitnessThreshold, 1)
+        return f
+    }
+
+    func testDelayedWitnessRecoversOnlyAfterFreshDepthAndStanding() throws {
+        var f = pendingSwitch()
+        f.add(.hiddenHip, .projected, 2)
+        f.add(.deep, .projected, 1)
+        XCTAssertEqual(try f.replay().countedAtSeconds, [])
+        f.add(.up, .up, 12)
+        let result = try f.replay()
+        XCTAssertEqual(result.baseline.countedAtSeconds, [])
+        XCTAssertEqual(result.supplementalAtSeconds, [1.3])
+        XCTAssertEqual(result.countedAtSeconds, [1.3])
+    }
+
+    func testDelayedWitnessRejectsInsufficientOrInterruptedSupport() throws {
+        for support in [[Leg.projected], [.projected, .moderate, .projected],
+                        [.up, .projected, .projected]] {
+            var f = pendingSwitch()
+            for other in support { f.add(.hiddenHip, other, 1) }
+            f.add(.deep, .projected, 1)
+            f.add(.up, .up, 12)
+            XCTAssertEqual(try f.replay().countedAtSeconds, [])
+        }
+    }
+
+    func testDelayedWitnessYieldsToBaselineCountingTheSameExcursion() throws {
+        var f = pendingSwitch()
+        f.add(.hiddenHip, .projected, 2)
+        f.add(.deep, .projected, 1)
+        f.add(.deep, .up, 12) // The selected right leg rearms before the bilateral return.
+        f.add(.deep, .deep, 12)
+        f.add(.up, .up, 12)
+        let result = try f.replay()
+        XCTAssertEqual(result.baseline.countedAtSeconds.count, 1)
+        XCTAssertEqual(result.countedAtSeconds, result.baseline.countedAtSeconds)
+        XCTAssertEqual(result.supplementalAtSeconds, [])
+    }
+
+    func testDelayedWitnessExpiresFromLastReliableOwnerDepth() throws {
+        var f = pendingSwitch()
+        f.add(.hiddenHip, .projected, 4)
+        f.add(.deep, .projected, 1)
+        f.add(.up, .up, 12)
+        XCTAssertEqual(try f.replay().countedAtSeconds, [])
+    }
+
+    func testDelayedWitnessRejectsShallowReturnStepTurnAndLostSupport() throws {
+        for (owner, other) in [(Leg.moderate, Leg.projected), (.steppingDeep, .projected),
+                               (.turningDeep, .projected), (.deep, .moderate)] {
+            var f = pendingSwitch()
+            f.add(.hiddenHip, .projected, 2)
+            f.add(owner, other, 1)
+            f.add(.up, .up, 12)
+            XCTAssertEqual(try f.replay().countedAtSeconds, [])
+        }
+    }
+
     func testWarmLoweredV2PreservesBaselineWithoutFabricatingSupplementalCycle() throws {
         var f = Trace()
         f.add(.up, .up, 12)
@@ -220,7 +284,7 @@ final class PoseReplayOcclusionRecoveryTests: XCTestCase {
 }
 
 private enum Leg {
-    case up, deep, projected, moderate, heightGateOnly, hiddenHip, missingHip, hiddenMovingFoot, degenerate, steppingDeep, turningDeep
+    case up, deep, projected, moderate, justBelowWitnessThreshold, heightGateOnly, hiddenHip, missingHip, hiddenMovingFoot, degenerate, steppingDeep, turningDeep
 
     func points(at x: Double) -> [JointPoint] {
         let hip: CGPoint
@@ -232,6 +296,9 @@ private enum Leg {
             knee = CGPoint(x: x, y: 0.50)
         case .projected, .moderate:
             hip = CGPoint(x: x, y: self == .moderate ? 0.58 : 0.50)
+            knee = CGPoint(x: x + 0.06, y: 0.40)
+        case .justBelowWitnessThreshold:
+            hip = CGPoint(x: x, y: 0.20 + 0.60 * (1 - 0.43893))
             knee = CGPoint(x: x + 0.06, y: 0.40)
         case .heightGateOnly:
             hip = CGPoint(x: x, y: 0.465)
