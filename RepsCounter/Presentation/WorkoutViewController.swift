@@ -261,6 +261,8 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
             let adaptive = try PoseReplayAdaptiveDepthAudit.replay(session)
             let graceful = try PoseReplayAdaptiveDepthAudit.replayWithGrace(session)
             let asymmetric = try PoseReplayAsymmetricDepthAudit.replay(session)
+            let recovery = try PoseReplayOcclusionRecovery.replay(session)
+            let recoveredTimes = recovery.supplementalAtSeconds.map { String(format: "%.2f", $0) }
             var summary = """
             Обычный 2D: \(result.baselineCountedAtSeconds.count)
             Левая нога: \(result.leftCountedAtSeconds.count)
@@ -273,11 +275,15 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
             Удержано кадров ноги: \(graceful.heldLegFrames)
             Асимметрия 2D (тень): \(asymmetric.countedAtSeconds.count)
             Доп. кандидатов: \(asymmetric.supplementalAtSeconds.count)
+            Восстановление при перекрытии: \(recovery.countedAtSeconds.count)
             """
+            if !recoveredTimes.isEmpty {
+                summary += "\nДобавлено на возврате (с от REC): " + recoveredTimes.joined(separator: ", ")
+            }
             if session.initialState == nil {
                 summary += "\nНачальная фаза до REC неизвестна (JSON v1)."
             } else if session.initialState?.selectedLeg != nil {
-                summary += "\nОбычный 2D продолжает состояние на момент REC. Теневые счётчики начинают с первой записанной позы."
+                summary += "\nОбычный 2D продолжает состояние на момент REC. Восстановление сохраняет базовые повторы. Для добавления нужна стойка после REC. Остальные теневые счётчики начинают с первой позы."
             }
             if session.annotations.isEmpty {
                 summary += "\nНет ручной разметки: точность пока неизвестна."
@@ -322,6 +328,11 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
                 summary += "\nАдаптивный TP/FP/FN: \(adaptiveScore.truePositives)/\(adaptiveScore.falsePositives)/\(adaptiveScore.falseNegatives)"
                 summary += "\nGrace TP/FP/FN: \(graceScore.truePositives)/\(graceScore.falsePositives)/\(graceScore.falseNegatives)"
                 summary += "\nАсимметрия TP/FP/FN: \(asymmetricScore.truePositives)/\(asymmetricScore.falsePositives)/\(asymmetricScore.falseNegatives)"
+                let recoveryScore = try PoseReplayRunner.score(
+                    PoseReplayResult(countedAtSeconds: recovery.countedAtSeconds, depthSamples: []),
+                    against: session.annotations
+                )
+                summary += "\nВосстановление TP/FP/FN: \(recoveryScore.truePositives)/\(recoveryScore.falsePositives)/\(recoveryScore.falseNegatives)"
                 let depthReport = try PoseReplayDepthAudit.evaluate(session)
                 let angleOnly = depthReport.score(for: .kneeOnly)
                 let projected = depthReport.score(for: .legacyProjected)
