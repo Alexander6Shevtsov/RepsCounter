@@ -87,9 +87,7 @@ enum PoseReplayOcclusionRecovery {
                               selectedOther: Bool, baseline: PoseReplayDepthSample) {
             let time = baseline.seconds
             let otherDrop = other.map { 1 - $0.hipAnkleHeight / otherUpright.hipAnkleHeight } ?? 0
-            let strongWitness = other.map {
-                otherDrop >= 0.44 || (otherDrop >= 0.34 && $0.kneeAngle <= thresholds.loweredThreshold)
-            } ?? false
+            let strongWitness = other.map { isStrongWitness($0, drop: otherDrop) } ?? false
             if let witnesses = delayedWitnessFrames {
                 if let lastVisible, time - lastVisible <= Self.delayedWitnessWindow, strongWitness {
                     if leg == nil {
@@ -153,12 +151,64 @@ enum PoseReplayOcclusionRecovery {
             && leg.normalizedThighHeight <= maximumThighHeight
     }
 
+    // Only the stance, side and time survive the missing triads. All depth evidence starts over.
+    private struct BilateralDropout {
+        let side: BodyLeg
+        let lastObserved: TimeInterval
+        var awaitingFirstPair = true
+        var pairedFrames = 0
+        var witnessed = false
+        var confirmed: Bool { pairedFrames == requiredFrames && witnessed }
+
+        func hasVisibleSupport(in pose: PoseReplayPose) -> Bool {
+            let ankle: PoseReplayJoint = side == .left ? .leftAnkle : .rightAnkle
+            let oppositeHip: PoseReplayJoint = side == .left ? .rightHip : .leftHip
+            return [ankle, oppositeHip, .leftKnee, .rightKnee].allSatisfy { joint in
+                pose.points.contains { $0.joint == joint && $0.confidence >= 0.5 }
+            }
+        }
+
+        mutating func recheck(left: Observation?, right: Observation?, stance: Stance, at time: TimeInterval) -> Bool {
+            let leg = side == .left ? left : right
+            let other = side == .left ? right : left
+            if confirmed { return leg != nil && other != nil }
+            let elapsed = time - lastObserved
+            let upright = side == .left ? stance.left : stance.right
+            guard elapsed <= 0.8, let leg, passesDepth(leg),
+                  1 - leg.hipAnkleHeight / upright.hipAnkleHeight >= 0.44 else { return false }
+
+            let otherUpright = side == .left ? stance.right : stance.left
+            let drop = other.map { 1 - $0.hipAnkleHeight / otherUpright.hipAnkleHeight } ?? 0
+            let strong = other.map { isStrongWitness($0, drop: drop) } ?? false
+            if awaitingFirstPair {
+                guard elapsed <= 0.25, strong else { return false }
+                awaitingFirstPair = false
+            }
+            // A missing opposite triad breaks the streak. It cannot supply a paired depth frame.
+            guard other != nil else {
+                pairedFrames = 0
+                witnessed = false
+                return true
+            }
+            guard drop >= 0.34 else { return false }
+            pairedFrames = min(requiredFrames, pairedFrames + 1)
+            witnessed = witnessed || strong
+            return true
+        }
+    }
+
+    private static func isStrongWitness(_ leg: Observation, drop: Double) -> Bool {
+        drop >= 0.44 || (drop >= 0.34 && leg.kneeAngle <= thresholds.loweredThreshold)
+    }
+
     private struct Cycle {
         var stance: Stance?
         var uprightFrames = 0
         var baselineCounted = false
         var left = DepthEvidence()
         var right = DepthEvidence()
+        var beforeDropout: BilateralDropout?
+        var dropout: BilateralDropout?
 
         mutating func observe(_ pose: PoseReplayPose, baseline: PoseReplayDepthSample) -> Bool {
             let l = PoseReplayDepthAudit.observe(pose, side: .left)
@@ -167,16 +217,43 @@ enum PoseReplayOcclusionRecovery {
                 self = Self()
                 return false
             }
-            guard (l != nil || r != nil), !baseline.invalidGeometry else {
+            guard !baseline.invalidGeometry else {
                 self = Self()
                 return false
             }
             baselineCounted = baselineCounted || baseline.counted
-            if let stance {
+            if l == nil && r == nil {
+                guard let candidate = beforeDropout, candidate.hasVisibleSupport(in: pose) else {
+                    self = Self()
+                    return false
+                }
+                left = DepthEvidence()
+                right = DepthEvidence()
+                uprightFrames = 0
+                dropout = candidate
+                beforeDropout = nil
+                return false
+            }
+            if let stance, dropout != nil {
+                guard dropout?.recheck(left: l, right: r, stance: stance, at: baseline.seconds) == true else {
+                    self = Self()
+                    return false
+                }
+            } else if let stance {
                 left.observe(l, relativeTo: stance.left, other: r, otherUpright: stance.right,
                              selectedOther: baseline.selectedLeg == .right, baseline: baseline)
                 right.observe(r, relativeTo: stance.right, other: l, otherUpright: stance.left,
                               selectedOther: baseline.selectedLeg == .left, baseline: baseline)
+                beforeDropout = nil
+                if let l, let r, baseline.phase == .standing, !baselineCounted {
+                    if baseline.selectedLeg == .right, left.frames == requiredFrames - 1,
+                       !passesDepth(r), 1 - r.hipAnkleHeight / stance.right.hipAnkleHeight >= 0.34 {
+                        beforeDropout = BilateralDropout(side: .left, lastObserved: baseline.seconds)
+                    } else if baseline.selectedLeg == .left, right.frames == requiredFrames - 1,
+                              !passesDepth(l), 1 - l.hipAnkleHeight / stance.left.hipAnkleHeight >= 0.34 {
+                        beforeDropout = BilateralDropout(side: .right, lastObserved: baseline.seconds)
+                    }
+                }
             }
 
             guard let l, let r, l.kneeAngle >= thresholds.standingThreshold,
@@ -190,10 +267,12 @@ enum PoseReplayOcclusionRecovery {
             guard uprightFrames == requiredFrames, baseline.phase == .standing else { return false }
             // A confirmed baseline return owns this entire excursion, even if it came earlier.
             let recovered = !baselineCounted && ((left.confirmed && left.explainsMiss)
-                || (right.confirmed && right.explainsMiss))
+                || (right.confirmed && right.explainsMiss) || dropout?.confirmed == true)
             stance = Stance(left: l, right: r, time: baseline.seconds)
             left = DepthEvidence()
             right = DepthEvidence()
+            beforeDropout = nil
+            dropout = nil
             baselineCounted = false
             return recovered
         }

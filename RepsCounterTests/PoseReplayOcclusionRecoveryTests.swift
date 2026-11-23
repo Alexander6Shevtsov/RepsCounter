@@ -271,6 +271,116 @@ final class PoseReplayOcclusionRecoveryTests: XCTestCase {
         }
     }
 
+    // Left is the sticky selected leg. Only the right leg shows projected depth.
+    private func beforeBilateralLoss() -> Trace {
+        var f = Trace()
+        f.add(.up, .up, 5)
+        f.add(.projected, .deep, 2)
+        return f
+    }
+
+    func testComplementaryJointLossRequiresThreeNewDepthPairsAndUprightReturn() throws {
+        for finalPairs in [2, 3] {
+            var f = beforeBilateralLoss()
+            f.add(.hiddenAnkle, .hiddenHip, 1)
+            f.add(.projected, .deep, 1)
+            f.add(.hiddenAnkle, .deep, 2) // Measured owner depth but no opposite triad.
+            f.add(.projected, .deep, finalPairs)
+            XCTAssertEqual(try f.replay().countedAtSeconds, [])
+            f.add(.up, .up, 12)
+            let result = try f.replay()
+            XCTAssertEqual(result.baseline.countedAtSeconds, [])
+            if finalPairs == 3 {
+                // After three raw upright frames the baseline EMA still awaits standing.
+                XCTAssertEqual(result.baseline.depthSamples[16].phase, .seekingStanding)
+                XCTAssertEqual(result.baseline.depthSamples[17].phase, .standing)
+            }
+            XCTAssertEqual(result.countedAtSeconds, finalPairs == 3 ? [1.7] : [])
+        }
+    }
+
+    func testBilateralLossRecoversMirrorSide() throws {
+        var f = Trace()
+        let initial = PoseReplayInitialState(phase: .standing, pendingFrames: 0,
+                                             selectedLeg: .right, smoothedAngle: 180)
+        f.add(.up, .up, 5)
+        f.add(.deep, .projected, 2)
+        f.add(.hiddenHip, .hiddenAnkle, 1)
+        f.add(.deep, .projected, 3)
+        f.add(.up, .up, 12)
+        XCTAssertEqual(try f.replay(initial: initial).supplementalAtSeconds, [1.4])
+    }
+
+    func testBilateralLossRejectsRepeatedLossLateReacquisitionAndMissingLandmarks() throws {
+        for scenario in 0..<5 {
+            var f = beforeBilateralLoss()
+            switch scenario {
+            case 0: f.add(.hiddenAnkle, .hiddenHip, 2)
+            case 1:
+                f.add(.hiddenAnkle, .hiddenHip, 1)
+                f.tick += 1 // From last reliable pair to reacquisition: 0.3 s.
+            case 2: f.add(.hiddenHip, .hiddenHip, 1)
+            case 3:
+                f.events.append(PoseReplayEvent(seconds: f.time, kind: .pose, pose: nil))
+                f.tick += 1
+            default:
+                f.add(.hiddenAnkle, .hiddenHip, 1)
+                f.add(.projected, .deep, 1)
+                f.add(.hiddenAnkle, .deep, 7) // Continuous poses, but reconfirmation expires.
+            }
+            f.add(.projected, .deep, 4)
+            f.add(.up, .up, 12)
+            XCTAssertEqual(try f.replay().countedAtSeconds, [], "scenario \(scenario)")
+        }
+    }
+
+    func testBilateralLossRejectsPartialWrongSideStepTurnAndUnsupportedDepth() throws {
+        for (other, owner) in [(Leg.projected, Leg.moderate), (.deep, .projected),
+                               (.projected, .steppingDeep), (.projected, .turningDeep),
+                               (.up, .deep)] {
+            var f = beforeBilateralLoss()
+            f.add(.hiddenAnkle, .hiddenHip, 1)
+            f.add(other, owner, 4)
+            f.add(.up, .up, 12)
+            XCTAssertEqual(try f.replay().countedAtSeconds, [])
+        }
+    }
+
+    func testBilateralLossRequiresPriorDepthAndOppositeDescent() throws {
+        for (preFrames, other) in [(1, Leg.projected), (2, .up)] {
+            var f = Trace()
+            f.add(.up, .up, 5)
+            f.add(other, .deep, preFrames)
+            f.add(.hiddenAnkle, .hiddenHip, 1)
+            f.add(.projected, .deep, 4)
+            f.add(.up, .up, 12)
+            XCTAssertEqual(try f.replay().countedAtSeconds, [])
+        }
+    }
+
+    func testBilateralRecheckNeedsStrongSupportInFinalUnbrokenStreak() throws {
+        var f = beforeBilateralLoss()
+        f.add(.hiddenAnkle, .hiddenHip, 1)
+        f.add(.projected, .deep, 1)
+        f.add(.hiddenAnkle, .deep, 1)
+        f.add(.moderate, .deep, 4)
+        f.add(.up, .up, 12)
+        XCTAssertEqual(try f.replay().countedAtSeconds, [])
+    }
+
+    func testBilateralRecheckYieldsToBaselineOnSameExcursion() throws {
+        var f = beforeBilateralLoss()
+        f.add(.hiddenAnkle, .hiddenHip, 1)
+        f.add(.projected, .deep, 3)
+        f.add(.up, .deep, 9) // Baseline rearms; bilateral stance is still incomplete.
+        f.add(.deep, .deep, 9)
+        f.add(.up, .up, 10)
+        let result = try f.replay()
+        XCTAssertEqual(result.baseline.countedAtSeconds.count, 1)
+        XCTAssertEqual(result.countedAtSeconds, result.baseline.countedAtSeconds)
+        XCTAssertEqual(result.supplementalAtSeconds, [])
+    }
+
     func testWarmLoweredV2PreservesBaselineWithoutFabricatingSupplementalCycle() throws {
         var f = Trace()
         f.add(.up, .up, 12)
@@ -284,7 +394,7 @@ final class PoseReplayOcclusionRecoveryTests: XCTestCase {
 }
 
 private enum Leg {
-    case up, deep, projected, moderate, justBelowWitnessThreshold, heightGateOnly, hiddenHip, missingHip, hiddenMovingFoot, degenerate, steppingDeep, turningDeep
+    case up, deep, projected, moderate, justBelowWitnessThreshold, heightGateOnly, hiddenHip, hiddenAnkle, missingHip, hiddenMovingFoot, degenerate, steppingDeep, turningDeep
 
     func points(at x: Double) -> [JointPoint] {
         let hip: CGPoint
@@ -294,7 +404,7 @@ private enum Leg {
         case .up:
             hip = CGPoint(x: x, y: 0.80)
             knee = CGPoint(x: x, y: 0.50)
-        case .projected, .moderate:
+        case .projected, .moderate, .hiddenAnkle:
             hip = CGPoint(x: x, y: self == .moderate ? 0.58 : 0.50)
             knee = CGPoint(x: x + 0.06, y: 0.40)
         case .justBelowWitnessThreshold:
@@ -313,7 +423,7 @@ private enum Leg {
             if self == .steppingDeep || self == .hiddenMovingFoot { ankle.x += 0.17 }
         }
         return [JointPoint(location: hip, confidence: (self == .hiddenHip || self == .hiddenMovingFoot) ? 0.49 : 1),
-                JointPoint(location: knee, confidence: 1), JointPoint(location: ankle, confidence: 1)]
+                JointPoint(location: knee, confidence: 1), JointPoint(location: ankle, confidence: self == .hiddenAnkle ? 0.4 : 1)]
     }
 }
 
