@@ -187,7 +187,10 @@ struct PoseReplayRecorder {
 enum PoseReplayRunner {
     static func replay(_ session: PoseReplaySession) throws -> PoseReplayResult {
         try validate(session)
-        let analyzer = PoseAnalyzer(replaying: session.initialState)
+        let analyzer = PoseAnalyzer(
+            replayLeg: session.initialState?.selectedLeg,
+            smoothedAngle: session.initialState?.smoothedAngle
+        )
         var counter = SquatCounter(maximumHipKneeHeightRatio: 0.35)
         if let state = session.initialState {
             guard (0...counter.requiredStableFrames).contains(state.pendingFrames),
@@ -195,7 +198,7 @@ enum PoseReplayRunner {
                   (state.selectedLeg == nil) == (state.smoothedAngle == nil),
                   state.selectedLeg != nil || (state.phase == .seekingStanding && state.pendingFrames == 0)
             else { throw PoseReplayError.invalidInitialState }
-            counter.restoreMovement(from: state)
+            counter.restoreMovement(phase: state.phase, pendingFrames: state.pendingFrames)
         }
         var lastValidTimestamp: TimeInterval?
         var countedAtSeconds: [TimeInterval] = []

@@ -151,10 +151,10 @@ final class PoseAnalyzer {
 extension BodyLeg: Codable {}
 
 extension PoseAnalyzer {
-    convenience init(replaying state: PoseReplayInitialState?) {
+    convenience init(replayLeg: BodyLeg?, smoothedAngle: Double?) {
         self.init()
-        selectedLeg = state?.selectedLeg
-        smoothedAngle = state?.smoothedAngle
+        selectedLeg = replayLeg
+        self.smoothedAngle = smoothedAngle
     }
 }
 #endif

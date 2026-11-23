@@ -141,9 +141,9 @@ extension SquatPhase: Codable {}
 extension SquatCounter {
     var pendingReplayFrames: Int { stableFrames }
 
-    mutating func restoreMovement(from state: PoseReplayInitialState) {
-        phase = state.phase
-        stableFrames = state.pendingFrames
+    mutating func restoreMovement(phase: SquatPhase, pendingFrames: Int) {
+        self.phase = phase
+        stableFrames = pendingFrames
     }
 }
 #endif
