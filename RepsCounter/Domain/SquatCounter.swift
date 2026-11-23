@@ -7,7 +7,7 @@
 
 import Foundation
 
-enum SquatPhase: Equatable {
+enum SquatPhase: String {
     case seekingStanding
     case standing
     case lowered
@@ -134,3 +134,16 @@ struct SquatCounter {
         return false
     }
 }
+
+#if DEBUG
+extension SquatPhase: Codable {}
+
+extension SquatCounter {
+    var pendingReplayFrames: Int { stableFrames }
+
+    mutating func restoreMovement(phase: SquatPhase, pendingFrames: Int) {
+        self.phase = phase
+        stableFrames = pendingFrames
+    }
+}
+#endif

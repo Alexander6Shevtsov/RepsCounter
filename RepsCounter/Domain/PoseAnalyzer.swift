@@ -8,7 +8,7 @@
 import CoreGraphics
 import Foundation
 
-enum BodyLeg: Equatable {
+enum BodyLeg: String {
     case left
     case right
 }
@@ -146,3 +146,15 @@ final class PoseAnalyzer {
         )
     }
 }
+
+#if DEBUG
+extension BodyLeg: Codable {}
+
+extension PoseAnalyzer {
+    convenience init(replayLeg: BodyLeg?, smoothedAngle: Double?) {
+        self.init()
+        selectedLeg = replayLeg
+        self.smoothedAngle = smoothedAngle
+    }
+}
+#endif

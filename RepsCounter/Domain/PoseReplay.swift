@@ -85,10 +85,18 @@ struct PoseReplayAnnotation: Codable {
     let isFullSquat: Bool
 }
 
+struct PoseReplayInitialState: Codable {
+    let phase: SquatPhase
+    let pendingFrames: Int
+    let selectedLeg: BodyLeg?
+    let smoothedAngle: Double?
+}
+
 struct PoseReplaySession: Codable {
     let schemaVersion: Int
     var events: [PoseReplayEvent]
     var annotations: [PoseReplayAnnotation]
+    var initialState: PoseReplayInitialState?
 }
 
 struct PoseReplayDepthSample {
@@ -113,6 +121,7 @@ struct PoseReplayScore {
 
 enum PoseReplayError: Error {
     case invalidVersion
+    case invalidInitialState
     case invalidTimeline
     case tooManyEvents
     case invalidGeometry
@@ -127,9 +136,14 @@ struct PoseReplayRecorder {
 
     var eventCount: Int { session.events.count }
 
-    mutating func start(at timestamp: TimeInterval) -> Bool {
+    mutating func start(at timestamp: TimeInterval, initialState: PoseReplayInitialState? = nil) -> Bool {
         guard timestamp.isFinite else { return false }
-        session = PoseReplaySession(schemaVersion: 1, events: [], annotations: [])
+        session = PoseReplaySession(
+            schemaVersion: initialState == nil ? 1 : 2,
+            events: [],
+            annotations: [],
+            initialState: initialState
+        )
         startedAt = timestamp
         isRecording = true
         return true
@@ -173,8 +187,19 @@ struct PoseReplayRecorder {
 enum PoseReplayRunner {
     static func replay(_ session: PoseReplaySession) throws -> PoseReplayResult {
         try validate(session)
-        let analyzer = PoseAnalyzer()
+        let analyzer = PoseAnalyzer(
+            replayLeg: session.initialState?.selectedLeg,
+            smoothedAngle: session.initialState?.smoothedAngle
+        )
         var counter = SquatCounter(maximumHipKneeHeightRatio: 0.35)
+        if let state = session.initialState {
+            guard (0...counter.requiredStableFrames).contains(state.pendingFrames),
+                  state.smoothedAngle.map({ (0...180).contains($0) }) ?? true,
+                  (state.selectedLeg == nil) == (state.smoothedAngle == nil),
+                  state.selectedLeg != nil || (state.phase == .seekingStanding && state.pendingFrames == 0)
+            else { throw PoseReplayError.invalidInitialState }
+            counter.restoreMovement(phase: state.phase, pendingFrames: state.pendingFrames)
+        }
         var lastValidTimestamp: TimeInterval?
         var countedAtSeconds: [TimeInterval] = []
         var depthSamples: [PoseReplayDepthSample] = []
@@ -186,7 +211,7 @@ enum PoseReplayRunner {
                 lastValidTimestamp = nil
                 continue
             }
-            if let lastValidTimestamp, event.seconds - lastValidTimestamp > 0.25 {
+            if session.schemaVersion == 1, let lastValidTimestamp, event.seconds - lastValidTimestamp > 0.25 {
                 analyzer.reset()
                 counter.resetMovement()
             }
@@ -277,7 +302,10 @@ enum PoseReplayRunner {
     }
 
     private static func validate(_ session: PoseReplaySession) throws {
-        guard session.schemaVersion == 1 else { throw PoseReplayError.invalidVersion }
+        guard (1...2).contains(session.schemaVersion) else { throw PoseReplayError.invalidVersion }
+        guard (session.schemaVersion == 2) == (session.initialState != nil) else {
+            throw PoseReplayError.invalidInitialState
+        }
         guard session.events.count <= 1200 else { throw PoseReplayError.tooManyEvents }
         try validateAnnotations(session.annotations)
         var previousTimestamp = 0.0
