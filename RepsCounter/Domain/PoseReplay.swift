@@ -100,6 +100,10 @@ struct PoseReplaySession: Codable {
 }
 
 struct PoseReplayDepthSample {
+    let movementReset: Bool
+    let invalidGeometry: Bool
+    let phase: SquatPhase
+    let counted: Bool
     let seconds: TimeInterval
     let selectedLeg: BodyLeg?
     let kneeAngle: Double?
@@ -236,6 +240,11 @@ enum PoseReplayRunner {
             )
             depthSamples.append(
                 PoseReplayDepthSample(
+                    movementReset: analysis.requiresMovementReset,
+                    invalidGeometry: analysis.leftMeasurement.issue == .invalidGeometry
+                        || analysis.rightMeasurement.issue == .invalidGeometry,
+                    phase: counter.phase,
+                    counted: counted,
                     seconds: event.seconds,
                     selectedLeg: analysis.selectedLeg,
                     kneeAngle: analysis.measuredAngle,
@@ -591,7 +600,10 @@ struct PoseReplayDepthAuditReport {
 }
 
 enum PoseReplayDepthAudit {
-    private struct KneeObservation {
+    struct KneeObservation {
+        let ankle: CGPoint
+        let hipX: Double
+        let hipAnkleHeight: Double
         let kneeAngle: Double
         let signedHipKneeHeight: Double
         let normalizedThighHeight: Double
@@ -654,7 +666,7 @@ enum PoseReplayDepthAudit {
         }
     }
 
-    private static func observe(_ pose: PoseReplayPose?, side: BodyLeg) -> KneeObservation? {
+    static func observe(_ pose: PoseReplayPose?, side: BodyLeg) -> KneeObservation? {
         guard let pose, pose.aspectRatio.isFinite, pose.aspectRatio > 0 else { return nil }
         let hipJoint: PoseReplayJoint = side == .left ? .leftHip : .rightHip
         let kneeJoint: PoseReplayJoint = side == .left ? .leftKnee : .rightKnee
@@ -693,6 +705,9 @@ enum PoseReplayDepthAudit {
         }
 
         return KneeObservation(
+            ankle: CGPoint(x: anklePoint.horizontalPosition * pose.aspectRatio, y: anklePoint.verticalPosition),
+            hipX: hipPoint.horizontalPosition * pose.aspectRatio,
+            hipAnkleHeight: hipPoint.verticalPosition - anklePoint.verticalPosition,
             kneeAngle: measuredAngle,
             signedHipKneeHeight: verticalDifference,
             normalizedThighHeight: verticalDifference / projectedThighLength
