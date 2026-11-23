@@ -44,13 +44,75 @@ final class PoseAnalyzerTests: XCTestCase {
         }
     }
 
-    func testFallbackToOtherLegResetsSmoothingAndInvalidatesMovement() {
+    func testFallbackRequiresThreeReliableStandingFramesAndResetsSmoothing() {
         let analyzer = PoseAnalyzer()
         _ = analyzer.analyze(SquatPoseFixture.pose(leftAngle: 90, rightAngle: 170, rightConfidence: 0.7))
-        let analysis = analyzer.analyze(SquatPoseFixture.pose(leftAngle: 90, rightAngle: 170, leftConfidence: 0.49, rightConfidence: 0.7))
-        XCTAssertEqual(analysis.selectedLeg, .right)
-        XCTAssertTrue(analysis.requiresMovementReset)
-        XCTAssertEqual(analysis.smoothedAngle ?? 0, 170, accuracy: 0.001)
+        let alternativeStanding = SquatPoseFixture.pose(leftAngle: 90, rightAngle: 170, leftConfidence: 0.49, rightConfidence: 0.7)
+        for _ in 0..<2 {
+            let pending = analyzer.analyze(alternativeStanding)
+            XCTAssertNil(pending.selectedLeg)
+            XCTAssertNil(pending.smoothedAngle)
+            XCTAssertTrue(pending.requiresMovementReset)
+            XCTAssertFalse(pending.didSwitchLeg)
+        }
+        let switched = analyzer.analyze(alternativeStanding)
+        XCTAssertEqual(switched.selectedLeg, .right)
+        XCTAssertTrue(switched.requiresMovementReset)
+        XCTAssertTrue(switched.didSwitchLeg)
+        XCTAssertEqual(switched.smoothedAngle ?? 0, 170, accuracy: 0.001)
+    }
+
+    func testUnreliableSelectedLegCannotSwitchWhileOtherLegIsLowered() {
+        let analyzer = PoseAnalyzer()
+        _ = analyzer.analyze(SquatPoseFixture.pose(leftAngle: 170, rightAngle: 170, leftConfidence: 0.9, rightConfidence: 0.8))
+        let alternateLowered = SquatPoseFixture.pose(leftAngle: 90, rightAngle: 90, leftConfidence: 0.49, rightConfidence: 0.8)
+        for _ in 0..<12 {
+            let analysis = analyzer.analyze(alternateLowered)
+            XCTAssertNil(analysis.selectedLeg)
+            XCTAssertNil(analysis.measuredAngle)
+            XCTAssertNil(analysis.smoothedAngle)
+            XCTAssertTrue(analysis.requiresMovementReset)
+            XCTAssertFalse(analysis.didSwitchLeg)
+        }
+        let alternateStanding = SquatPoseFixture.pose(leftAngle: 90, rightAngle: 170, leftConfidence: 0.49, rightConfidence: 0.8)
+        for _ in 0..<2 {
+            XCTAssertNil(analyzer.analyze(alternateStanding).selectedLeg)
+        }
+        let switched = analyzer.analyze(alternateStanding)
+        XCTAssertEqual(switched.selectedLeg, .right)
+        XCTAssertTrue(switched.didSwitchLeg)
+    }
+
+    func testOriginalLegRecoveryCancelsPendingSwitch() {
+        let analyzer = PoseAnalyzer()
+        let standing = SquatPoseFixture.pose(leftAngle: 170, rightAngle: 170, leftConfidence: 0.9, rightConfidence: 0.8)
+        _ = analyzer.analyze(standing)
+        let alternativeStanding = SquatPoseFixture.pose(leftAngle: 170, rightAngle: 170, leftConfidence: 0.49, rightConfidence: 0.8)
+        for _ in 0..<2 {
+            XCTAssertNil(analyzer.analyze(alternativeStanding).selectedLeg)
+        }
+        let recovered = analyzer.analyze(standing)
+        XCTAssertEqual(recovered.selectedLeg, .left)
+        XCTAssertFalse(recovered.didSwitchLeg)
+        XCTAssertFalse(recovered.requiresMovementReset)
+        for _ in 0..<2 {
+            XCTAssertNil(analyzer.analyze(alternativeStanding).selectedLeg)
+        }
+        let switched = analyzer.analyze(alternativeStanding)
+        XCTAssertEqual(switched.selectedLeg, .right)
+        XCTAssertTrue(switched.didSwitchLeg)
+    }
+
+    func testExplicitResetAllowsFreshInitialLegSelectionWithoutDelay() {
+        let analyzer = PoseAnalyzer()
+        _ = analyzer.analyze(SquatPoseFixture.pose(leftAngle: 170, rightAngle: 170, leftConfidence: 0.9, rightConfidence: 0.8))
+        let alternateStanding = SquatPoseFixture.pose(leftAngle: 170, rightAngle: 170, leftConfidence: 0.49, rightConfidence: 0.8)
+        XCTAssertNil(analyzer.analyze(alternateStanding).selectedLeg)
+        analyzer.reset()
+        let fresh = analyzer.analyze(alternateStanding)
+        XCTAssertEqual(fresh.selectedLeg, .right)
+        XCTAssertFalse(fresh.didSwitchLeg)
+        XCTAssertFalse(fresh.requiresMovementReset)
     }
 
     func testMissingHipKneeOrAnkleRejectsLegAndPreservesConfidenceEvidence() {

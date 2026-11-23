@@ -41,20 +41,26 @@ struct PoseAnalysis {
     let smoothedAngle: Double?
     let hipKneeHeightRatio: Double?
     let requiresMovementReset: Bool
+    let didSwitchLeg: Bool
 }
 
 final class PoseAnalyzer {
     private var smoothedAngle: Double?
     private var selectedLeg: BodyLeg?
+    private var alternateStandingLeg: BodyLeg?
+    private var alternateStandingFrames = 0
+    private let requiredAlternateStandingFrames = 3
+    private let standingThreshold: Double = 160
 
     func analyze(_ pose: BodyPose?) -> PoseAnalysis {
         let leftMeasurement = measure(pose, joints: [.leftHip, .leftKnee, .leftAnkle])
         let rightMeasurement = measure(pose, joints: [.rightHip, .rightKnee, .rightAnkle])
         let previousLeg = selectedLeg
         let nextLeg = chooseLeg(left: leftMeasurement, right: rightMeasurement)
-        let requiresReset = nextLeg == nil || (previousLeg != nil && nextLeg != previousLeg)
-        if nextLeg != previousLeg || nextLeg == nil { smoothedAngle = nil }
-        selectedLeg = nextLeg
+        let didSwitchLeg = previousLeg != nil && nextLeg != nil && nextLeg != previousLeg
+        let requiresReset = nextLeg == nil || didSwitchLeg
+        if didSwitchLeg || nextLeg == nil { smoothedAngle = nil }
+        if let nextLeg { selectedLeg = nextLeg }
         let measuredAngle: Double?
         switch nextLeg {
         case .left: measuredAngle = leftMeasurement.angle
@@ -72,24 +78,56 @@ final class PoseAnalyzer {
             measuredAngle: measuredAngle,
             smoothedAngle: smoothedAngle,
             hipKneeHeightRatio: hipKneeHeightRatio,
-            requiresMovementReset: requiresReset
+            requiresMovementReset: requiresReset,
+            didSwitchLeg: didSwitchLeg
         )
     }
 
     func reset() {
         smoothedAngle = nil
         selectedLeg = nil
+        clearAlternateStanding()
     }
 
     private func chooseLeg(left: LegMeasurement, right: LegMeasurement) -> BodyLeg? {
-        if selectedLeg == .left, left.isReliable { return .left }
-        if selectedLeg == .right, right.isReliable { return .right }
-        if left.isReliable, right.isReliable {
-            return left.confidence >= right.confidence ? .left : .right
+        guard let selectedLeg else {
+            if left.isReliable, right.isReliable {
+                return left.confidence >= right.confidence ? .left : .right
+            }
+            if left.isReliable { return .left }
+            if right.isReliable { return .right }
+            return nil
         }
-        if left.isReliable { return .left }
-        if right.isReliable { return .right }
-        return nil
+
+        let currentMeasurement = selectedLeg == .left ? left : right
+        if currentMeasurement.isReliable {
+            clearAlternateStanding()
+            return selectedLeg
+        }
+
+        let otherLeg: BodyLeg = selectedLeg == .left ? .right : .left
+        let otherMeasurement = otherLeg == .left ? left : right
+        guard otherMeasurement.isReliable,
+              let otherAngle = otherMeasurement.angle,
+              otherAngle >= standingThreshold else {
+            clearAlternateStanding()
+            return nil
+        }
+
+        if alternateStandingLeg == otherLeg {
+            alternateStandingFrames += 1
+        } else {
+            alternateStandingLeg = otherLeg
+            alternateStandingFrames = 1
+        }
+        guard alternateStandingFrames >= requiredAlternateStandingFrames else { return nil }
+        clearAlternateStanding()
+        return otherLeg
+    }
+
+    private func clearAlternateStanding() {
+        alternateStandingLeg = nil
+        alternateStandingFrames = 0
     }
 
     private func measureHipKneeHeight(_ pose: BodyPose?, selectedLeg: BodyLeg?) -> Double? {

@@ -356,13 +356,13 @@ final class WorkoutViewModel {
         hasPose = analysis.smoothedAngle != nil
         lastPoseTime = hasPose ? currentTime : nil
         #if DEBUG
-        if analysis.requiresMovementReset, counter.phase != .seekingStanding {
-            if analysis.selectedLeg == nil {
-                measurementLossCount += 1
-                latestMeasurementIssue = trackingIssue(for: analysis)
-            } else {
-                legChangeCount += 1
-            }
+        if analysis.didSwitchLeg {
+            legChangeCount += 1
+        } else if analysis.requiresMovementReset,
+                  analysis.selectedLeg == nil,
+                  counter.phase != .seekingStanding {
+            measurementLossCount += 1
+            latestMeasurementIssue = trackingIssue(for: analysis)
         }
         #endif
         #if DEBUG
