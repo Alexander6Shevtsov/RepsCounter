@@ -35,6 +35,149 @@ final class PoseReplayTests: XCTestCase {
         XCTAssertEqual(viewModel.latestDiagnostics?.recentDepthAttempts.last?.outcome, .counted)
     }
 
+    @MainActor
+    func testRecordingFromLoweredRestoresCountingTimeAndStickyLeg() throws {
+        let fixture = RecordingFixture()
+        defer { fixture.model.finish() }
+        let standing = SquatPoseFixture.pose(leftAngle: 170, rightAngle: 170)
+        let lowered = SquatPoseFixture.pose(leftAngle: 170, rightAngle: 90)
+        fixture.feed(SquatPoseFixture.pose(leftAngle: 170, rightAngle: 170, leftConfidence: 0.6), frames: 8)
+        fixture.feed(lowered, frames: 12)
+        XCTAssertEqual(fixture.model.latestDiagnostics?.phase, .lowered)
+        fixture.start()
+        fixture.feed(standing, frames: 12)
+
+        let session = try fixture.stop()
+        XCTAssertEqual(session.schemaVersion, 2)
+        XCTAssertEqual(session.initialState?.phase, .lowered)
+        XCTAssertEqual(session.initialState?.selectedLeg, .right)
+        XCTAssertEqual(fixture.liveCounts.count, 1)
+        let result = try PoseReplayRunner.replay(session)
+        XCTAssertEqual(result.depthSamples.first?.selectedLeg, .right)
+        XCTAssertEqual(result.countedAtSeconds, fixture.liveCounts)
+        XCTAssertEqual(try PoseReplayRunner.replay(session).countedAtSeconds, fixture.liveCounts)
+    }
+
+    @MainActor
+    func testRecordingAfterTwoDepthFramesPreservesPendingConfirmation() throws {
+        let fixture = RecordingFixture()
+        defer { fixture.model.finish() }
+        let standing = SquatPoseFixture.pose(leftAngle: 170)
+        let lowered = SquatPoseFixture.pose(leftAngle: 50)
+        fixture.feed(standing, frames: 6)
+        fixture.feed(lowered, frames: 2)
+        fixture.start()
+        fixture.feed(lowered, frames: 1)
+        fixture.feed(standing, frames: 14)
+
+        let session = try fixture.stop()
+        XCTAssertEqual(session.initialState?.phase, .standing)
+        XCTAssertEqual(session.initialState?.pendingFrames, 2)
+        XCTAssertEqual(fixture.liveCounts.count, 1)
+        XCTAssertEqual(try PoseReplayRunner.replay(session).countedAtSeconds, fixture.liveCounts)
+    }
+
+    @MainActor
+    func testGapBeforeFirstRecordedPoseWritesResetAtThatPoseTime() throws {
+        let fixture = RecordingFixture()
+        defer { fixture.model.finish() }
+        fixture.clock.incrementPerRead = 0.000_001
+        fixture.feed(SquatPoseFixture.pose(leftAngle: 170), frames: 8)
+        fixture.feed(SquatPoseFixture.pose(leftAngle: 90), frames: 12)
+        fixture.start()
+        fixture.clock.timestamp += 0.3
+        fixture.feed(SquatPoseFixture.pose(leftAngle: 170), frames: 12)
+
+        let session = try fixture.stop()
+        XCTAssertEqual(session.initialState?.phase, .lowered)
+        XCTAssertEqual(Array(session.events.prefix(2).map(\.kind)), [.reset, .pose])
+        let reset = try XCTUnwrap(session.events.first)
+        let firstPose = try XCTUnwrap(session.events.dropFirst().first)
+        XCTAssertEqual(reset.seconds, firstPose.seconds)
+        XCTAssertEqual(session.events.map(\.seconds), session.events.map(\.seconds).sorted())
+        XCTAssertTrue(fixture.liveCounts.isEmpty)
+        XCTAssertEqual(try PoseReplayRunner.replay(session).countedAtSeconds, fixture.liveCounts)
+    }
+
+    @MainActor
+    func testTimerGapDuringRecordingIsKeptWithoutAnIncomingPose() throws {
+        let fixture = RecordingFixture()
+        defer { fixture.model.finish() }
+        let standing = SquatPoseFixture.pose(leftAngle: 170)
+        fixture.feed(standing, frames: 8)
+        fixture.feed(SquatPoseFixture.pose(leftAngle: 90), frames: 12)
+        fixture.start()
+        fixture.clock.timestamp += 0.5
+        fixture.model.refreshTime()
+        fixture.feed(standing, frames: 12)
+
+        let session = try fixture.stop()
+        XCTAssertEqual(session.events.filter { $0.kind == .reset }.map(\.seconds), [0.5])
+        XCTAssertEqual(session.events.first?.kind, .reset)
+        XCTAssertTrue(fixture.liveCounts.isEmpty)
+        XCTAssertEqual(try PoseReplayRunner.replay(session).countedAtSeconds, fixture.liveCounts)
+    }
+
+    @MainActor
+    func testPauseResumeKeepTheirTimesAndRequireANewCycle() throws {
+        let fixture = RecordingFixture()
+        defer { fixture.model.finish() }
+        let standing = SquatPoseFixture.pose(leftAngle: 170)
+        let lowered = SquatPoseFixture.pose(leftAngle: 90)
+        fixture.start()
+        fixture.feed(standing, frames: 8)
+        fixture.feed(lowered, frames: 12)
+        let pauseSeconds = fixture.clock.timestamp - fixture.origin
+        fixture.model.pause()
+        fixture.feed(standing, frames: 8)
+        let resumeSeconds = fixture.clock.timestamp - fixture.origin
+        fixture.model.resume()
+        fixture.feed(standing, frames: 8)
+        fixture.feed(lowered, frames: 12)
+        fixture.feed(standing, frames: 12)
+
+        let session = try fixture.stop()
+        let resets = session.events.filter { $0.kind == .reset }
+        XCTAssertEqual(resets.map(\.seconds), [pauseSeconds, resumeSeconds])
+        XCTAssertFalse(session.events.contains {
+            $0.kind == .pose && $0.seconds > pauseSeconds && $0.seconds <= resumeSeconds
+        })
+        XCTAssertEqual(fixture.liveCounts.count, 1)
+        XCTAssertEqual(try PoseReplayRunner.replay(session).countedAtSeconds, fixture.liveCounts)
+    }
+
+    @MainActor
+    func testFinalPoseInSetPrecedesResetAtTheSameTimestamp() throws {
+        let fixture = RecordingFixture()
+        defer { fixture.model.finish() }
+        fixture.start()
+        let standing = SquatPoseFixture.pose(leftAngle: 170)
+        fixture.feed(standing, frames: 8)
+        for _ in 0..<fixture.model.targetRepetitions {
+            fixture.feed(SquatPoseFixture.pose(leftAngle: 90), frames: 12)
+            fixture.feed(standing, frames: 12)
+        }
+
+        let session = try fixture.stop()
+        let boundary = Array(session.events.suffix(2))
+        XCTAssertEqual(boundary.map(\.kind), [.pose, .reset])
+        XCTAssertEqual(boundary.map(\.seconds), Array(repeating: try XCTUnwrap(fixture.liveCounts.last), count: 2))
+        XCTAssertEqual(fixture.liveCounts.count, fixture.model.targetRepetitions)
+        XCTAssertEqual(try PoseReplayRunner.replay(session).countedAtSeconds, fixture.liveCounts)
+    }
+
+    func testLegacyJSONWithoutInitialStateAndInvalidV2Checkpoint() throws {
+        let legacy = Data(#"{"schemaVersion":1,"events":[{"seconds":0.125,"kind":"pose"}],"annotations":[]}"#.utf8)
+        let session = try JSONDecoder().decode(PoseReplaySession.self, from: legacy)
+        XCTAssertNil(session.initialState)
+        XCTAssertEqual(try PoseReplayRunner.replay(session).depthSamples.map(\.seconds), [0.125])
+
+        var invalid = PoseReplaySession(schemaVersion: 2, events: [], annotations: [])
+        XCTAssertThrowsError(try PoseReplayRunner.replay(invalid))
+        invalid.initialState = PoseReplayInitialState(phase: .lowered, pendingFrames: 2, selectedLeg: nil, smoothedAngle: nil)
+        XCTAssertThrowsError(try PoseReplayRunner.replay(invalid))
+    }
+
     func testCapturedNumericObservationsReplayDeterministically() throws {
         var recorder = PoseReplayRecorder()
         XCTAssertTrue(recorder.start(at: 10))
@@ -876,9 +1019,54 @@ final class PoseReplayTests: XCTestCase {
 }
 #endif
 
+#if DEBUG
+@MainActor
+private final class RecordingFixture {
+    let clock = PoseReplayClock()
+    let model: WorkoutViewModel
+    private(set) var origin: TimeInterval = 0
+    private(set) var liveCounts: [TimeInterval] = []
+    private var totalRepetitions = 0
+
+    init() {
+        model = WorkoutViewModel(persistence: PoseReplayStore(), timeSource: clock)
+        model.onChange = { [weak self] state in self?.totalRepetitions = state.totalRepetitions }
+    }
+
+    func start() {
+        origin = clock.timestamp
+        liveCounts = []
+        XCTAssertTrue(model.startPoseReplayRecording())
+    }
+
+    func feed(_ pose: BodyPose, frames: Int) {
+        for _ in 0..<frames {
+            clock.timestamp += 0.0625
+            let seconds = clock.timestamp - origin
+            let previousTotal = totalRepetitions
+            model.process(pose)
+            if totalRepetitions > previousTotal { liveCounts.append(seconds) }
+        }
+    }
+
+    func stop() throws -> PoseReplaySession {
+        let data = try XCTUnwrap(model.stopPoseReplayRecording())
+        return try JSONDecoder().decode(PoseReplaySession.self, from: data)
+    }
+}
+#endif
+
 @MainActor
 private final class PoseReplayClock: WorkoutTimeSource {
-    var currentTime: TimeInterval = 0
+    var timestamp: TimeInterval = 0
+    var incrementPerRead: TimeInterval = 0
+    var currentTime: TimeInterval {
+        get {
+            defer { timestamp += incrementPerRead }
+            return timestamp
+        }
+        set { timestamp = newValue }
+    }
     var date: Date { Date(timeIntervalSince1970: 0) }
 }
 

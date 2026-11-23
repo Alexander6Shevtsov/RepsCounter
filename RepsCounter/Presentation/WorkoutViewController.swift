@@ -274,6 +274,11 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
             Асимметрия 2D (тень): \(asymmetric.countedAtSeconds.count)
             Доп. кандидатов: \(asymmetric.supplementalAtSeconds.count)
             """
+            if session.initialState == nil {
+                summary += "\nНачальная фаза до REC неизвестна (JSON v1)."
+            } else if session.initialState?.selectedLeg != nil {
+                summary += "\nОбычный 2D продолжает состояние на момент REC. Теневые счётчики начинают с первой записанной позы."
+            }
             if session.annotations.isEmpty {
                 summary += "\nНет ручной разметки: точность пока неизвестна."
             } else {

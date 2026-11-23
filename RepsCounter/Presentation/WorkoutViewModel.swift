@@ -295,7 +295,13 @@ final class WorkoutViewModel {
 
     func startPoseReplayRecording() -> Bool {
         guard hasStarted, !isPaused, !isFinished else { return false }
-        return poseReplayRecorder.start(at: timeSource.currentTime)
+        let initialState = PoseReplayInitialState(
+            phase: counter.phase,
+            pendingFrames: counter.pendingReplayFrames,
+            selectedLeg: latestAnalysis?.selectedLeg,
+            smoothedAngle: latestAnalysis?.smoothedAngle
+        )
+        return poseReplayRecorder.start(at: timeSource.currentTime, initialState: initialState)
     }
 
     func stopPoseReplayRecording() throws -> Data? {
@@ -380,7 +386,7 @@ final class WorkoutViewModel {
                 }
                 restDeadline = activeTime + TimeInterval(restDuration)
                 counter.reset()
-                resetTracking()
+                resetTracking(at: currentTime)
             }
         }
         publish(activeTime: activeTime)
@@ -405,15 +411,16 @@ final class WorkoutViewModel {
             #if DEBUG
             depthAttemptTracker.interrupt(.cameraUnavailable)
             #endif
-            pause()
-            resetTracking()
+            if isPaused || isFinished { resetTracking(at: timeSource.currentTime) }
+            else { pause() }
         }
         publish()
     }
 
     func pause() {
         guard !isFinished, !isPaused else { return }
-        let activeTime = activeDuration(at: timeSource.currentTime)
+        let currentTime = timeSource.currentTime
+        let activeTime = activeDuration(at: currentTime)
         advanceRest(at: activeTime)
         accumulatedActiveTime = activeTime
         activeStartedAt = nil
@@ -421,7 +428,7 @@ final class WorkoutViewModel {
         #if DEBUG
         depthAttemptTracker.interrupt(.paused)
         #endif
-        resetTracking()
+        resetTracking(at: currentTime)
         stopUpdates()
         publish(activeTime: activeTime)
     }
@@ -432,8 +439,9 @@ final class WorkoutViewModel {
             startedAt = timeSource.date
             hasStarted = true
         }
-        resetTracking()
-        activeStartedAt = timeSource.currentTime
+        let currentTime = timeSource.currentTime
+        resetTracking(at: currentTime)
+        activeStartedAt = currentTime
         isPaused = false
         startUpdates()
         publish()
@@ -503,7 +511,7 @@ final class WorkoutViewModel {
             observedGap: currentTime - lastPoseTime
         )
         #endif
-        resetTracking()
+        resetTracking(at: currentTime)
         #if DEBUG
         trackingReset = .observationGap
         #endif
@@ -519,9 +527,9 @@ final class WorkoutViewModel {
     }
     #endif
 
-    private func resetTracking() {
+    private func resetTracking(at timestamp: TimeInterval) {
         #if DEBUG
-        poseReplayRecorder.markReset(at: timeSource.currentTime)
+        poseReplayRecorder.markReset(at: timestamp)
         depthAttemptTracker.interrupt(.trackingReset)
         depthAttemptTracker.resetPoseClock()
         #endif
