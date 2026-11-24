@@ -381,6 +381,173 @@ final class PoseReplayOcclusionRecoveryTests: XCTestCase {
         XCTAssertEqual(result.supplementalAtSeconds, [])
     }
 
+    func testBilateralWitnessesAreRealDistinctAndConfirmedOnReturn() throws {
+        var f = Trace()
+        f.add(.up, .up, 6)
+        f.addBilateralBottom()
+        XCTAssertEqual(try f.replay().countedAtSeconds, [])
+        f.add(.up, .up, 8)
+        let result = try f.replay()
+        let event = try XCTUnwrap(result.bilateralConfirmations.first)
+        XCTAssertEqual(result.countedAtSeconds, [event.countedAt])
+        XCTAssertEqual(event.frames.count, 3)
+        XCTAssertEqual(Set(event.frames.map(\.seconds)).count, 3)
+        XCTAssertTrue(event.frames.contains { $0.left != nil && $0.right == nil })
+        XCTAssertTrue(event.frames.contains { $0.left == nil && $0.right != nil })
+        XCTAssertTrue(event.frames.contains { $0.smoothedDepth })
+        for frame in event.frames {
+            for witness in [frame.left, frame.right].compactMap({ $0 }) {
+                XCTAssertGreaterThanOrEqual(witness.geometry.minimumConfidence, 0.5)
+                XCTAssertLessThanOrEqual(witness.geometry.kneeAngle, 105)
+                XCTAssertLessThanOrEqual(witness.geometry.normalizedThighHeight, 0.35)
+            }
+        }
+    }
+
+    func testBilateralRapidAdjacentCyclesWithJitterArePrefixInvariant() throws {
+        var f = Trace()
+        f.add(.up, .up, 6)
+        for _ in 0..<2 {
+            f.addBilateralBottom()
+            f.add(.up, .up, 6)
+        }
+        var time = 0.0
+        let intervals = [0.035, 0.082, 0.054, 0.071]
+        f.events = f.events.enumerated().map { index, event in
+            time += intervals[index % intervals.count]
+            return PoseReplayEvent(seconds: time, kind: event.kind, pose: event.pose)
+        }
+        let result = try f.replay()
+        let counts = result.countedAtSeconds
+        XCTAssertEqual(counts.count, 2)
+        XCTAssertEqual(result.bilateralConfirmations.map(\.countedAt), counts)
+        for end in f.events.indices {
+            let prefix = PoseReplaySession(schemaVersion: 1, events: Array(f.events[...end]), annotations: [])
+            let expected = counts.filter { $0 <= f.events[end].seconds }
+            XCTAssertEqual(try PoseReplayOcclusionRecovery.replay(prefix).countedAtSeconds, expected)
+        }
+        let mislabeled = PoseReplaySession(schemaVersion: 1, events: f.events, annotations: [
+            PoseReplayAnnotation(startSeconds: 0, endSeconds: time, isFullSquat: false)
+        ])
+        XCTAssertEqual(try PoseReplayOcclusionRecovery.replay(mislabeled).countedAtSeconds, counts)
+    }
+
+    func testBilateralSingleSimultaneousSampleAndDuplicateTimesCannotConfirmDepth() throws {
+        var f = Trace()
+        f.add(.up, .up, 6)
+        f.add(.projected, .projected, 4)
+        f.add(.deep, .deep, 1)
+        f.add(.projected, .deep, 1)
+        let last = try XCTUnwrap(f.events.last)
+        f.events.append(last)
+        f.add(.up, .up, 8)
+        XCTAssertEqual(try f.replay().bilateralConfirmations.count, 0)
+        f.events.remove(at: 12)
+        XCTAssertEqual(try f.replay().countedAtSeconds, [])
+    }
+
+    func testBilateralMirrorKeepsSeparateFiltersAndRequiresBothDepthWitnesses() throws {
+        var f = Trace()
+        f.add(.up, .up, 6)
+        f.add(.projected, .projected, 4)
+        f.add(.projected, .deep, 1)
+        f.add(.deep, .hiddenHip, 2)
+        f.add(.projected, .deep, 1)
+        f.add(.up, .up, 8)
+        let event = try XCTUnwrap(f.replay().bilateralConfirmations.first)
+        let returned = try XCTUnwrap(event.frames.last?.right)
+        XCTAssertEqual(returned.ema, returned.geometry.kneeAngle)
+        XCTAssertTrue(event.frames.contains { $0.left != nil && $0.right == nil })
+    }
+
+    func testBilateralWitnessesExpireEvenWhenPoseStreamIsContinuous() throws {
+        var f = Trace()
+        f.add(.up, .up, 6)
+        f.add(.projected, .projected, 4)
+        f.add(.deep, .projected, 1)
+        f.add(.projected, .projected, 4) // Both feet and knees stay visible throughout.
+        f.add(.hiddenHip, .deep, 2)
+        f.add(.up, .up, 8)
+        XCTAssertEqual(try f.replay().countedAtSeconds, [])
+    }
+
+    func testBilateralShortOcclusionHoldsContextWithoutAddingDepth() throws {
+        var f = Trace()
+        f.add(.up, .up, 6)
+        f.add(.projected, .projected, 4)
+        f.add(.deep, .projected, 1)
+        f.add(.hiddenHip, .hiddenHip, 1)
+        f.add(.hiddenHip, .deep, 1)
+        f.add(.deep, .projected, 1)
+        f.add(.up, .up, 8)
+        let confirmation = try XCTUnwrap(f.replay().bilateralConfirmations.first)
+        XCTAssertEqual(confirmation.frames.map(\.seconds), [1.0, 1.2, 1.3])
+    }
+
+    func testBilateralEvidenceCannotCrossDiscontinuitiesOrMovingSupport() throws {
+        for scenario in 0..<9 {
+            var f = Trace()
+            f.add(.up, .up, 6)
+            f.add(.projected, .projected, 4)
+            f.add(.deep, .projected, 1)
+            switch scenario {
+            case 0: f.add(.hiddenHip, .hiddenHip, 4)
+            case 1: f.add(.hiddenHip, .projected, 10)
+            case 2: f.tick += 3
+            case 3: f.add(.steppingDeep, .projected, 1)
+            case 4: f.add(.turningDeep, .projected, 1)
+            case 5: f.add(.hiddenMovingFoot, .projected, 1)
+            case 6: f.events.append(PoseReplayEvent(seconds: f.time, kind: .reset, pose: nil))
+            case 7: f.add(.projected, .projected, 1, rotation: 0)
+            default: f.events.append(PoseReplayEvent(seconds: f.time, kind: .pose, pose: nil))
+            }
+            f.add(.hiddenHip, .deep, 2)
+            f.add(.deep, .projected, 1)
+            f.add(.up, .up, 8)
+            XCTAssertEqual(try f.replay().bilateralConfirmations.count, 0, "scenario \(scenario)")
+        }
+    }
+
+    func testBilateralRejectsPartialContradictoryAndSeparateHalfCycles() throws {
+        for interruption in [Leg.up, .moderate] {
+            var f = Trace()
+            f.add(.up, .up, 6)
+            f.add(.projected, .projected, 4)
+            f.add(.deep, .projected, 1)
+            f.add(interruption, .deep, 1) // One side is back up while the other side is low.
+            f.add(.hiddenHip, .deep, 2)
+            f.add(.up, .up, 8)
+            XCTAssertEqual(try f.replay().countedAtSeconds, [])
+        }
+        var f = Trace()
+        f.add(.up, .up, 6)
+        for _ in 0..<2 {
+            f.add(.projected, .projected, 3)
+            f.add(.deep, .projected, 2)
+            f.add(.up, .up, 6)
+            f.add(.projected, .deep, 2)
+            f.add(.up, .up, 6)
+        }
+        XCTAssertEqual(try f.replay().countedAtSeconds, [])
+    }
+
+    func testBilateralCannotRearmDuringIncompleteReturnAndYieldsToInheritedCount() throws {
+        var f = Trace()
+        f.add(.up, .up, 8)
+        f.addBilateralBottom()
+        f.add(.up, .up, 1)
+        f.add(.projected, .projected, 3) // Reversal before a real return.
+        f.add(.up, .up, 8)
+        XCTAssertEqual(try f.replay().countedAtSeconds, [])
+        f.add(.projected, .projected, 4)
+        f.add(.deep, .deep, 8)
+        f.add(.up, .up, 12)
+        let result = try f.replay()
+        XCTAssertEqual(result.baseline.countedAtSeconds.count, 1)
+        XCTAssertEqual(result.countedAtSeconds, result.baseline.countedAtSeconds)
+        XCTAssertTrue(result.bilateralConfirmations.isEmpty)
+    }
+
     func testWarmLoweredV2PreservesBaselineWithoutFabricatingSupplementalCycle() throws {
         var f = Trace()
         f.add(.up, .up, 12)
@@ -444,6 +611,13 @@ private struct Trace {
             events.append(PoseReplayEvent(seconds: time, kind: .pose, pose: PoseReplayPose(from: pose)))
             tick += 1
         }
+    }
+
+    mutating func addBilateralBottom() {
+        add(.projected, .projected, 4)
+        add(.deep, .projected, 1)
+        add(.hiddenHip, .deep, 2)
+        add(.deep, .projected, 1)
     }
 
     func replay(initial: PoseReplayInitialState? = nil) throws -> PoseReplayRecoveryResult {
