@@ -26,6 +26,7 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
     private let diagnosticsView = SquatDiagnosticsView()
     private let poseReplayButton = UIButton(type: .system)
     #endif
+    private var isExportingTrace = false
     private var lastPose: BodyPose?
     private var lastState: WorkoutViewState?
     private var pendingSaveState: WorkoutSaveState?
@@ -129,10 +130,42 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
         dashboard.onSwitch = { [weak self] in self?.switchCamera() }
         dashboard.onPause = { [weak self] in self?.togglePause() }
         dashboard.onFinish = { [weak self] in self?.finishWorkout() }
+        if let telemetry = PipelineTelemetry.active {
+            dashboard.historyButton.menu = UIMenu(children: [
+                UIAction(title: "Сохранить трассу обработки", image: UIImage(systemName: "square.and.arrow.up")) { [weak self] _ in
+                    self?.exportTrace(telemetry)
+                }
+            ])
+        }
         #if DEBUG
         configureDiagnostics()
         configurePoseReplayCapture()
         #endif
+    }
+
+    private func exportTrace(_ telemetry: PipelineTelemetry) {
+        guard !isExportingTrace else { return }
+        isExportingTrace = true
+        Task {
+            defer { isExportingTrace = false }
+            do {
+                let url = try await telemetry.export()
+                guard viewIfLoaded?.window != nil, presentedViewController == nil else {
+                    try? FileManager.default.removeItem(at: url)
+                    return
+                }
+                let share = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+                share.popoverPresentationController?.sourceView = dashboard.historyButton
+                share.popoverPresentationController?.sourceRect = dashboard.historyButton.bounds
+                share.completionWithItemsHandler = { _, _, _, _ in try? FileManager.default.removeItem(at: url) }
+                present(share, animated: true)
+            } catch {
+                let alert = UIAlertController(title: "Не удалось сохранить трассу",
+                                              message: error.localizedDescription, preferredStyle: .alert)
+                alert.addAction(UIAlertAction(title: "ОК", style: .default))
+                present(alert, animated: true)
+            }
+        }
     }
 
     #if DEBUG
@@ -257,7 +290,7 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
                 return
             }
             let session = try JSONDecoder().decode(PoseReplaySession.self, from: data)
-            let result = try PoseReplayBilateralRunner.replay(session)
+            let result = try PoseReplayBilateralRunner.replay(session, telemetry: PipelineTelemetry.active)
             let adaptive = try PoseReplayAdaptiveDepthAudit.replay(session)
             let graceful = try PoseReplayAdaptiveDepthAudit.replayWithGrace(session)
             let asymmetric = try PoseReplayAsymmetricDepthAudit.replay(session)

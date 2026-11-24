@@ -50,7 +50,8 @@ final class CameraSwitchingTests: XCTestCase {
             guard state == .running, let camera else { return }
             observedRotations.append(camera.rotationAngle)
         }
-        camera.onPose = { pose in
+        camera.onFrame = { frame in
+            let pose = frame.pose
             if let pose { receivedRotations.append(pose.rotationAngle) }
         }
         await camera.start().value
@@ -215,7 +216,8 @@ final class CameraSwitchingTests: XCTestCase {
     func testServiceRejectsWrongCameraEvenWhenGenerationMatches() async {
         let fixture = CameraFixture()
         var receivedPoses = 0
-        fixture.camera.onPose = { pose in
+        fixture.camera.onFrame = { frame in
+            let pose = frame.pose
             if pose != nil { receivedPoses += 1 }
         }
         await fixture.camera.start().value
