@@ -601,6 +601,7 @@ struct PoseReplayDepthAuditReport {
 
 enum PoseReplayDepthAudit {
     struct KneeObservation {
+        let minimumConfidence: Double
         let ankle: CGPoint
         let hipX: Double
         let hipAnkleHeight: Double
@@ -705,6 +706,7 @@ enum PoseReplayDepthAudit {
         }
 
         return KneeObservation(
+            minimumConfidence: min(hipPoint.confidence, kneePoint.confidence, anklePoint.confidence),
             ankle: CGPoint(x: anklePoint.horizontalPosition * pose.aspectRatio, y: anklePoint.verticalPosition),
             hipX: hipPoint.horizontalPosition * pose.aspectRatio,
             hipAnkleHeight: hipPoint.verticalPosition - anklePoint.verticalPosition,

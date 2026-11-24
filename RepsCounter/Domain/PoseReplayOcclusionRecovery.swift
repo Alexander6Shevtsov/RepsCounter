@@ -4,19 +4,32 @@ import Foundation
 struct PoseReplayRecoveryResult {
     let baseline: PoseReplayResult
     let countedAtSeconds: [TimeInterval]
+    let bilateralConfirmations: [BilateralCycleEvidence.Confirmation]
     let supplementalAtSeconds: [TimeInterval]
 }
 
 enum PoseReplayOcclusionRecovery {
-    private typealias Observation = PoseReplayDepthAudit.KneeObservation
+    typealias Observation = PoseReplayDepthAudit.KneeObservation
     private static let thresholds = SquatCounter()
     private static let maximumThighHeight = 0.35
     private static let requiredFrames = thresholds.requiredStableFrames
 
-    static func replay(_ session: PoseReplaySession) throws -> PoseReplayRecoveryResult {
+    static let continuity: TimeInterval = 0.25
+    static let maxOcclusion: TimeInterval = 0.8
+    static let maxCycle: TimeInterval = 6
+    static let minimumDrop = 0.34
+    static let strongDrop = 0.44
+    static let standingHeight = 0.80
+    static let supportTolerance = 0.20
+
+    static func replay(
+        _ session: PoseReplaySession, includingBilateralCycleEvidence: Bool = true
+    ) throws -> PoseReplayRecoveryResult {
         let baseline = try PoseReplayRunner.replay(session)
         var samples = baseline.depthSamples.makeIterator()
         var cycle = Cycle()
+        var bilateral = BilateralCycleEvidence()
+        var confirmations: [BilateralCycleEvidence.Confirmation] = []
         var previous: PoseReplayEvent?
         var supplemental: [TimeInterval] = []
         var counts: [TimeInterval] = []
@@ -25,33 +38,52 @@ enum PoseReplayOcclusionRecovery {
         for event in session.events {
             if event.kind == .reset {
                 cycle = Cycle()
+                bilateral = BilateralCycleEvidence()
                 previous = nil
                 continue
             }
             guard let sample = samples.next() else { throw PoseReplayError.invalidTimeline }
             if let previous {
                 let interval = event.seconds - previous.seconds
-                if interval <= 0 || interval > 0.25
+                if interval <= 0 || interval > continuity
                     || previous.pose?.aspectRatio != event.pose?.aspectRatio
-                    || previous.pose?.rotationAngle != event.pose?.rotationAngle { cycle = Cycle() }
+                    || previous.pose?.rotationAngle != event.pose?.rotationAngle {
+                    cycle = Cycle()
+                    bilateral = BilateralCycleEvidence()
+                }
             }
             previous = event
             if sample.counted { counts.append(event.seconds) }
             guard let pose = event.pose else {
                 cycle = Cycle()
+                bilateral = BilateralCycleEvidence()
                 continue
             }
-            if cycle.observe(pose, baseline: sample) {
+            let left = PoseReplayDepthAudit.observe(pose, side: .left)
+            let right = PoseReplayDepthAudit.observe(pose, side: .right)
+            let boundary = cycle.observe(pose, left: left, right: right, baseline: sample)
+            if boundary == .recovered {
+                supplemental.append(event.seconds)
+                counts.append(event.seconds)
+            }
+            if includingBilateralCycleEvidence, let confirmation = bilateral.observe(
+                pose, left: left, right: right, sample: sample, boundary: boundary
+            ) {
+                confirmations.append(confirmation)
                 supplemental.append(event.seconds)
                 counts.append(event.seconds)
             }
         }
         return PoseReplayRecoveryResult(
-            baseline: baseline, countedAtSeconds: counts, supplementalAtSeconds: supplemental
+            baseline: baseline, countedAtSeconds: counts,
+            bilateralConfirmations: confirmations, supplementalAtSeconds: supplemental
         )
     }
 
-    private struct Stance {
+    // Closed only after the original detector has had the opportunity to emit its event.
+    enum Boundary { case tracking, standing, recovered }
+
+    struct Stance {
         let left: Observation
         let right: Observation
         let time: TimeInterval
@@ -63,11 +95,11 @@ enum PoseReplayOcclusionRecovery {
                 else { continue }
                 let dx = point.horizontalPosition * pose.aspectRatio - initial.ankle.x
                 let dy = point.verticalPosition - initial.ankle.y
-                if hypot(dx, dy) > 0.20 * initial.hipAnkleHeight { return false }
+                if hypot(dx, dy) > supportTolerance * initial.hipAnkleHeight { return false }
             }
             guard let l, let r else { return true }
             let spanChange = (l.hipX - r.hipX) - (left.hipX - right.hipX)
-            return abs(spanChange) <= 0.20 * min(left.hipAnkleHeight, right.hipAnkleHeight)
+            return abs(spanChange) <= supportTolerance * min(left.hipAnkleHeight, right.hipAnkleHeight)
         }
     }
 
@@ -105,10 +137,10 @@ enum PoseReplayOcclusionRecovery {
                     self = Self()
                 }
             }
-            if holding, let lastVisible, time - lastVisible > 0.8 { self = Self() }
+            if holding, let lastVisible, time - lastVisible > maxOcclusion { self = Self() }
             guard let leg else {
                 if frames == requiredFrames - 1, selectedOther, baseline.movementReset,
-                   !strongWitness, otherDrop >= 0.34, let lastVisible,
+                   !strongWitness, otherDrop >= minimumDrop, let lastVisible,
                    time - lastVisible <= Self.delayedWitnessWindow {
                     delayedWitnessFrames = 0
                     perspectiveFrames = 0
@@ -116,7 +148,7 @@ enum PoseReplayOcclusionRecovery {
                 }
                 // Only suspend substantial evidence. Hidden frames never advance depth.
                 guard frames >= 2, strongWitness, holding || (selectedOther && baseline.movementReset),
-                      let lastVisible, time - lastVisible <= 0.8 else {
+                      let lastVisible, time - lastVisible <= maxOcclusion else {
                     self = Self()
                     return
                 }
@@ -128,7 +160,7 @@ enum PoseReplayOcclusionRecovery {
             lastVisible = time
             holding = false
             let drop = 1 - leg.hipAnkleHeight / upright.hipAnkleHeight
-            guard passesDepth(leg), drop >= 0.44 else {
+            guard passesDepth(leg), drop >= strongDrop else {
                 if !confirmed { self = Self() }
                 perspectiveFrames = 0
                 return
@@ -140,13 +172,13 @@ enum PoseReplayOcclusionRecovery {
             } else {
                 perspectiveFrames = 0
             }
-            if frames < requiredFrames - 1 || otherDrop >= 0.34 {
+            if frames < requiredFrames - 1 || otherDrop >= minimumDrop {
                 frames = min(requiredFrames, frames + 1)
             }
         }
     }
 
-    private static func passesDepth(_ leg: Observation) -> Bool {
+    static func passesDepth(_ leg: Observation) -> Bool {
         leg.kneeAngle <= thresholds.loweredThreshold
             && leg.normalizedThighHeight <= maximumThighHeight
     }
@@ -174,14 +206,14 @@ enum PoseReplayOcclusionRecovery {
             if confirmed { return leg != nil && other != nil }
             let elapsed = time - lastObserved
             let upright = side == .left ? stance.left : stance.right
-            guard elapsed <= 0.8, let leg, passesDepth(leg),
-                  1 - leg.hipAnkleHeight / upright.hipAnkleHeight >= 0.44 else { return false }
+            guard elapsed <= maxOcclusion, let leg, passesDepth(leg),
+                  1 - leg.hipAnkleHeight / upright.hipAnkleHeight >= strongDrop else { return false }
 
             let otherUpright = side == .left ? stance.right : stance.left
             let drop = other.map { 1 - $0.hipAnkleHeight / otherUpright.hipAnkleHeight } ?? 0
             let strong = other.map { isStrongWitness($0, drop: drop) } ?? false
             if awaitingFirstPair {
-                guard elapsed <= 0.25, strong else { return false }
+                guard elapsed <= continuity, strong else { return false }
                 awaitingFirstPair = false
             }
             // A missing opposite triad breaks the streak. It cannot supply a paired depth frame.
@@ -190,7 +222,7 @@ enum PoseReplayOcclusionRecovery {
                 witnessed = false
                 return true
             }
-            guard drop >= 0.34 else { return false }
+            guard drop >= minimumDrop else { return false }
             pairedFrames = min(requiredFrames, pairedFrames + 1)
             witnessed = witnessed || strong
             return true
@@ -198,7 +230,7 @@ enum PoseReplayOcclusionRecovery {
     }
 
     private static func isStrongWitness(_ leg: Observation, drop: Double) -> Bool {
-        drop >= 0.44 || (drop >= 0.34 && leg.kneeAngle <= thresholds.loweredThreshold)
+        drop >= strongDrop || (drop >= minimumDrop && leg.kneeAngle <= thresholds.loweredThreshold)
     }
 
     private struct Cycle {
@@ -210,34 +242,33 @@ enum PoseReplayOcclusionRecovery {
         var beforeDropout: BilateralDropout?
         var dropout: BilateralDropout?
 
-        mutating func observe(_ pose: PoseReplayPose, baseline: PoseReplayDepthSample) -> Bool {
-            let l = PoseReplayDepthAudit.observe(pose, side: .left)
-            let r = PoseReplayDepthAudit.observe(pose, side: .right)
-            if let stance, baseline.seconds - stance.time > 6 || !stance.feetAndHipsStable(pose, left: l, right: r) {
+        mutating func observe(_ pose: PoseReplayPose, left l: Observation?, right r: Observation?,
+                              baseline: PoseReplayDepthSample) -> Boundary {
+            if let stance, baseline.seconds - stance.time > maxCycle || !stance.feetAndHipsStable(pose, left: l, right: r) {
                 self = Self()
-                return false
+                return .tracking
             }
             guard !baseline.invalidGeometry else {
                 self = Self()
-                return false
+                return .tracking
             }
             baselineCounted = baselineCounted || baseline.counted
             if l == nil && r == nil {
                 guard let candidate = beforeDropout, candidate.hasVisibleSupport(in: pose) else {
                     self = Self()
-                    return false
+                    return .tracking
                 }
                 left = DepthEvidence()
                 right = DepthEvidence()
                 uprightFrames = 0
                 dropout = candidate
                 beforeDropout = nil
-                return false
+                return .tracking
             }
             if let stance, dropout != nil {
                 guard dropout?.recheck(left: l, right: r, stance: stance, at: baseline.seconds) == true else {
                     self = Self()
-                    return false
+                    return .tracking
                 }
             } else if let stance {
                 left.observe(l, relativeTo: stance.left, other: r, otherUpright: stance.right,
@@ -247,10 +278,10 @@ enum PoseReplayOcclusionRecovery {
                 beforeDropout = nil
                 if let l, let r, baseline.phase == .standing, !baselineCounted {
                     if baseline.selectedLeg == .right, left.frames == requiredFrames - 1,
-                       !passesDepth(r), 1 - r.hipAnkleHeight / stance.right.hipAnkleHeight >= 0.34 {
+                       !passesDepth(r), 1 - r.hipAnkleHeight / stance.right.hipAnkleHeight >= minimumDrop {
                         beforeDropout = BilateralDropout(side: .left, lastObserved: baseline.seconds)
                     } else if baseline.selectedLeg == .left, right.frames == requiredFrames - 1,
-                              !passesDepth(l), 1 - l.hipAnkleHeight / stance.left.hipAnkleHeight >= 0.34 {
+                              !passesDepth(l), 1 - l.hipAnkleHeight / stance.left.hipAnkleHeight >= minimumDrop {
                         beforeDropout = BilateralDropout(side: .right, lastObserved: baseline.seconds)
                     }
                 }
@@ -258,13 +289,13 @@ enum PoseReplayOcclusionRecovery {
 
             guard let l, let r, l.kneeAngle >= thresholds.standingThreshold,
                   r.kneeAngle >= thresholds.standingThreshold, l.hipAnkleHeight > 0, r.hipAnkleHeight > 0,
-                  stance.map({ l.hipAnkleHeight >= 0.80 * $0.left.hipAnkleHeight
-                      && r.hipAnkleHeight >= 0.80 * $0.right.hipAnkleHeight }) ?? true else {
+                  stance.map({ l.hipAnkleHeight >= standingHeight * $0.left.hipAnkleHeight
+                      && r.hipAnkleHeight >= standingHeight * $0.right.hipAnkleHeight }) ?? true else {
                 uprightFrames = 0
-                return false
+                return .tracking
             }
             uprightFrames = min(requiredFrames, uprightFrames + 1)
-            guard uprightFrames == requiredFrames, baseline.phase == .standing else { return false }
+            guard uprightFrames == requiredFrames, baseline.phase == .standing else { return .tracking }
             // A confirmed baseline return owns this entire excursion, even if it came earlier.
             let recovered = !baselineCounted && ((left.confirmed && left.explainsMiss)
                 || (right.confirmed && right.explainsMiss) || dropout?.confirmed == true)
@@ -274,7 +305,7 @@ enum PoseReplayOcclusionRecovery {
             beforeDropout = nil
             dropout = nil
             baselineCounted = false
-            return recovered
+            return recovered ? .recovered : .standing
         }
     }
 }
