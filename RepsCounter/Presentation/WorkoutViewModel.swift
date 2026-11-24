@@ -263,6 +263,8 @@ final class WorkoutViewModel {
     private let maximumPoseInterval: TimeInterval = 0.25
     private var saveState: WorkoutSaveState = .notSaved
 
+    private let telemetry: PipelineTelemetry?
+
     let targetRepetitions = 12
     let targetSets = 4
     let restDuration = 60
@@ -271,8 +273,10 @@ final class WorkoutViewModel {
         persistence: any WorkoutStoring,
         timeSource: (any WorkoutTimeSource)? = nil,
         cameraReady: Bool = true,
-        startsAutomatically: Bool = true
+        startsAutomatically: Bool = true,
+        telemetry: PipelineTelemetry? = PipelineTelemetry.active
     ) {
+        self.telemetry = telemetry
         let source = timeSource ?? SystemWorkoutTimeSource()
         self.persistence = persistence
         self.timeSource = source
@@ -311,20 +315,28 @@ final class WorkoutViewModel {
     }
     #endif
 
-    func process(_ pose: BodyPose?) {
-        guard !isPaused, !isFinished else { return }
+    func process(_ pose: BodyPose?, trace: PipelineTelemetry.Frame? = nil) {
+        guard !isPaused, !isFinished else {
+            trace?.mark(.skipped, reason: isPaused ? "paused" : "finished")
+            return
+        }
         let currentTime = timeSource.currentTime
         let activeTime = activeDuration(at: currentTime)
         advanceRest(at: activeTime)
-        guard restDeadline == nil else { return }
+        guard restDeadline == nil else { trace?.mark(.skipped, reason: "rest"); return }
+        trace?.mark(pose == nil ? .processedEmpty : .processedPose)
         #if DEBUG
         depthAttemptTracker.recordPose(at: currentTime)
         #endif
-        expireTracking(at: currentTime)
+        expireTracking(at: currentTime, trace: trace)
         #if DEBUG
-        poseReplayRecorder.append(pose, at: currentTime)
+        poseReplayRecorder.append(pose, at: currentTime, trace: trace)
         #endif
+        let previousLeg = analyzer.selectedLeg
+        let previousPhase = counter.phase
+        let analyzerSpan = trace?.begin("PoseAnalyzer", .analyzerStart)
         let analysis = analyzer.analyze(pose)
+        trace?.end(analyzerSpan, .analyzerEnd)
         hasPose = analysis.smoothedAngle != nil
         lastPoseTime = hasPose ? currentTime : nil
         #if DEBUG
@@ -346,7 +358,10 @@ final class WorkoutViewModel {
             }
         }
         #endif
-        if analysis.requiresMovementReset { counter.resetMovement() }
+        if analysis.requiresMovementReset {
+            trace?.mark(.reset, reason: analysis.selectedLeg == nil ? "measurementLost" : "legChanged")
+            counter.resetMovement()
+        }
         #if DEBUG
         latestAnalysis = analysis
         if analysis.requiresMovementReset {
@@ -358,11 +373,16 @@ final class WorkoutViewModel {
         let phaseBefore = counter.phase
         let framesBefore = counter.consecutiveFrames
         #endif
+        let phaseAtFSMEntry = counter.phase
+        let fsmSpan = trace?.begin("FSM", .fsmStart)
         let counted = counter.process(
             measuredAngle: analysis.measuredAngle,
             smoothedAngle: analysis.smoothedAngle,
             hipKneeHeightRatio: analysis.hipKneeHeightRatio
         )
+        trace?.end(fsmSpan, .decision, decision: .init(previousLeg: previousLeg, phaseBeforeAnalysis: previousPhase,
+                                                       before: phaseAtFSMEntry, analysis: analysis,
+                                                       counter: counter, counted: counted))
         #if DEBUG
         depthAttemptTracker.observe(
             analysis: analysis,
@@ -381,15 +401,15 @@ final class WorkoutViewModel {
             if counter.repetitions >= targetRepetitions {
                 completedSets += 1
                 if completedSets == targetSets {
-                    finish()
+                    finish(trace: trace)
                     return
                 }
                 restDeadline = activeTime + TimeInterval(restDuration)
                 counter.reset()
-                resetTracking(at: currentTime)
+                resetTracking(at: currentTime, reason: "setCompleted", trace: trace)
             }
         }
-        publish(activeTime: activeTime)
+        publish(activeTime: activeTime, trace: trace)
     }
 
     func togglePause() {
@@ -397,12 +417,12 @@ final class WorkoutViewModel {
         else { pause() }
     }
 
-    func observePose(_ pose: BodyPose?) {
+    func observePose(_ pose: BodyPose?, trace: PipelineTelemetry.Frame? = nil) {
         guard isPaused, !isFinished else { return }
         let detected = pose != nil
         guard hasPose != detected else { return }
         hasPose = detected
-        publish()
+        publish(trace: trace)
     }
 
     func setCameraReady(_ ready: Bool) {
@@ -411,13 +431,15 @@ final class WorkoutViewModel {
             #if DEBUG
             depthAttemptTracker.interrupt(.cameraUnavailable)
             #endif
-            if isPaused || isFinished { resetTracking(at: timeSource.currentTime) }
-            else { pause() }
+            if isPaused || isFinished { resetTracking(at: timeSource.currentTime, reason: "cameraUnavailable") }
+            else { pause(reason: "cameraUnavailable") }
         }
         publish()
     }
 
-    func pause() {
+    func pause() { pause(reason: "pause") }
+
+    private func pause(reason: String) {
         guard !isFinished, !isPaused else { return }
         let currentTime = timeSource.currentTime
         let activeTime = activeDuration(at: currentTime)
@@ -428,7 +450,7 @@ final class WorkoutViewModel {
         #if DEBUG
         depthAttemptTracker.interrupt(.paused)
         #endif
-        resetTracking(at: currentTime)
+        resetTracking(at: currentTime, reason: reason)
         stopUpdates()
         publish(activeTime: activeTime)
     }
@@ -440,14 +462,14 @@ final class WorkoutViewModel {
             hasStarted = true
         }
         let currentTime = timeSource.currentTime
-        resetTracking(at: currentTime)
+        resetTracking(at: currentTime, reason: "resume")
         activeStartedAt = currentTime
         isPaused = false
         startUpdates()
         publish()
     }
 
-    func finish() {
+    func finish(trace: PipelineTelemetry.Frame? = nil) {
         guard !isFinished else { return }
         let activeTime = activeDuration(at: timeSource.currentTime)
         advanceRest(at: activeTime)
@@ -464,10 +486,10 @@ final class WorkoutViewModel {
         depthAttemptTracker.interrupt(.finished)
         #endif
         stopUpdates()
-        retrySave()
+        retrySave(trace: trace)
     }
 
-    func retrySave() {
+    func retrySave(trace: PipelineTelemetry.Frame? = nil) {
         guard let finishedSummary else { return }
         switch saveState {
         case .saving, .saved:
@@ -477,14 +499,14 @@ final class WorkoutViewModel {
         }
 
         saveState = .saving
-        publish()
+        publish(trace: trace)
         do {
             try persistence.save(finishedSummary)
             saveState = .saved
         } catch {
             saveState = .failed("Не удалось сохранить тренировку: \(error.localizedDescription)")
         }
-        publish()
+        publish(trace: trace)
     }
 
     var elapsedSeconds: Int {
@@ -501,7 +523,7 @@ final class WorkoutViewModel {
         publish(activeTime: activeTime)
     }
 
-    private func expireTracking(at currentTime: TimeInterval) {
+    private func expireTracking(at currentTime: TimeInterval, trace: PipelineTelemetry.Frame? = nil) {
         guard let lastPoseTime, currentTime - lastPoseTime > maximumPoseInterval else { return }
         #if DEBUG
         if counter.phase != .seekingStanding { observationGapCount += 1 }
@@ -511,7 +533,7 @@ final class WorkoutViewModel {
             observedGap: currentTime - lastPoseTime
         )
         #endif
-        resetTracking(at: currentTime)
+        resetTracking(at: currentTime, reason: "observationGap", trace: trace)
         #if DEBUG
         trackingReset = .observationGap
         #endif
@@ -527,9 +549,10 @@ final class WorkoutViewModel {
     }
     #endif
 
-    private func resetTracking(at timestamp: TimeInterval) {
+    private func resetTracking(at timestamp: TimeInterval, reason: String, trace: PipelineTelemetry.Frame? = nil) {
+        (trace?.recorder ?? telemetry)?.record(.reset, frame: trace?.identity, reason: reason)
         #if DEBUG
-        poseReplayRecorder.markReset(at: timestamp)
+        poseReplayRecorder.markReset(at: timestamp, trace: trace)
         depthAttemptTracker.interrupt(.trackingReset)
         depthAttemptTracker.resetPoseClock()
         #endif
@@ -575,7 +598,9 @@ final class WorkoutViewModel {
         updateTask = nil
     }
 
-    private func publish(activeTime: TimeInterval? = nil) {
+    private func publish(activeTime: TimeInterval? = nil, trace: PipelineTelemetry.Frame? = nil) {
+        let span = trace?.begin("State UI submit", .stateUIStart)
+        defer { trace?.end(span, .stateUIEnd) }
         let currentDuration = activeTime ?? activeDuration(at: timeSource.currentTime)
         let remainingRest = restDeadline.map { max(0, Int(ceil($0 - currentDuration))) } ?? 0
         #if DEBUG

@@ -36,7 +36,7 @@ final class CameraService: Sendable {
     }
 
     var onStateChange: ((CameraState) -> Void)?
-    var onPose: ((BodyPose?) -> Void)?
+    var onFrame: ((CameraFrame) -> Void)?
     private(set) var state: CameraState = .idle
     private(set) var position: CameraPosition = .front
     private(set) var rotationAngle: CGFloat = 90
@@ -49,6 +49,7 @@ final class CameraService: Sendable {
         }
     }
 
+    private let telemetry: PipelineTelemetry?
     private let permission: any CameraAuthorizing
     private let capture: any CameraCapturing
     private let frameTime: @MainActor () -> ContinuousClock.Instant
@@ -63,8 +64,10 @@ final class CameraService: Sendable {
     init(
         permission: (any CameraAuthorizing)? = nil,
         capture: any CameraCapturing = CameraCapture(),
+        telemetry: PipelineTelemetry? = PipelineTelemetry.active,
         frameTime: @escaping @MainActor () -> ContinuousClock.Instant = { .now }
     ) {
+        self.telemetry = telemetry
         self.permission = permission ?? CameraPermission()
         self.capture = capture
         self.frameTime = frameTime
@@ -232,18 +235,44 @@ final class CameraService: Sendable {
     private func setState(_ state: CameraState) {
         guard self.state != state else { return }
         self.state = state
+        telemetry?.record(.lifecycle, reason: "\(state) generation=\(generation) position=\(position)")
         onStateChange?(state)
     }
 
     func receive(_ frame: CameraFrame) {
-        guard state == .running, frame.generation == generation, frame.position == position,
-              frame.rotationAngle == rotationAngle,
-              frame.pose.map({ $0.rotationAngle == frame.rotationAngle }) ?? true,
-              frame.capturedAt <= frameTime(),
-              frame.capturedAt.duration(to: frameTime()) <= .milliseconds(250),
-              lastFrameTime.map({ frame.capturedAt > $0 }) ?? true else { return }
+        let received = frame.trace?.mark(.serviceReceive, since: frame.enqueuedAt)
+        guard state == .running else {
+            frame.trace?.mark(.notRunning, since: received)
+            return
+        }
+        guard frame.generation == generation else {
+            frame.trace?.mark(.wrongGeneration, since: received)
+            return
+        }
+        guard frame.position == position, frame.rotationAngle == rotationAngle,
+              frame.pose.map({ $0.rotationAngle == frame.rotationAngle }) ?? true else {
+            frame.trace?.mark(.wrongGeometry, since: received)
+            return
+        }
+        guard frame.capturedAt <= frameTime() else {
+            frame.trace?.mark(.futureFrame, since: received)
+            return
+        }
+        guard frame.capturedAt.duration(to: frameTime()) <= .milliseconds(250) else {
+            frame.trace?.mark(.stale, since: received)
+            return
+        }
+        guard lastFrameTime.map({ frame.capturedAt > $0 }) ?? true else {
+            frame.trace?.mark(.outOfOrder, since: received)
+            return
+        }
         lastFrameTime = frame.capturedAt
-        onPose?(frame.pose)
+        guard let onFrame else {
+            frame.trace?.mark(.skipped, since: received, reason: "noConsumer")
+            return
+        }
+        frame.trace?.mark(frame.pose == nil ? .deliveredEmpty : .deliveredPose, since: received)
+        onFrame(frame)
     }
 
     func receive(_ event: CameraSessionEvent) {

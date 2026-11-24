@@ -74,6 +74,7 @@ enum PoseReplayEventKind: String, Codable {
 }
 
 struct PoseReplayEvent: Codable {
+    var pipelineFrameID: UInt64? = nil
     let seconds: TimeInterval
     let kind: PoseReplayEventKind
     let pose: PoseReplayPose?
@@ -93,6 +94,7 @@ struct PoseReplayInitialState: Codable {
 }
 
 struct PoseReplaySession: Codable {
+    var pipelineTraceID: UUID? = nil
     let schemaVersion: Int
     var events: [PoseReplayEvent]
     var annotations: [PoseReplayAnnotation]
@@ -153,12 +155,12 @@ struct PoseReplayRecorder {
         return true
     }
 
-    mutating func append(_ pose: BodyPose?, at timestamp: TimeInterval) {
-        append(kind: .pose, pose: pose, at: timestamp)
+    mutating func append(_ pose: BodyPose?, at timestamp: TimeInterval, trace: PipelineTelemetry.Frame? = nil) {
+        append(kind: .pose, pose: pose, at: timestamp, trace: trace)
     }
 
-    mutating func markReset(at timestamp: TimeInterval) {
-        append(kind: .reset, pose: nil, at: timestamp)
+    mutating func markReset(at timestamp: TimeInterval, trace: PipelineTelemetry.Frame? = nil) {
+        append(kind: .reset, pose: nil, at: timestamp, trace: trace)
     }
 
     mutating func stop() {
@@ -174,12 +176,15 @@ struct PoseReplayRecorder {
     private mutating func append(
         kind: PoseReplayEventKind,
         pose: BodyPose?,
-        at timestamp: TimeInterval
+        at timestamp: TimeInterval,
+        trace: PipelineTelemetry.Frame? = nil
     ) {
         guard isRecording, let startedAt, timestamp.isFinite,
               timestamp >= startedAt, session.events.count < maximumEvents else { return }
+        if let trace { session.pipelineTraceID = trace.recorder.traceID }
         session.events.append(
             PoseReplayEvent(
+                pipelineFrameID: trace?.identity.id,
                 seconds: timestamp - startedAt,
                 kind: kind,
                 pose: pose.map(PoseReplayPose.init(from:))
@@ -189,7 +194,7 @@ struct PoseReplayRecorder {
 }
 
 enum PoseReplayRunner {
-    static func replay(_ session: PoseReplaySession) throws -> PoseReplayResult {
+    static func replay(_ session: PoseReplaySession, telemetry: PipelineTelemetry? = nil) throws -> PoseReplayResult {
         try validate(session)
         let analyzer = PoseAnalyzer(
             replayLeg: session.initialState?.selectedLeg,
@@ -210,25 +215,39 @@ enum PoseReplayRunner {
 
         for event in session.events {
             if event.kind == .reset {
+                telemetry?.record(.reset, reason: "replayReset", replayControlSeconds: event.seconds)
                 analyzer.reset()
                 counter.resetMovement()
                 lastValidTimestamp = nil
                 continue
             }
+            let trace = telemetry?.frame(generation: 0, camera: "replay", pts: nil,
+                                         captureHostSeconds: nil, stage: .replayInput, replaySeconds: event.seconds)
             if session.schemaVersion == 1, let lastValidTimestamp, event.seconds - lastValidTimestamp > 0.25 {
+                trace?.mark(.reset, reason: "observationGap")
                 analyzer.reset()
                 counter.resetMovement()
             }
             let pose = event.pose?.restore()
+            let previousLeg = analyzer.selectedLeg
+            let previousPhase = counter.phase
+            let analyzerSpan = trace?.begin("PoseAnalyzer", .analyzerStart)
             let analysis = analyzer.analyze(pose)
+            trace?.end(analyzerSpan, .analyzerEnd)
             if analysis.requiresMovementReset {
+                trace?.mark(.reset, reason: analysis.selectedLeg == nil ? "measurementLost" : "legChanged")
                 counter.resetMovement()
             }
+            let phaseAtFSMEntry = counter.phase
+            let fsmSpan = trace?.begin("FSM", .fsmStart)
             let counted = counter.process(
                 measuredAngle: analysis.measuredAngle,
                 smoothedAngle: analysis.smoothedAngle,
                 hipKneeHeightRatio: analysis.hipKneeHeightRatio
             )
+            trace?.end(fsmSpan, .decision, decision: .init(previousLeg: previousLeg, phaseBeforeAnalysis: previousPhase,
+                                                           before: phaseAtFSMEntry, analysis: analysis,
+                                                           counter: counter, counted: counted))
             if counted {
                 countedAtSeconds.append(event.seconds)
             }
@@ -480,8 +499,8 @@ private struct PoseReplayIndependentLeg {
 }
 
 enum PoseReplayBilateralRunner {
-    static func replay(_ session: PoseReplaySession) throws -> PoseReplayBilateralResult {
-        let baseline = try PoseReplayRunner.replay(session)
+    static func replay(_ session: PoseReplaySession, telemetry: PipelineTelemetry? = nil) throws -> PoseReplayBilateralResult {
+        let baseline = try PoseReplayRunner.replay(session, telemetry: telemetry)
         var leftTracker = PoseReplayIndependentLeg(leg: .left)
         var rightTracker = PoseReplayIndependentLeg(leg: .right)
         var candidates: [PoseReplayLegCount] = []

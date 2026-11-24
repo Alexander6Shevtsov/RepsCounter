@@ -12,6 +12,61 @@ import os
 @testable import RepsCounter
 
 final class CameraLifecycleTests: XCTestCase {
+    func testNewestStreamChargesReplacementToDisplacedFrameAndReportsTermination() async {
+        let trace = PipelineTelemetry()
+        let stream = AsyncStream<CameraFrame>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        func frame() -> CameraFrame {
+            let token = trace.frame(generation: 1, camera: "front", pts: nil, captureHostSeconds: nil)
+            return CameraFrame(generation: 1, pose: nil, capturedAt: .now, trace: token,
+                               enqueuedAt: token.mark(.streamEnqueue))
+        }
+        let first = frame()
+        first.yield(to: stream.continuation)
+        let second = frame()
+        second.yield(to: stream.continuation)
+        var iterator = stream.stream.makeAsyncIterator()
+        let delivered = await iterator.next()
+        XCTAssertEqual(delivered?.trace?.identity.id, second.trace?.identity.id)
+        stream.continuation.finish()
+        let third = frame()
+        third.yield(to: stream.continuation)
+        let events = trace.snapshot().events
+        XCTAssertEqual(events.filter { $0.stage == .streamReplaced }.compactMap { $0.frame?.id }, [first.trace!.identity.id])
+        XCTAssertEqual(events.filter { $0.stage == .streamTerminated }.compactMap { $0.frame?.id }, [third.trace!.identity.id])
+    }
+
+    @MainActor
+    func testTraceSeparatesStaleGenerationAndDeliveryDuringSwitch() async {
+        let trace = PipelineTelemetry()
+        let fixture = CameraFixture(telemetry: trace)
+        let camera = fixture.camera
+        var delivered: [UInt64] = []
+        camera.onFrame = { if let id = $0.trace?.identity.id { delivered.append(id) } }
+        await camera.start().value
+        let frontGeneration = fixture.capture.currentGeneration
+        func submit(_ generation: UInt64, back: Bool, age: Duration) -> UInt64 {
+            let token = trace.frame(generation: generation, camera: back ? "back" : "front", pts: nil, captureHostSeconds: nil)
+            camera.receive(CameraFrame(generation: generation, pose: nil, capturedAt: fixture.currentFrameTime - age,
+                                       position: back ? .back : .front, rotationAngle: camera.rotationAngle,
+                                       trace: token, enqueuedAt: token.mark(.streamEnqueue)))
+            return token.identity.id
+        }
+        let stale = submit(frontGeneration, back: false, age: .milliseconds(251))
+        let front = submit(frontGeneration, back: false, age: .milliseconds(100))
+        let reordered = submit(frontGeneration, back: false, age: .milliseconds(101))
+        await camera.switchCamera().value
+        let old = submit(frontGeneration, back: false, age: .zero)
+        let back = submit(fixture.capture.currentGeneration, back: true, age: .zero)
+        XCTAssertEqual(delivered, [front, back])
+        let events = trace.snapshot().events
+        for (stage, id) in [(PipelineTelemetry.Stage.stale, stale), (.outOfOrder, reordered), (.wrongGeneration, old)] {
+            XCTAssertEqual(events.filter { $0.stage == stage }.compactMap { $0.frame?.id }, [id])
+        }
+        XCTAssertEqual(events.filter { $0.stage == .deliveredEmpty }.compactMap { $0.frame?.id }, delivered)
+        XCTAssertTrue(events.contains { $0.stage == .lifecycle && $0.reason?.contains("switching") == true })
+        await camera.finish().value
+    }
+
     @MainActor
     func testAuthorizedStartMakesCameraReadyExactlyOnce() async {
         let fixture = CameraFixture()
@@ -210,7 +265,7 @@ final class CameraLifecycleTests: XCTestCase {
         let fixture = CameraFixture()
         await fixture.camera.start().value
         let received = XCTestExpectation(description: "Pose value delivered")
-        fixture.camera.onPose = { _ in received.fulfill() }
+        fixture.camera.onFrame = { _ in received.fulfill() }
         fixture.capture.frameContinuation.yield(fixture.frame(generation: 1))
         let result = await XCTWaiter.fulfillment(of: [received], timeout: 3)
         XCTAssertEqual(result, .completed)
@@ -262,7 +317,7 @@ final class CameraLifecycleTests: XCTestCase {
     func testFramesFromStoppedAndPreviousGenerationsAreIgnored() async {
         let fixture = CameraFixture()
         var deliveredFrames = 0
-        fixture.camera.onPose = { _ in deliveredFrames += 1 }
+        fixture.camera.onFrame = { _ in deliveredFrames += 1 }
         await fixture.camera.start().value
         fixture.camera.receive(fixture.frame(generation: 1))
         XCTAssertEqual(deliveredFrames, 1)
@@ -279,7 +334,7 @@ final class CameraLifecycleTests: XCTestCase {
     func testStaleOutOfOrderAndFutureFramesAreIgnored() async {
         let fixture = CameraFixture()
         var deliveredFrames = 0
-        fixture.camera.onPose = { _ in deliveredFrames += 1 }
+        fixture.camera.onFrame = { _ in deliveredFrames += 1 }
         await fixture.camera.start().value
         fixture.camera.receive(fixture.frame(generation: 1, offset: .seconds(-1)))
         fixture.camera.receive(fixture.frame(generation: 1, offset: .seconds(1)))
@@ -294,7 +349,7 @@ final class CameraLifecycleTests: XCTestCase {
     func testFinishIsTerminalAndDropsAllFramesAndEvents() async {
         let fixture = CameraFixture()
         var deliveredFrames = 0
-        fixture.camera.onPose = { _ in deliveredFrames += 1 }
+        fixture.camera.onFrame = { _ in deliveredFrames += 1 }
         await fixture.camera.start().value
         await fixture.camera.finish().value
         await fixture.camera.start().value
@@ -389,10 +444,10 @@ final class CameraFixture {
     let camera: CameraService
     let currentFrameTime = ContinuousClock.now
 
-    init(authorization: CameraAuthorization = .authorized) {
+    init(authorization: CameraAuthorization = .authorized, telemetry: PipelineTelemetry? = nil) {
         permission = ControlledCameraPermission(status: authorization)
         let frameTime = currentFrameTime
-        camera = CameraService(permission: permission, capture: capture, frameTime: { frameTime })
+        camera = CameraService(permission: permission, capture: capture, telemetry: telemetry, frameTime: { frameTime })
     }
 
     func frame(generation: UInt64, offset: Duration = .zero, pose: BodyPose? = nil, position: CameraPosition = .front, rotationAngle: CGFloat = 90) -> CameraFrame {

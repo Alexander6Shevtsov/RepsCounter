@@ -62,7 +62,7 @@ final class WorkoutDashboardView: UIView {
     private let guidanceLabel = WorkoutAppearance.label("workoutGuidance", style: .subheadline)
     private let pauseButton = UIButton(type: .system)
     private let finishButton = UIButton(type: .system)
-    private let historyButton = UIButton(type: .system)
+    let historyButton = UIButton(type: .system)
     private let switchButton = UIButton(type: .system)
     private var narrowCards: NSLayoutConstraint?
     private var wideCards: NSLayoutConstraint?

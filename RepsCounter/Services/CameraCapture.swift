@@ -39,6 +39,8 @@ struct CameraFrame: Sendable {
 	let generation: UInt64
 	let pose: BodyPose?
 	let capturedAt: ContinuousClock.Instant
+	let trace: PipelineTelemetry.Frame?
+	let enqueuedAt: Double?
 	let position: CameraPosition
 	let rotationAngle: CGFloat
 
@@ -47,14 +49,30 @@ struct CameraFrame: Sendable {
 		pose: BodyPose?,
 		capturedAt: ContinuousClock.Instant,
 		position: CameraPosition = .front,
-		rotationAngle: CGFloat = 90
+		rotationAngle: CGFloat = 90,
+		trace: PipelineTelemetry.Frame? = nil,
+		enqueuedAt: Double? = nil
 	) {
 		self.generation = generation
 		self.pose = pose
 		self.capturedAt = capturedAt
+		self.trace = trace
+		self.enqueuedAt = enqueuedAt
 		self.position = position
 		self.rotationAngle = rotationAngle
 	}
+}
+
+extension CameraFrame {
+    func yield(to continuation: AsyncStream<CameraFrame>.Continuation) {
+        switch continuation.yield(self) {
+        case .dropped(let displaced):
+            displaced.trace?.mark(.streamReplaced, since: displaced.enqueuedAt)
+        case .terminated:
+            trace?.mark(.streamTerminated)
+        default: break
+        }
+    }
 }
 
 enum CameraSessionEvent: Sendable, Equatable {
@@ -158,6 +176,7 @@ private final class CameraFrameProcessor: NSObject,
 		var previousAnalysisTime: ContinuousClock.Instant?
 	}
 
+	private let sessionClock: CMClock?
 	private let generation: UInt64
 	private let position: CameraPosition
 	private let rotationAngle: CGFloat
@@ -165,11 +184,13 @@ private final class CameraFrameProcessor: NSObject,
 	private let processing = OSAllocatedUnfairLock(uncheckedState: FrameState())
 
 	init(
+		sessionClock: CMClock?,
 		generation: UInt64,
 		position: CameraPosition,
 		rotationAngle: CGFloat,
 		continuation: AsyncStream<CameraFrame>.Continuation
 	) {
+		self.sessionClock = sessionClock
 		self.generation = generation
 		self.position = position
 		self.rotationAngle = rotationAngle
@@ -180,35 +201,63 @@ private final class CameraFrameProcessor: NSObject,
 		processing.withLock { state in state.isActive = false }
 	}
 
+	private func trace(_ buffer: CMSampleBuffer, stage: PipelineTelemetry.Stage,
+					   delegateTime: Double?, reason: String? = nil) -> PipelineTelemetry.Frame? {
+		guard let recorder = PipelineTelemetry.active else { return nil }
+		let pts = CMSampleBufferGetPresentationTimeStamp(buffer)
+		let host = sessionClock.map { $0.convertTime(pts, to: CMClock.hostTimeClock).seconds }
+		return recorder.frame(generation: generation, camera: position == .front ? "front" : "back",
+							  pts: .init(value: pts.value, timescale: pts.timescale,
+										 epoch: pts.epoch, flags: pts.flags.rawValue),
+							  captureHostSeconds: host.flatMap { $0.isFinite ? $0 : nil },
+							  stage: stage, reason: reason, delegateHostSeconds: delegateTime)
+	}
+
+	func captureOutput(_ output: AVCaptureOutput, didDrop sampleBuffer: CMSampleBuffer,
+					   from connection: AVCaptureConnection) {
+		guard PipelineTelemetry.active != nil else { return }
+		let entered = PipelineTelemetry.hostNow()
+		let reason = CMGetAttachment(sampleBuffer, key: kCMSampleBufferAttachmentKey_DroppedFrameReason,
+									 attachmentModeOut: nil) as? String
+		_ = trace(sampleBuffer, stage: .avDropped, delegateTime: entered, reason: reason)
+	}
+
 	func captureOutput(
 		_ output: AVCaptureOutput,
 		didOutput sampleBuffer: CMSampleBuffer,
 		from connection: AVCaptureConnection
 	) {
+		let entered = PipelineTelemetry.active == nil ? nil : PipelineTelemetry.hostNow()
 		processing.withLockUnchecked { state in
 			let capturedAt = ContinuousClock.now
-			guard state.isActive else { return }
+			let frameTrace = trace(sampleBuffer, stage: .cameraInput, delegateTime: entered)
+			guard state.isActive else { frameTrace?.mark(.inactive); return }
 			if let previousTime = state.previousAnalysisTime,
 				previousTime.duration(to: capturedAt) < .milliseconds(80)
 			{
+				frameTrace?.mark(.throttled)
 				return
 			}
 			state.previousAnalysisTime = capturedAt
 			guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer)
-			else { return }
+			else { frameTrace?.mark(.missingBuffer); return }
+			let visionStart = frameTrace?.begin("Vision", .visionStart, since: frameTrace?.inputTime)
 			let pose = state.detector.detect(
 				pixelBuffer: pixelBuffer,
-				rotationAngle: rotationAngle
+				rotationAngle: rotationAngle, trace: frameTrace
 			)
-			continuation.yield(
-				CameraFrame(
-					generation: generation,
-					pose: pose,
-					capturedAt: capturedAt,
-					position: position,
-					rotationAngle: rotationAngle
-				)
+			frameTrace?.end(visionStart, .visionEnd)
+			let enqueue = frameTrace?.mark(.streamEnqueue)
+			let frame = CameraFrame(
+				generation: generation,
+				pose: pose,
+				capturedAt: capturedAt,
+				position: position,
+				rotationAngle: rotationAngle,
+				trace: frameTrace,
+				enqueuedAt: enqueue
 			)
+			frame.yield(to: continuation)
 		}
 	}
 }
@@ -284,6 +333,7 @@ actor CameraCapture: CameraCapturing {
 			frameQueue.sync {}
 			try Task.checkCancellation()
 			let processor = CameraFrameProcessor(
+				sessionClock: PipelineTelemetry.active == nil ? nil : session.synchronizationClock,
 				generation: generation,
 				position: position,
 				rotationAngle: rotationAngle,

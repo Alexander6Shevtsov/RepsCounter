@@ -26,12 +26,24 @@ final class WorkoutCameraCoordinator {
         self.viewModel = viewModel
         self.camera = camera
         camera.onStateChange = { [weak self] state in self?.cameraStateChanged(state) }
-        camera.onPose = { [weak self] pose in
-            guard let self, self.isForeground else { return }
-            if self.viewModel.isPaused { self.viewModel.observePose(pose) }
-            else { self.viewModel.process(pose) }
+        camera.onFrame = { [weak self] frame in
+            let pose = frame.pose
+            guard let self, self.isForeground else {
+                frame.trace?.mark(.skipped, reason: "inactiveCoordinator")
+                return
+            }
+            if self.viewModel.isPaused {
+                frame.trace?.mark(.skipped, reason: "paused")
+                self.viewModel.observePose(pose, trace: frame.trace)
+            } else {
+                self.viewModel.process(pose, trace: frame.trace)
+            }
             if self.viewModel.finishedSummary != nil { self.camera.finish() }
-            else { self.onPose?(pose) }
+            else if let onPose = self.onPose {
+                let start = frame.trace?.begin("Overlay UI submit", .overlayStart)
+                onPose(pose)
+                frame.trace?.end(start, .overlayEnd)
+            }
         }
     }
 

@@ -45,7 +45,7 @@ struct PoseAnalysis {
 
 final class PoseAnalyzer {
     private var smoothedAngle: Double?
-    private var selectedLeg: BodyLeg?
+    private(set) var selectedLeg: BodyLeg?
 
     func analyze(_ pose: BodyPose?) -> PoseAnalysis {
         let leftMeasurement = measure(pose, joints: [.leftHip, .leftKnee, .leftAnkle])
