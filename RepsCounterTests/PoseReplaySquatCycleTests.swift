@@ -4,11 +4,12 @@ import XCTest
 
 final class PoseReplaySquatCycleTests: XCTestCase {
     private enum Posture {
-        case upright, mid, low, perspective, shallow, borderline, supportOnly
+        case upright, nearStanding, mid, low, perspective, shallow, borderline, supportOnly
 
         var geometry: (hip: Double, knee: Double, forward: Double) {
             switch self {
             case .upright: return (0.80, 0.50, 0)
+            case .nearStanding: return (0.75, 0.50, 0.065)
             case .mid: return (0.64, 0.47, 0.06)
             case .low: return (0.47, 0.48, 0.14)
             case .perspective: return (0.57, 0.50, 0.13)
@@ -126,6 +127,96 @@ final class PoseReplaySquatCycleTests: XCTestCase {
 
     private var confirmedBottom: [PoseReplayEvent] {
         start + [frame(0.30, .low, .low), frame(0.40, .low, .low)]
+    }
+
+    private var reacquiredAscent: [PoseReplayEvent] {
+        confirmedBottom + [frame(0.50, .shallow, nil), frame(0.60, .mid, .perspective)]
+    }
+
+    func testReappearingLegDuringContinuousAscentRequiresBilateralStanding() throws {
+        let events = reacquiredAscent + [frame(0.70, .upright, .mid), frame(0.80, .upright, .nearStanding),
+                                         frame(0.90, .upright, .upright), frame(1.00, .upright, .upright)]
+        let steps = run(events)
+        XCTAssertEqual(steps[5].phase, .returning)
+        XCTAssertEqual(steps[6].reason, .reacquiredDuringAscent)
+        XCTAssertEqual(try PoseReplaySquatCycle.replay(session(events)), [1.00])
+        for n in events.indices {
+            XCTAssertEqual(run(Array(events.prefix(n + 1))), Array(steps.prefix(n + 1)))
+        }
+    }
+
+    func testMirroringTheReappearingLegPreservesReturnDecisions() throws {
+        let left = confirmedBottom + [frame(0.50, nil, .shallow), frame(0.60, .perspective, .mid),
+                                      frame(0.70, .mid, .nearStanding)] + finish.dropFirst()
+        let right = reacquiredAscent + [frame(0.70, .nearStanding, .mid)] + finish.dropFirst()
+        XCTAssertEqual(run(left), run(right))
+        XCTAssertEqual(try PoseReplaySquatCycle.replay(session(left)), [1.06])
+    }
+
+    func testSecondDescentOfContinuouslyVisibleLegCancelsReturn() {
+        let prefix = confirmedBottom + [frame(0.50, .mid, nil)]
+        for secondDescent in [frame(0.60, .low, nil), frame(0.60, .low, .perspective)] {
+            let steps = run(prefix + [secondDescent, frame(0.70, .low, .low)] + finish)
+            XCTAssertEqual(steps[prefix.count].reason, .renewedDescent)
+            XCTAssertFalse(steps.contains(where: \.counted))
+        }
+    }
+
+    func testSwappingVisibleLegWithoutOverlappingAscentCannotBridgeCycles() {
+        let events = confirmedBottom + [frame(0.50, .shallow, nil), frame(0.60, nil, .perspective),
+                                        frame(0.70, nil, .mid)] + finish
+        let steps = run(events)
+        XCTAssertEqual(steps[6].reason, .interrupted)
+        XCTAssertFalse(steps.contains(where: \.counted))
+    }
+
+    func testReappearingLegNeedsAnExtendingWitnessAndCompatibleGeometry() {
+        let prefix = confirmedBottom + [frame(0.50, .shallow, nil)]
+        for overlap in [frame(0.60, .shallow, .perspective), frame(0.60, .mid, .low),
+                        frame(0.60, .mid, .perspective, unreliableJoint: .leftKnee)] {
+            let result = run(prefix + [overlap, frame(0.70, .nearStanding, .mid)] + finish)
+            XCTAssertEqual(result[prefix.count].reason, .interrupted)
+            XCTAssertFalse(result.contains(where: \.counted))
+        }
+    }
+
+    func testIntermediateRisesWithoutExtensionCannotJoinSuccessiveBottoms() {
+        let pulses = [frame(0.50, .mid, .mid), frame(0.60, .low, .low), frame(0.70, .mid, .mid),
+                      frame(0.80, .low, .low)]
+        let steps = run(confirmedBottom + pulses + finish)
+        XCTAssertEqual(steps[6].reason, .renewedDescent)
+        XCTAssertFalse(steps.contains(where: \.counted))
+    }
+
+    func testStepAfterDepthStillCancelsReacquiredAscent() {
+        for side in [BodyLeg.left, .right] {
+            let step = frame(0.70, .nearStanding, .mid, footShift: 0.2, shiftedSide: side)
+            let result = run(reacquiredAscent + [step] + finish)
+            XCTAssertEqual(result[reacquiredAscent.count].reason, .movingSupport)
+            XCTAssertFalse(result.contains(where: \.counted))
+        }
+    }
+
+    func testLosingEitherOrBothChainsDuringRevalidationCancelsReturn() {
+        for hidden in [frame(0.70, nil, nil), frame(0.70, nil, .mid), frame(0.70, .nearStanding, nil),
+                       suspectFoot(0.70, side: .right)] {
+            let result = run(reacquiredAscent + [hidden] + finish)
+            XCTAssertEqual(result[reacquiredAscent.count].phase, .insufficientData)
+            XCTAssertFalse(result.contains(where: \.counted))
+        }
+    }
+
+    func testStoppingShortOfBilateralExtensionCannotCompleteReacquiredReturn() {
+        let events = reacquiredAscent + [frame(0.70, .upright, .nearStanding), frame(0.80, .upright, .nearStanding),
+                                         frame(0.90, .upright, .nearStanding)]
+        XCTAssertFalse(run(events).contains(where: \.counted))
+    }
+
+    func testRevalidationEndsWithItsOwnCycle() throws {
+        let first = reacquiredAscent + [frame(0.70, .nearStanding, .mid)] + finish.dropFirst()
+        let second = [frame(1.16, .mid, .mid), frame(1.26, .low, .low), frame(1.36, .low, .low),
+                      frame(1.46, .mid, nil), frame(1.56, .upright, nil), frame(1.66, .upright, nil)]
+        XCTAssertEqual(try PoseReplaySquatCycle.replay(session(first + second)), [1.06, 1.66])
     }
 
     private func suspectFoot(_ time: Double, side: BodyLeg = .left) -> PoseReplayEvent {

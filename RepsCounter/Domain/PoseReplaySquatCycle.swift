@@ -10,7 +10,7 @@ struct PoseReplaySquatCycle {
         case seekingStance, standing, descent, awaitingDepth, bilateralDepth, unilateralDepth
         case sustainedDepth, holdingDepth, missingJoints, insufficientDepth, conflictingLegs, movingSupport, changedGeometry
         case interrupted, expired, repeatedTimestamp, reset, renewedDescent, returning, counted
-        case awaitingSupport, supportExpired
+        case awaitingSupport, supportExpired, reacquiredDuringAscent
     }
 
     struct Step: Equatable {
@@ -29,7 +29,7 @@ struct PoseReplaySquatCycle {
         case unknown, stable, displaced, unverifiedDisplacement
     }
 
-    private enum SupportRecovery {
+    private enum SupportRecovery: Equatable {
         case none, waiting(BodyLeg, since: Double), restored
     }
 
@@ -83,6 +83,18 @@ struct PoseReplaySquatCycle {
 
         var upright: Bool {
             (observation?.kneeAngle ?? 0) >= thresholds.standingThreshold
+        }
+
+        func isRising(from previous: Observation?) -> Bool {
+            guard let previous, let observation else { return false }
+            return observation.hipAnkleHeight > previous.hipAnkleHeight && observation.kneeAngle > previous.kneeAngle
+        }
+
+        func continuesReturn(from previous: Observation?) -> Bool {
+            if isRising(from: previous) { return true }
+            guard let previous, let cycleReference, upright, compatibleWithStance else { return false }
+            return previous.kneeAngle >= thresholds.standingThreshold &&
+                previous.hipAnkleHeight >= Limits.standingHeight * cycleReference.hipAnkleHeight
         }
 
         var compatibleWithStance: Bool {
@@ -189,6 +201,7 @@ struct PoseReplaySquatCycle {
     private var right = Leg()
     private var bottom = Bottom()
     private var supportRecovery = SupportRecovery.none
+    private var revalidatingAscent = false
     private var timestamp: Double?
     private var lastObserved: Double?
     private var departure: Double?
@@ -235,12 +248,21 @@ struct PoseReplaySquatCycle {
             aspectRatio = pose.aspectRatio
             rotationAngle = pose.rotationAngle
         }
+        let previousLeft = left.observation
+        let previousRight = right.observation
         left.update(PoseReplayDepthAudit.observe(event.pose, side: .left), at: time)
         right.update(PoseReplayDepthAudit.observe(event.pose, side: .right), at: time)
         if let lastObserved, time - lastObserved > Limits.continuity {
             return discard(.interrupted)
         }
-        if departure != nil, let step = checkSupport(in: event.pose, at: time) { return step }
+        if departure != nil, let step = checkSupport(in: event.pose, at: time) {
+            if revalidatingAscent && step.reason == .awaitingSupport { return discard(.interrupted) }
+            return step
+        }
+        if revalidatingAscent {
+            guard let l = left.drop, let r = right.drop else { return discard(.interrupted) }
+            if max(l, r) >= Limits.minimumDrop && abs(l - r) > Limits.supportTolerance { return discard(.conflictingLegs) }
+        }
         let observed = departure == nil
             ? (left.observation != nil || right.observation != nil)
             : (left.drop != nil || right.drop != nil)
@@ -254,9 +276,8 @@ struct PoseReplaySquatCycle {
             if time - (left.calibratedAt ?? time) > Limits.maxCycle { left.reference = nil }
             if time - (right.calibratedAt ?? time) > Limits.maxCycle { right.reference = nil }
         }
-        let upright: Bool
-        if case .restored = supportRecovery { upright = left.upright && right.upright }
-        else { upright = left.upright || right.upright }
+        let needsBothLegs = revalidatingAscent || supportRecovery == .restored
+        let upright = needsBothLegs ? left.upright && right.upright : left.upright || right.upright
         let looksUpright = upright && left.compatibleWithStance && right.compatibleWithStance
         if looksUpright {
             bottom = Bottom()
@@ -275,6 +296,7 @@ struct PoseReplaySquatCycle {
                 left.heldReference = nil
                 right.heldReference = nil
                 supportRecovery = .none
+                revalidatingAscent = false
                 bottom = Bottom()
                 left.calibrate(at: time)
                 right.calibrate(at: time)
@@ -290,7 +312,7 @@ struct PoseReplaySquatCycle {
         right.standingSince = nil
         guard left.drop != nil || right.drop != nil else { return result(.seekingStance) }
         let deepest = max(left.drop ?? 0, right.drop ?? 0)
-        if unconfirmedReturn && (phase == .descending || deepest >= Limits.minimumDrop) { return discard(.renewedDescent) }
+        if unconfirmedReturn && phase == .descending { return discard(.renewedDescent) }
         switch phase {
         case .seekingStanding, .insufficientData:
             return result(.seekingStance)
@@ -300,8 +322,8 @@ struct PoseReplaySquatCycle {
             departure = time
             phase = .descending
         case .returning:
-            if deepest >= Limits.minimumDrop { return discard(.renewedDescent) }
-            return result(.returning)
+            return continueReturn(previousLeft: previousLeft, previousRight: previousRight,
+                                  unconfirmedReturn: unconfirmedReturn)
         case .lowered, .descending:
             break
         }
@@ -319,6 +341,29 @@ struct PoseReplaySquatCycle {
             return result(reason)
         }
         return result(departure == time ? .descent : .awaitingDepth)
+    }
+
+    private mutating func continueReturn(previousLeft: Observation?, previousRight: Observation?,
+                                         unconfirmedReturn: Bool) -> Step {
+        let leftDeep = (left.drop ?? 0) >= Limits.minimumDrop
+        let rightDeep = (right.drop ?? 0) >= Limits.minimumDrop
+        if revalidatingAscent {
+            guard !unconfirmedReturn, left.continuesReturn(from: previousLeft), right.continuesReturn(from: previousRight) else {
+                return discard(.interrupted)
+            }
+            return result(.returning)
+        }
+        guard leftDeep || rightDeep else { return result(.returning) }
+        if (leftDeep && previousLeft != nil) || (rightDeep && previousRight != nil) {
+            return discard(.renewedDescent)
+        }
+        guard !unconfirmedReturn, supportRecovery == .none,
+              let l = left.drop, let r = right.drop, abs(l - r) <= Limits.supportTolerance,
+              !left.upright, !right.upright else { return discard(.interrupted) }
+        let witnessIsRising = leftDeep ? right.isRising(from: previousRight) : left.isRising(from: previousLeft)
+        guard witnessIsRising else { return discard(.interrupted) }
+        revalidatingAscent = true
+        return result(.reacquiredDuringAscent)
     }
 
     private mutating func checkSupport(in pose: PoseReplayPose?, at time: Double) -> Step? {
