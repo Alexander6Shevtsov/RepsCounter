@@ -10,6 +10,7 @@ struct PoseReplaySquatCycle {
         case seekingStance, standing, descent, awaitingDepth, bilateralDepth, unilateralDepth
         case sustainedDepth, holdingDepth, missingJoints, insufficientDepth, conflictingLegs, movingSupport, changedGeometry
         case interrupted, expired, repeatedTimestamp, reset, renewedDescent, returning, counted
+        case awaitingSupport, supportExpired
     }
 
     struct Step: Equatable {
@@ -24,11 +25,21 @@ struct PoseReplaySquatCycle {
     private static let bentAngle = (thresholds.standingThreshold + thresholds.loweredThreshold) / 2
     private static let minimumDwell = Limits.continuity / 4
 
+    private enum FootSupport {
+        case unknown, stable, displaced, unverifiedDisplacement
+    }
+
+    private enum SupportRecovery {
+        case none, waiting(BodyLeg, since: Double), restored
+    }
+
     private struct Leg {
         var observation: Observation?
         var ema: Double?
         var lastSeen: Double?
         var reference: Observation?
+        var heldReference: Observation?
+        var cycleReference: Observation? { heldReference ?? reference }
         var calibratedAt: Double?
         var standingSince: Double?
 
@@ -66,8 +77,8 @@ struct PoseReplaySquatCycle {
         }
 
         var drop: Double? {
-            guard let observation, let reference else { return nil }
-            return 1 - observation.hipAnkleHeight / reference.hipAnkleHeight
+            guard let observation, let cycleReference else { return nil }
+            return 1 - observation.hipAnkleHeight / cycleReference.hipAnkleHeight
         }
 
         var upright: Bool {
@@ -89,10 +100,18 @@ struct PoseReplaySquatCycle {
             return strict || (value.kneeAngle <= bentAngle && drop >= Limits.strongDrop)
         }
 
-        func footMoved(_ point: PoseReplayPoint?, aspect: Double) -> Bool {
-            guard let reference, let point, (0.5...1).contains(point.confidence) else { return false }
-            return hypot(point.horizontalPosition * aspect - reference.ankle.x,
-                         point.verticalPosition - reference.ankle.y) > Limits.supportTolerance * reference.hipAnkleHeight
+        func support(in pose: PoseReplayPose?, ankle: PoseReplayJoint) -> FootSupport {
+            guard let reference = cycleReference else { return .unknown }
+            let limit = Limits.supportTolerance * reference.hipAnkleHeight
+            if let observation {
+                let distance = hypot(observation.ankle.x - reference.ankle.x, observation.ankle.y - reference.ankle.y)
+                return distance > limit ? .displaced : .stable
+            }
+            guard let pose, let point = pose.points.first(where: { $0.joint == ankle }),
+                  (0.5...1).contains(point.confidence) else { return .unknown }
+            let distance = hypot(point.horizontalPosition * pose.aspectRatio - reference.ankle.x,
+                                 point.verticalPosition - reference.ankle.y)
+            return distance > limit ? .unverifiedDisplacement : .unknown
         }
     }
 
@@ -169,6 +188,7 @@ struct PoseReplaySquatCycle {
     private var left = Leg()
     private var right = Leg()
     private var bottom = Bottom()
+    private var supportRecovery = SupportRecovery.none
     private var timestamp: Double?
     private var lastObserved: Double?
     private var departure: Double?
@@ -220,7 +240,7 @@ struct PoseReplaySquatCycle {
         if let lastObserved, time - lastObserved > Limits.continuity {
             return discard(.interrupted)
         }
-        if let pose = event.pose, departure != nil && supportMoved(in: pose) { return discard(.movingSupport) }
+        if departure != nil, let step = checkSupport(in: event.pose, at: time) { return step }
         let observed = departure == nil
             ? (left.observation != nil || right.observation != nil)
             : (left.drop != nil || right.drop != nil)
@@ -234,7 +254,10 @@ struct PoseReplaySquatCycle {
             if time - (left.calibratedAt ?? time) > Limits.maxCycle { left.reference = nil }
             if time - (right.calibratedAt ?? time) > Limits.maxCycle { right.reference = nil }
         }
-        let looksUpright = (left.upright || right.upright) && left.compatibleWithStance && right.compatibleWithStance
+        let upright: Bool
+        if case .restored = supportRecovery { upright = left.upright && right.upright }
+        else { upright = left.upright || right.upright }
+        let looksUpright = upright && left.compatibleWithStance && right.compatibleWithStance
         if looksUpright {
             bottom = Bottom()
             if uprightSince == nil { uprightSince = time }
@@ -249,6 +272,9 @@ struct PoseReplaySquatCycle {
                 let missed = phase == .descending
                 phase = .standing
                 departure = nil
+                left.heldReference = nil
+                right.heldReference = nil
+                supportRecovery = .none
                 bottom = Bottom()
                 left.calibrate(at: time)
                 right.calibrate(at: time)
@@ -270,7 +296,7 @@ struct PoseReplaySquatCycle {
             return result(.seekingStance)
         case .standing:
             guard deepest >= 1 - Limits.standingHeight else { return result(.standing) }
-            guard !supportMoved(in: pose) else { return discard(.movingSupport) }
+            if let step = checkSupport(in: pose, at: time) { return step }
             departure = time
             phase = .descending
         case .returning:
@@ -295,11 +321,46 @@ struct PoseReplaySquatCycle {
         return result(departure == time ? .descent : .awaitingDepth)
     }
 
-    private func supportMoved(in pose: PoseReplayPose) -> Bool {
-        if left.footMoved(pose.points.first { $0.joint == .leftAnkle }, aspect: pose.aspectRatio)
-            || right.footMoved(pose.points.first { $0.joint == .rightAnkle }, aspect: pose.aspectRatio) { return true }
+    private mutating func checkSupport(in pose: PoseReplayPose?, at time: Double) -> Step? {
+        let l = left.support(in: pose, ankle: .leftAnkle)
+        let r = right.support(in: pose, ankle: .rightAnkle)
+        if l == .displaced || r == .displaced || hipSpanChanged { return discard(.movingSupport) }
+
+        let suspect: BodyLeg
+        switch supportRecovery {
+        case .none:
+            guard l == .unverifiedDisplacement || r == .unverifiedDisplacement else { return nil }
+            guard phase == .lowered || phase == .returning else { return discard(.movingSupport) }
+            guard uprightSince == nil else { return discard(.interrupted) }
+            suspect = l == .unverifiedDisplacement ? .left : .right
+            if suspect == .left { left.heldReference = left.reference }
+            else { right.heldReference = right.reference }
+            supportRecovery = .waiting(suspect, since: time)
+        case let .waiting(side, since):
+            guard time - since <= Limits.continuity else { return discard(.supportExpired) }
+            if l == .stable && r == .stable {
+                supportRecovery = .restored
+                return nil
+            }
+            suspect = side
+        case .restored:
+            return l == .stable && r == .stable ? nil : discard(.interrupted)
+        }
+
+        let witness = suspect == .left ? right : left
+        guard (suspect == .left ? r : l) == .stable else { return discard(.interrupted) }
+        if let departure, time - departure > Limits.maxCycle { return discard(.expired) }
+        guard !witness.upright, let drop = witness.drop else { return discard(.interrupted) }
+        if drop < Limits.minimumDrop { phase = .returning }
+        if phase == .returning && drop >= Limits.minimumDrop { return discard(.renewedDescent) }
+        uprightSince = nil
+        lastObserved = time
+        return result(.awaitingSupport)
+    }
+
+    private var hipSpanChanged: Bool {
         guard let l = left.observation, let r = right.observation,
-              let ls = left.reference, let rs = right.reference else { return false }
+              let ls = left.cycleReference, let rs = right.cycleReference else { return false }
         return abs((l.hipX - r.hipX) - (ls.hipX - rs.hipX))
             > Limits.supportTolerance * min(ls.hipAnkleHeight, rs.hipAnkleHeight)
     }
