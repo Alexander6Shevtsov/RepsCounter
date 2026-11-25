@@ -2,6 +2,9 @@ import CoreGraphics
 import Foundation
 
 #if DEBUG
+#if canImport(os)
+import os
+#endif
 enum PoseReplayJoint: String, Codable, CaseIterable {
     case leftHip
     case leftKnee
@@ -330,36 +333,44 @@ enum PoseReplayRunner {
     }
 
     private static func validate(_ session: PoseReplaySession) throws {
+        try validateHeader(session)
+        try validateAnnotations(session.annotations)
+        var previousTimestamp = 0.0
+        for event in session.events {
+            try validateEvent(event, after: previousTimestamp)
+            previousTimestamp = event.seconds
+        }
+    }
+
+    static func validateHeader(_ session: PoseReplaySession) throws {
         guard (1...2).contains(session.schemaVersion) else { throw PoseReplayError.invalidVersion }
         guard (session.schemaVersion == 2) == (session.initialState != nil) else {
             throw PoseReplayError.invalidInitialState
         }
         guard session.events.count <= 1200 else { throw PoseReplayError.tooManyEvents }
-        try validateAnnotations(session.annotations)
-        var previousTimestamp = 0.0
-        for event in session.events {
-            guard event.seconds.isFinite, event.seconds >= previousTimestamp else {
-                throw PoseReplayError.invalidTimeline
-            }
-            previousTimestamp = event.seconds
-            if event.kind == .reset {
-                guard event.pose == nil else { throw PoseReplayError.invalidGeometry }
-                continue
-            }
-            guard let pose = event.pose else { continue }
-            guard pose.aspectRatio.isFinite, pose.aspectRatio > 0,
-                  pose.rotationAngle.isFinite, pose.points.count <= 6 else {
+    }
+
+    static func validateEvent(_ event: PoseReplayEvent, after previousTimestamp: Double) throws {
+        guard event.seconds.isFinite, event.seconds >= previousTimestamp else {
+            throw PoseReplayError.invalidTimeline
+        }
+        if event.kind == .reset {
+            guard event.pose == nil else { throw PoseReplayError.invalidGeometry }
+            return
+        }
+        guard let pose = event.pose else { return }
+        guard pose.aspectRatio.isFinite, pose.aspectRatio > 0,
+              pose.rotationAngle.isFinite, pose.points.count <= 6 else {
+            throw PoseReplayError.invalidGeometry
+        }
+        var joints = Set<PoseReplayJoint>()
+        for point in pose.points {
+            guard joints.insert(point.joint).inserted,
+                  point.horizontalPosition.isFinite,
+                  point.verticalPosition.isFinite,
+                  point.confidence.isFinite,
+                  (0...1).contains(point.confidence) else {
                 throw PoseReplayError.invalidGeometry
-            }
-            var joints = Set<PoseReplayJoint>()
-            for point in pose.points {
-                guard joints.insert(point.joint).inserted,
-                      point.horizontalPosition.isFinite,
-                      point.verticalPosition.isFinite,
-                      point.confidence.isFinite,
-                      (0...1).contains(point.confidence) else {
-                    throw PoseReplayError.invalidGeometry
-                }
             }
         }
     }
@@ -392,6 +403,7 @@ struct PoseReplayBilateralEvent {
 }
 
 struct PoseReplayBilateralResult {
+    let unifiedCountedAtSeconds: [Double]
     let baselineCountedAtSeconds: [TimeInterval]
     let leftCountedAtSeconds: [TimeInterval]
     let rightCountedAtSeconds: [TimeInterval]
@@ -503,9 +515,12 @@ enum PoseReplayBilateralRunner {
         let baseline = try PoseReplayRunner.replay(session, telemetry: telemetry)
         var leftTracker = PoseReplayIndependentLeg(leg: .left)
         var rightTracker = PoseReplayIndependentLeg(leg: .right)
+        var unified = PoseReplaySquatCycle()
+        var unifiedTimes: [Double] = []
         var candidates: [PoseReplayLegCount] = []
 
         for event in session.events {
+            if unified.process(event).counted { unifiedTimes.append(event.seconds) }
             if let candidate = leftTracker.process(event) {
                 candidates.append(candidate)
             }
@@ -514,11 +529,19 @@ enum PoseReplayBilateralRunner {
             }
         }
 
+        #if canImport(os)
+        if telemetry != nil {
+            let logger = Logger(subsystem: "RepsCounter", category: "SquatCycleReplay")
+            let times = unifiedTimes.map { String(format: "%.3f", $0) }.joined(separator: ", ")
+            logger.info("Unified squat cycle: \(unifiedTimes.count) events at REC seconds [\(times, privacy: .public)]")
+        }
+        #endif
         let chronologicalCandidates = candidates.sorted {
             $0.countedAtSeconds < $1.countedAtSeconds
         }
         let combined = mergeMatchingMovements(chronologicalCandidates)
         return PoseReplayBilateralResult(
+            unifiedCountedAtSeconds: unifiedTimes,
             baselineCountedAtSeconds: baseline.countedAtSeconds,
             leftCountedAtSeconds: chronologicalCandidates.compactMap {
                 $0.leg == .left ? $0.countedAtSeconds : nil
