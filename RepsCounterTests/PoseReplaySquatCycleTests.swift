@@ -21,7 +21,8 @@ final class PoseReplaySquatCycleTests: XCTestCase {
 
     private func frame(_ time: Double, _ left: Posture?, _ right: Posture?,
                        confidence: Float = 1, footShift: Double = 0, hipShift: Double = 0,
-                       rotation: CGFloat = 90) -> PoseReplayEvent {
+                       rotation: CGFloat = 90, shiftedSide: BodyLeg = .left,
+                       unreliableJoint: BodyJoint? = nil) -> PoseReplayEvent {
         var joints: [BodyJoint: JointPoint] = [:]
         for (side, posture, base) in [(BodyLeg.left, left, 0.3), (.right, right, 0.7)] {
             guard let posture else { continue }
@@ -32,7 +33,10 @@ final class PoseReplaySquatCycleTests: XCTestCase {
             joints[isLeft ? .leftKnee : .rightKnee] = JointPoint(
                 location: CGPoint(x: base + g.forward, y: g.knee), confidence: 1)
             joints[isLeft ? .leftAnkle : .rightAnkle] = JointPoint(
-                location: CGPoint(x: base + (isLeft ? footShift : 0), y: 0.2), confidence: 1)
+                location: CGPoint(x: base + (side == shiftedSide ? footShift : 0), y: 0.2), confidence: 1)
+        }
+        if let unreliableJoint, let point = joints[unreliableJoint] {
+            joints[unreliableJoint] = JointPoint(location: point.location, confidence: 0.49)
         }
         let pose = BodyPose(joints: joints, aspectRatio: 1, rotationAngle: rotation)
         return .init(seconds: time, kind: .pose, pose: .init(from: pose))
@@ -118,6 +122,104 @@ final class PoseReplaySquatCycleTests: XCTestCase {
             XCTAssertEqual(result[start.count].reason, reason)
             XCTAssertFalse(result.contains(where: \.counted))
         }
+    }
+
+    private var confirmedBottom: [PoseReplayEvent] {
+        start + [frame(0.30, .low, .low), frame(0.40, .low, .low)]
+    }
+
+    private func suspectFoot(_ time: Double, side: BodyLeg = .left) -> PoseReplayEvent {
+        frame(time, .low, .low, footShift: 0.2, shiftedSide: side,
+              unreliableJoint: side == .left ? .leftHip : .rightHip)
+    }
+
+    func testDisplacedIsolatedAnkleWaitsForBothChainsAndBilateralStandingOnEitherSide() throws {
+        for side in [BodyLeg.left, .right] {
+            let oneLeg = side == .left ? frame(0.60, nil, .mid) : frame(0.60, .mid, nil)
+            let events = confirmedBottom + [suspectFoot(0.50, side: side), oneLeg, frame(0.69, .mid, .mid),
+                                            frame(0.80, .upright, .mid), frame(0.90, .upright, .upright),
+                                            frame(1.0, .upright, .upright), frame(1.1, .upright, .upright)]
+            let steps = run(events)
+            XCTAssertEqual(steps[4].phase, .lowered)
+            XCTAssertEqual(steps[5].reason, .awaitingSupport)
+            XCTAssertEqual(steps[6].reason, .awaitingSupport)
+            XCTAssertEqual(try PoseReplaySquatCycle.replay(session(events)), [1.0])
+            for n in events.indices {
+                XCTAssertEqual(run(Array(events.prefix(n + 1))), Array(steps.prefix(n + 1)))
+            }
+        }
+    }
+
+    func testReacquiredChainMustAgreeWithOriginalStanceAfterItsGeometryExpires() throws {
+        let bottom = [0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90].map { frame($0, nil, .low) }
+        let pending = start + bottom + [suspectFoot(1.0)]
+        let standing = [frame(1.20, .upright, .upright), frame(1.30, .upright, .upright)]
+        XCTAssertEqual(run(pending).last?.reason, .awaitingSupport)
+        let restored = pending + [frame(1.10, .mid, .mid)] + standing
+        XCTAssertEqual(try PoseReplaySquatCycle.replay(session(restored)), [1.30])
+        let moved = run(pending + [frame(1.10, .mid, .mid, footShift: 0.2)] + standing)
+        XCTAssertEqual(moved[pending.count].reason, .movingSupport)
+        XCTAssertFalse(moved.contains(where: \.counted))
+    }
+
+    func testReliableDisplacementCancelsBeforeDuringAndAfterSupportRecovery() {
+        let step = frame(0.65, .low, .low, footShift: 0.2)
+        for prefix in [confirmedBottom, confirmedBottom + [suspectFoot(0.50)],
+                       confirmedBottom + [suspectFoot(0.50), frame(0.57, .low, .low)]] {
+            let result = run(prefix + [step] + finish)
+            XCTAssertEqual(result[prefix.count].reason, .movingSupport)
+            XCTAssertFalse(result.contains(where: \.counted))
+        }
+    }
+
+    func testLungeWithPartlyHiddenLegCannotUseSupportRecoveryAsDepth() {
+        let hidden = frame(0.30, .low, .upright, footShift: 0.2, shiftedSide: .right, unreliableJoint: .rightKnee)
+        let early = run(start + [hidden, frame(0.40, .low, .upright), frame(0.53, .low, .upright)] + finish)
+        XCTAssertEqual(early[start.count].reason, .movingSupport)
+        XCTAssertFalse(early.contains(where: \.counted))
+
+        let prefix = confirmedBottom + [suspectFoot(0.50, side: .right)]
+        let revealed = run(prefix + [frame(0.60, .low, .upright), frame(0.72, .mid, .upright)] + finish)
+        XCTAssertEqual(revealed[prefix.count].reason, .conflictingLegs)
+        XCTAssertFalse(revealed.contains(where: \.counted))
+    }
+
+    func testLosingSupportWitnessOrReachingStandingWhileOccludedCancelsCycle() {
+        let prefix = confirmedBottom + [suspectFoot(0.50)]
+        for frame in [frame(0.60, nil, nil), frame(0.60, nil, .upright), frame(0.60, .low, nil)] {
+            let result = run(prefix + [frame, self.frame(0.72, .mid, .mid)] + finish)
+            XCTAssertEqual(result[prefix.count].phase, .insufficientData)
+            XCTAssertFalse(result.contains(where: \.counted))
+        }
+    }
+
+    func testDeadlineStartsAtFirstUnverifiedDisplacementAndChecksTheRecoveryFrame() throws {
+        let prefix = confirmedBottom + [suspectFoot(0.50), suspectFoot(0.64)]
+        let deadline = 0.50 + PoseReplayOcclusionRecovery.continuity
+        let restored = prefix + [frame(deadline, .low, .low)] + finish
+        XCTAssertEqual(try PoseReplaySquatCycle.replay(session(restored)), [1.06])
+        for late in [frame(deadline.nextUp, .low, .low), suspectFoot(deadline.nextUp)] {
+            let result = run(prefix + [late] + finish)
+            XCTAssertEqual(result[prefix.count].reason, .supportExpired)
+            XCTAssertFalse(result.contains(where: \.counted))
+        }
+    }
+
+    func testUnverifiedSupportCannotJoinInterruptedReturnsOrCarryAcrossReset() {
+        let prefix = confirmedBottom + [suspectFoot(0.50), frame(0.60, nil, .mid)]
+        let interrupted = run(prefix + [suspectFoot(0.70)] + finish)
+        XCTAssertEqual(interrupted[prefix.count].reason, .renewedDescent)
+        XCTAssertFalse(interrupted.contains(where: \.counted))
+        let boundary = PoseReplayEvent(seconds: 0.70, kind: .reset, pose: nil)
+        XCTAssertFalse(run(prefix + [boundary] + finish).contains(where: \.counted))
+    }
+
+    func testSupportMustStayVerifiedThroughTheCountedReturn() {
+        let regained = confirmedBottom + [suspectFoot(0.50), frame(0.60, .mid, .mid),
+                                        frame(0.72, .upright, .upright)]
+        let result = run(regained + [frame(0.82, .upright, nil)] + finish)
+        XCTAssertEqual(result[regained.count].reason, .interrupted)
+        XCTAssertFalse(result.contains(where: \.counted))
     }
 
     func testTwoFastCyclesAndInterruptedReturnCannotDoubleOrMerge() throws {
