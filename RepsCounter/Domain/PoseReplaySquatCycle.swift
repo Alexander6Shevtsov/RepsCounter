@@ -39,9 +39,18 @@ struct PoseReplaySquatCycle {
         var lastSeen: Double?
         var reference: Observation?
         var heldReference: Observation?
+        var supportReference: Observation?
         var cycleReference: Observation? { heldReference ?? reference }
         var calibratedAt: Double?
         var standingSince: Double?
+
+        mutating func freezeSupport(at time: Double) {
+            guard let lastSeen, time - lastSeen <= Limits.maxOcclusion else {
+                supportReference = nil
+                return
+            }
+            supportReference = reference
+        }
 
         mutating func update(_ value: Observation?, at time: Double) {
             observation = value
@@ -113,7 +122,7 @@ struct PoseReplaySquatCycle {
         }
 
         func support(in pose: PoseReplayPose?, ankle: PoseReplayJoint) -> FootSupport {
-            guard let reference = cycleReference else { return .unknown }
+            guard let reference = supportReference ?? cycleReference else { return .unknown }
             let limit = Limits.supportTolerance * reference.hipAnkleHeight
             if let observation {
                 let distance = hypot(observation.ankle.x - reference.ankle.x, observation.ankle.y - reference.ankle.y)
@@ -295,6 +304,8 @@ struct PoseReplaySquatCycle {
                 departure = nil
                 left.heldReference = nil
                 right.heldReference = nil
+                left.supportReference = nil
+                right.supportReference = nil
                 supportRecovery = .none
                 revalidatingAscent = false
                 bottom = Bottom()
@@ -319,6 +330,8 @@ struct PoseReplaySquatCycle {
         case .standing:
             guard deepest >= 1 - Limits.standingHeight else { return result(.standing) }
             if let step = checkSupport(in: pose, at: time) { return step }
+            left.freezeSupport(at: time)
+            right.freezeSupport(at: time)
             departure = time
             phase = .descending
         case .returning:
