@@ -1,3 +1,4 @@
+import Foundation
 import CoreGraphics
 import XCTest
 @testable import RepsCounter
@@ -415,5 +416,88 @@ final class PoseReplaySquatCycleTests: XCTestCase {
                          frame(0.3, .upright, .upright), frame(0.41, .mid, .mid), frame(0.52, .low, .low),
                          frame(0.63, .low, .low), frame(0.73, .low, .low)] + finish
         XCTAssertEqual(try PoseReplaySquatCycle.replay(replay), [1.06])
+    }
+
+    func testPrivateReplayCorpus() throws {
+        guard let directory = ProcessInfo.processInfo.environment["REPS_REPLAY_DIRECTORY"],
+              directory.isEmpty == false else {
+            throw XCTSkip("Set REPS_REPLAY_DIRECTORY in the test environment to run the private corpus.")
+        }
+
+        let expected: [String: [Double]] = [
+            "ABB35FBA-0BBB-48E8-9E74-7528C147FE18": [13.081, 18.193, 23.188, 27.782, 32.283],
+            "32A56959-9F34-4180-BE54-A55E64116BCB": [9.355, 12.348, 15.555, 19.247, 22.655],
+            "8C1F5005-0809-4606-90F0-8690A646C1CB": [10.909, 13.011, 15.110, 17.207, 19.413],
+            "6252FD57-0E69-4EC5-A52B-9AF5940A9CD1": [13.875, 15.979, 18.071, 20.183, 22.380],
+            "F511B9C7-51D4-4944-B84B-28396481F48B": [11.522, 13.930, 16.121, 18.425, 20.826],
+            "E9E2C743-1167-46EA-9F5D-63A8C7CF78FA": [10.759, 12.459, 14.153, 15.758, 17.464, 19.163, 20.857, 22.563, 24.258, 26.064],
+            "E436EA81-38ED-48EC-BF92-634EBE8C86E7": [7.477, 9.574, 11.779, 14.080, 16.278],
+            "D21E35BB-CCD8-470E-A6BC-CCC875E35B07": [15.435],
+            "B8C8293A-F918-4C4B-82FE-4DD61C27B3D1": [11.162, 13.675, 16.276, 19.079],
+            "7737C615-4A6A-48A4-8709-99A6671BD995": [25.687, 28.184, 30.680],
+            "178F6024-50D1-4448-80A9-890C3DF5FF19": [13.902, 16.098, 18.499],
+            "18C7062A-8519-419A-8951-C035422DBA9E": [12.693, 20.495, 22.995],
+            "FDF51A66-639F-44E7-B817-8D8E3894617C": [],
+            "7AD884A5-D159-439A-98A1-B9A0326F9C09": [30.963, 33.366, 35.765, 38.156, 40.765, 43.265, 45.764, 48.465, 51.161, 53.763],
+            "D824221B-3CB4-4A3B-8B0E-E3EE22E77C2F": [18.929, 21.128, 23.331, 25.430, 27.729, 29.830, 32.029, 34.332, 36.731, 39.028],
+            "65981B08-DE3F-4A40-922A-95902D4432F9": [],
+            "27A9E64C-C4BD-4F93-850A-2863BC0237FD": [11.886, 14.083, 16.586, 18.887, 21.280, 23.391, 25.685, 28.083, 30.486, 32.986],
+            "E78DAE64-EBA4-4142-A757-E405AA9D2E8E": [11.720, 13.717, 15.821, 18.021, 20.019, 22.121, 24.122, 28.521],
+            "6110846C-428C-4731-B05D-7A9D1FBAFCD1": [],
+            "C2228FC2-4D75-41A7-A9A5-61303D5473B9": [12.809, 42.604],
+            "0D1C8B5F-16D4-46F3-AB87-122AEF5CFF44": [16.011, 23.808, 31.006]
+        ]
+        let folder = URL(fileURLWithPath: directory, isDirectory: true)
+        let files = try FileManager.default.contentsOfDirectory(
+            at: folder, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
+        ).filter {
+            $0.lastPathComponent.hasPrefix("RepsCounter-PoseReplay-") &&
+                $0.pathExtension.lowercased() == "json"
+        }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+
+        let expectedNames = Set(expected.keys.map { "RepsCounter-PoseReplay-\($0).json" })
+        let actualNames = Set(files.map(\.lastPathComponent))
+        let missing = expectedNames.subtracting(actualNames).sorted()
+        let unexpected = actualNames.subtracting(expectedNames).sorted()
+        XCTAssertEqual(files.count, expected.count)
+        XCTAssertTrue(missing.isEmpty, "Missing: \(missing)")
+        XCTAssertTrue(unexpected.isEmpty, "Unexpected: \(unexpected)")
+
+        var report = ["file,expected_count,actual_count,expected_seconds,actual_seconds,status"]
+        var total = 0
+        var processed = 0
+        let decoder = JSONDecoder()
+
+        for file in files {
+            let identifier = String(file.deletingPathExtension().lastPathComponent.dropFirst("RepsCounter-PoseReplay-".count))
+            guard let baseline = expected[identifier] else { continue }
+            do {
+                let session = try decoder.decode(PoseReplaySession.self, from: Data(contentsOf: file))
+                let times = try PoseReplaySquatCycle.replay(session)
+                let matches = times.count == baseline.count &&
+                    zip(times, baseline).allSatisfy { abs($0.0 - $0.1) <= 0.000501 }
+                let actualText = times.map { String(format: "%.3f", locale: Locale(identifier: "en_US_POSIX"), $0) }.joined(separator: ";")
+                let expectedText = baseline.map { String(format: "%.3f", locale: Locale(identifier: "en_US_POSIX"), $0) }.joined(separator: ";")
+                let status = matches ? "MATCH" : "DIFF"
+                let line = "\(file.lastPathComponent),\(baseline.count),\(times.count),\(expectedText),\(actualText),\(status)"
+                report.append(line)
+                print("REPS_CORPUS \(line)")
+                total += times.count
+                processed += 1
+                XCTAssertTrue(matches, "\(file.lastPathComponent): expected [\(expectedText)], actual [\(actualText)]")
+            } catch {
+                report.append("\(file.lastPathComponent),\(baseline.count),,,,ERROR")
+                XCTFail("\(file.lastPathComponent): \(error)")
+            }
+        }
+
+        let summary = "REPS_CORPUS_SUMMARY processed=\(processed)/\(expected.count) events=\(total) expected=97"
+        print(summary)
+        let attachment = XCTAttachment(string: report.joined(separator: "\n") + "\n" + summary)
+        attachment.name = "Private Replay regression report"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        XCTAssertEqual(processed, expected.count)
+        XCTAssertEqual(total, 97)
     }
 }
