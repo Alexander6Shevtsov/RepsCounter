@@ -419,6 +419,9 @@ final class PoseReplaySquatCycleTests: XCTestCase {
     }
 
     func testPrivateReplayCorpus() throws {
+        #if os(iOS) && !targetEnvironment(simulator)
+        throw XCTSkip("Private Replay corpus is available only on the simulator or Mac.")
+        #else
         guard let directory = ProcessInfo.processInfo.environment["REPS_REPLAY_DIRECTORY"],
               directory.isEmpty == false else {
             throw XCTSkip("Set REPS_REPLAY_DIRECTORY in the test environment to run the private corpus.")
@@ -499,5 +502,6 @@ final class PoseReplaySquatCycleTests: XCTestCase {
         add(attachment)
         XCTAssertEqual(processed, expected.count)
         XCTAssertEqual(total, 97)
+        #endif
     }
 }
