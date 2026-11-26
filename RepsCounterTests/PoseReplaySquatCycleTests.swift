@@ -253,6 +253,25 @@ final class PoseReplaySquatCycleTests: XCTestCase {
         XCTAssertFalse(moved.contains(where: \.counted))
     }
 
+    func testLongOcclusionPreservesOriginalFootSupportOnEitherSide() throws {
+        for side in [BodyLeg.left, .right] {
+            let hidden = (5...14).map { index in
+                let time = Double(index) / 10
+                return side == .left ? frame(time, nil, .low) : frame(time, .low, nil)
+            }
+            let prefix = confirmedBottom + hidden
+            let finish = [frame(1.60, .upright, .upright), frame(1.70, .upright, .upright)]
+
+            let stable = prefix + [frame(1.50, .mid, .mid)] + finish
+            XCTAssertEqual(try PoseReplaySquatCycle.replay(session(stable)), [1.70])
+
+            let displaced = frame(1.50, .mid, .mid, footShift: 0.20, shiftedSide: side)
+            let result = run(prefix + [displaced] + finish)
+            XCTAssertEqual(result[prefix.count].reason, .movingSupport)
+            XCTAssertFalse(result.contains(where: \.counted))
+        }
+    }
+
     func testReliableDisplacementCancelsBeforeDuringAndAfterSupportRecovery() {
         let step = frame(0.65, .low, .low, footShift: 0.2)
         for prefix in [confirmedBottom, confirmedBottom + [suspectFoot(0.50)],
