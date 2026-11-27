@@ -33,6 +33,68 @@ struct PoseReplaySquatCycle {
         case none, waiting(BodyLeg, since: Double), restored
     }
 
+    private struct SupportOffset {
+        let horizontal: Double
+        let vertical: Double
+
+        var magnitude: Double { hypot(horizontal, vertical) }
+    }
+
+    private struct RelativeSupportEvidence {
+        private static let minimumShift = 0.15
+        private static let stationaryTolerance = 0.05
+        private static let minimumAlignment = 0.8
+
+        private struct Sample {
+            let side: BodyLeg
+            let offset: SupportOffset
+            let time: Double
+        }
+
+        private var previous: Sample?
+
+        mutating func confirms(left: SupportOffset?, right: SupportOffset?, at time: Double) -> Bool {
+            guard let left, let right else {
+                previous = nil
+                return false
+            }
+            let side: BodyLeg
+            let moving: SupportOffset
+            let stable: SupportOffset
+            if left.magnitude >= Self.minimumShift && right.magnitude <= Self.stationaryTolerance {
+                side = .left
+                moving = left
+                stable = right
+            } else if right.magnitude >= Self.minimumShift && left.magnitude <= Self.stationaryTolerance {
+                side = .right
+                moving = right
+                stable = left
+            } else {
+                previous = nil
+                return false
+            }
+            let offset = SupportOffset(horizontal: moving.horizontal - stable.horizontal,
+                                       vertical: moving.vertical - stable.vertical)
+            guard offset.magnitude >= Self.minimumShift else {
+                previous = nil
+                return false
+            }
+            let current = Sample(side: side, offset: offset, time: time)
+            guard let previous, previous.side == side, time > previous.time,
+                  time - previous.time <= Limits.continuity else {
+                self.previous = current
+                return false
+            }
+            let alignment = (offset.horizontal * previous.offset.horizontal + offset.vertical * previous.offset.vertical)
+                / (offset.magnitude * previous.offset.magnitude)
+            guard alignment >= Self.minimumAlignment else {
+                self.previous = current
+                return false
+            }
+            return time - previous.time >= minimumDwell
+        }
+    }
+
     private struct Leg {
         var observation: Observation?
         var ema: Double?
@@ -119,6 +181,14 @@ struct PoseReplaySquatCycle {
         var supportsDepth: Bool {
             guard let value = observation, let drop else { return false }
             return strict || (value.kneeAngle <= bentAngle && drop >= Limits.strongDrop)
+        }
+
+        var frozenSupportOffset: SupportOffset? {
+            guard let observation, let supportReference, supportReference.hipAnkleHeight > 0 else { return nil }
+            return SupportOffset(
+                horizontal: Double(observation.ankle.x - supportReference.ankle.x) / supportReference.hipAnkleHeight,
+                vertical: Double(observation.ankle.y - supportReference.ankle.y) / supportReference.hipAnkleHeight
+            )
         }
 
         func support(in pose: PoseReplayPose?, ankle: PoseReplayJoint) -> FootSupport {
@@ -210,6 +280,7 @@ struct PoseReplaySquatCycle {
     private var right = Leg()
     private var bottom = Bottom()
     private var supportRecovery = SupportRecovery.none
+    private var relativeSupport = RelativeSupportEvidence()
     private var revalidatingAscent = false
     private var timestamp: Double?
     private var lastObserved: Double?
@@ -307,6 +378,7 @@ struct PoseReplaySquatCycle {
                 left.supportReference = nil
                 right.supportReference = nil
                 supportRecovery = .none
+                relativeSupport = RelativeSupportEvidence()
                 revalidatingAscent = false
                 bottom = Bottom()
                 left.calibrate(at: time)
@@ -383,6 +455,10 @@ struct PoseReplaySquatCycle {
         let l = left.support(in: pose, ankle: .leftAnkle)
         let r = right.support(in: pose, ankle: .rightAnkle)
         if l == .displaced || r == .displaced || hipSpanChanged { return discard(.movingSupport) }
+        if departure != nil, (phase == .lowered || phase == .returning),
+           relativeSupport.confirms(left: left.frozenSupportOffset, right: right.frozenSupportOffset, at: time) {
+            return discard(.movingSupport)
+        }
 
         let suspect: BodyLeg
         switch supportRecovery {
