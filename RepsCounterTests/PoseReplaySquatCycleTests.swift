@@ -495,18 +495,14 @@ final class PoseReplaySquatCycleTests: XCTestCase {
             "27A9E64C-C4BD-4F93-850A-2863BC0237FD": [11.886, 14.083, 16.586, 18.887, 21.280, 23.391, 25.685, 28.083, 30.486, 32.986],
             "E78DAE64-EBA4-4142-A757-E405AA9D2E8E": [11.720, 13.717, 15.821, 18.021, 20.019, 22.121, 24.122, 28.521],
             "6110846C-428C-4731-B05D-7A9D1FBAFCD1": [],
-            "C2228FC2-4D75-41A7-A9A5-61303D5473B9": [12.809, 42.604],
+            "C2228FC2-4D75-41A7-A9A5-61303D5473B9": [],
             "0D1C8B5F-16D4-46F3-AB87-122AEF5CFF44": [16.011, 23.808, 31.006],
-            "855F6418-70C1-45D4-B107-D2066E61F2BB": [13.789, 16.583, 19.177, 22.079, 25.075, 32.084, 36.582, 40.884, 45.484, 55.983, 61.785, 68.386],
-            "DC01024F-7EDE-4D67-8B14-1FFE7AC0ADC3": [12.479, 14.980, 17.580, 20.181, 23.081, 27.579, 39.582, 47.985, 53.882]
-        ]
-        let allowedRemovals: [String: Set<Double>] = [
-            "C2228FC2-4D75-41A7-A9A5-61303D5473B9": [12.809, 42.604],
-            "855F6418-70C1-45D4-B107-D2066E61F2BB": [32.084, 36.582, 40.884, 45.484],
-            "DC01024F-7EDE-4D67-8B14-1FFE7AC0ADC3": [27.579, 39.582]
+            "855F6418-70C1-45D4-B107-D2066E61F2BB": [13.789, 16.583, 19.177, 22.079, 25.075, 55.983, 61.785, 68.386],
+            "DC01024F-7EDE-4D67-8B14-1FFE7AC0ADC3": [12.479, 14.980, 17.580, 20.181, 23.081, 47.985, 53.882],
+            "3D1059FB-E0F5-467C-9F49-2CDB3E1994E0": [12.207, 16.507]
         ]
         let baselineTotal = expected.values.reduce(0) { $0 + $1.count }
-        let targetTotal = baselineTotal - allowedRemovals.values.reduce(0) { $0 + $1.count }
+        XCTAssertEqual(baselineTotal, 112)
         let folder = URL(fileURLWithPath: directory, isDirectory: true)
         let files = try FileManager.default.contentsOfDirectory(
             at: folder, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
@@ -523,11 +519,12 @@ final class PoseReplaySquatCycleTests: XCTestCase {
         XCTAssertTrue(missing.isEmpty, "Missing: \(missing)")
         XCTAssertTrue(unexpected.isEmpty, "Unexpected: \(unexpected)")
 
-        var report = ["file,baseline_count,actual_count,removed_known_fp,baseline_seconds,actual_seconds,status"]
+        var report = ["file,baseline_count,standard_count,bypass_count,baseline_seconds,standard_seconds,bypass_seconds,status"]
+        var trace = ["file,variant,seconds,phase,reason,counted"]
         var total = 0
+        var bypassTotal = 0
         var processed = 0
         var matched = 0
-        var removedKnownFP = 0
         let decoder = JSONDecoder()
 
         for file in files {
@@ -535,41 +532,45 @@ final class PoseReplaySquatCycleTests: XCTestCase {
             guard let baseline = expected[identifier] else { continue }
             do {
                 let session = try decoder.decode(PoseReplaySession.self, from: Data(contentsOf: file))
-                let times = try PoseReplaySquatCycle.replay(session)
-                let permitted = allowedRemovals[identifier] ?? []
-                let retained = baseline.filter { expectedTime in
-                    permitted.contains(expectedTime) == false ||
-                        times.contains { abs($0 - expectedTime) <= 0.000501 }
+                let times = try PoseReplaySquatCycle.replay(session) { seconds, step in
+                    trace.append("\(file.lastPathComponent),standard,\(seconds),\(step.phase.rawValue),\(step.reason.rawValue),\(step.counted)")
                 }
-                let removed = baseline.count - retained.count
-                let matches = times.count == retained.count &&
-                    zip(times, retained).allSatisfy { abs($0.0 - $0.1) <= 0.000501 }
-                removedKnownFP += removed
+                let bypassTimes = try PoseReplaySquatCycle.replayIgnoringSupportChecks(session) { seconds, step in
+                    trace.append("\(file.lastPathComponent),bypass,\(seconds),\(step.phase.rawValue),\(step.reason.rawValue),\(step.counted)")
+                }
+                let matches = times.count == baseline.count &&
+                    zip(times, baseline).allSatisfy { abs($0.0 - $0.1) <= 0.000501 }
                 if matches { matched += 1 }
                 let actualText = times.map { String(format: "%.3f", locale: Locale(identifier: "en_US_POSIX"), $0) }.joined(separator: ";")
                 let expectedText = baseline.map { String(format: "%.3f", locale: Locale(identifier: "en_US_POSIX"), $0) }.joined(separator: ";")
+                let bypassText = bypassTimes.map { String(format: "%.3f", locale: Locale(identifier: "en_US_POSIX"), $0) }.joined(separator: ";")
                 let status = matches ? "MATCH" : "DIFF"
-                let line = "\(file.lastPathComponent),\(baseline.count),\(times.count),\(removed),\(expectedText),\(actualText),\(status)"
+                let line = "\(file.lastPathComponent),\(baseline.count),\(times.count),\(bypassTimes.count),\(expectedText),\(actualText),\(bypassText),\(status)"
                 report.append(line)
-                print("REPS_CORPUS \(line)")
+                print("REPS_SUPPORT_AUDIT \(line)")
                 total += times.count
+                bypassTotal += bypassTimes.count
                 processed += 1
                 XCTAssertTrue(matches, "\(file.lastPathComponent): expected [\(expectedText)], actual [\(actualText)]")
             } catch {
-                report.append("\(file.lastPathComponent),\(baseline.count),,,,,ERROR")
+                report.append("\(file.lastPathComponent),\(baseline.count),,,,,,ERROR")
                 XCTFail("\(file.lastPathComponent): \(error)")
             }
         }
 
-        let summary = "REPS_CORPUS_SUMMARY processed=\(processed)/\(expected.count) matched=\(matched)/\(expected.count) events=\(total) baseline=\(baselineTotal) removedKnownFP=\(removedKnownFP) target=\(targetTotal)"
+        let summary = "REPS_CORPUS_SUMMARY processed=\(processed)/\(expected.count) matched=\(matched)/\(expected.count) standard=\(total) expected=\(baselineTotal) bypass=\(bypassTotal)"
         print(summary)
         let attachment = XCTAttachment(string: report.joined(separator: "\n") + "\n" + summary)
-        attachment.name = "Private Replay regression report"
+        attachment.name = "Support policy comparison"
         attachment.lifetime = .keepAlways
         add(attachment)
+        let traceAttachment = XCTAttachment(string: trace.joined(separator: "\n"))
+        traceAttachment.name = "Support policy per-frame trace"
+        traceAttachment.lifetime = .keepAlways
+        add(traceAttachment)
         XCTAssertEqual(processed, expected.count)
         XCTAssertEqual(matched, expected.count)
-        XCTAssertEqual(total, baselineTotal - removedKnownFP)
+        XCTAssertEqual(total, baselineTotal)
         #endif
     }
 }

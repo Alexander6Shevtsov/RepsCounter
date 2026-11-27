@@ -290,6 +290,16 @@ struct PoseReplaySquatCycle {
     private var rotationAngle: Double?
 
     static func replay(_ session: PoseReplaySession, onStep: ((Double, Step) -> Void)? = nil) throws -> [Double] {
+        try replay(session, ignoringSupportChecks: false, onStep: onStep)
+    }
+
+    static func replayIgnoringSupportChecks(_ session: PoseReplaySession,
+                                            onStep: ((Double, Step) -> Void)? = nil) throws -> [Double] {
+        try replay(session, ignoringSupportChecks: true, onStep: onStep)
+    }
+
+    private static func replay(_ session: PoseReplaySession, ignoringSupportChecks: Bool,
+                               onStep: ((Double, Step) -> Void)?) throws -> [Double] {
         try PoseReplayRunner.validateHeader(session)
         var previousTime = 0.0
         var cycle = Self()
@@ -297,7 +307,7 @@ struct PoseReplaySquatCycle {
         for event in session.events {
             try PoseReplayRunner.validateEvent(event, after: previousTime)
             previousTime = event.seconds
-            let step = cycle.process(event)
+            let step = cycle.process(event, ignoringSupportChecks: ignoringSupportChecks)
             onStep?(event.seconds, step)
             if step.counted { times.append(event.seconds) }
         }
@@ -305,6 +315,10 @@ struct PoseReplaySquatCycle {
     }
 
     mutating func process(_ event: PoseReplayEvent) -> Step {
+        process(event, ignoringSupportChecks: false)
+    }
+
+    private mutating func process(_ event: PoseReplayEvent, ignoringSupportChecks: Bool) -> Step {
         let time = event.seconds
         if event.kind == .reset {
             self = Self()
@@ -335,7 +349,7 @@ struct PoseReplaySquatCycle {
         if let lastObserved, time - lastObserved > Limits.continuity {
             return discard(.interrupted)
         }
-        if departure != nil, let step = checkSupport(in: event.pose, at: time) {
+        if !ignoringSupportChecks, departure != nil, let step = checkSupport(in: event.pose, at: time) {
             if revalidatingAscent && step.reason == .awaitingSupport { return discard(.interrupted) }
             return step
         }
@@ -401,7 +415,7 @@ struct PoseReplaySquatCycle {
             return result(.seekingStance)
         case .standing:
             guard deepest >= 1 - Limits.standingHeight else { return result(.standing) }
-            if let step = checkSupport(in: pose, at: time) { return step }
+            if !ignoringSupportChecks, let step = checkSupport(in: pose, at: time) { return step }
             left.freezeSupport(at: time)
             right.freezeSupport(at: time)
             departure = time
