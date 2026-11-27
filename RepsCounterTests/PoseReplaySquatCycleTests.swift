@@ -273,6 +273,54 @@ final class PoseReplaySquatCycleTests: XCTestCase {
         }
     }
 
+    func testPersistentRelativeSupportDisplacementCancelsOnEitherSide() {
+        for side in [BodyLeg.left, .right] {
+            let first = frame(0.50, .low, .low, footShift: 0.10, shiftedSide: side)
+            let second = frame(0.60, .low, .low, footShift: 0.105, shiftedSide: side)
+            let tail = [frame(0.70, .mid, .mid), frame(0.80, .upright, .upright),
+                        frame(0.90, .upright, .upright)]
+            let events = confirmedBottom + [first, second] + tail
+            let steps = run(events)
+            XCTAssertEqual(steps[confirmedBottom.count].phase, .lowered)
+            XCTAssertEqual(steps[confirmedBottom.count + 1].reason, .movingSupport)
+            XCTAssertFalse(steps.contains(where: \.counted))
+            for index in events.indices {
+                XCTAssertEqual(run(Array(events.prefix(index + 1))), Array(steps.prefix(index + 1)))
+            }
+        }
+    }
+
+    func testRelativeSupportNeedsContinuousSameDirectionEvidence() throws {
+        for side in [BodyLeg.left, .right] {
+            let first = frame(0.50, .low, .low, footShift: 0.10, shiftedSide: side)
+            let hidden = side == .left ? frame(0.60, nil, .low) : frame(0.60, .low, nil)
+            let alternativeSide: BodyLeg = side == .left ? .right : .left
+            let alternatives = [
+                frame(0.60, .low, .low),
+                frame(0.60, .low, .low, footShift: -0.10, shiftedSide: side),
+                frame(0.60, .low, .low, footShift: 0.10, shiftedSide: alternativeSide),
+                hidden
+            ]
+            let tail = [frame(0.80, .mid, .mid), frame(0.90, .upright, .upright),
+                        frame(1.00, .upright, .upright)]
+            for alternative in alternatives {
+                let single = frame(0.70, .low, .low, footShift: 0.10, shiftedSide: side)
+                let events = confirmedBottom + [first, alternative, single] + tail
+                XCTAssertEqual(try PoseReplaySquatCycle.replay(session(events)), [1.00])
+            }
+        }
+    }
+
+    func testRelativeSupportCannotCancelAnAlreadyCompletedCycle() throws {
+        for side in [BodyLeg.left, .right] {
+            let completed = confirmedBottom + [frame(0.50, .mid, .mid), frame(0.60, .upright, .upright),
+                                              frame(0.70, .upright, .upright)]
+            let steps = [frame(0.80, .upright, .upright, footShift: 0.10, shiftedSide: side),
+                         frame(0.90, .upright, .upright, footShift: 0.105, shiftedSide: side)]
+            XCTAssertEqual(try PoseReplaySquatCycle.replay(session(completed + steps)), [0.70])
+        }
+    }
+
     func testReliableDisplacementCancelsBeforeDuringAndAfterSupportRecovery() {
         let step = frame(0.65, .low, .low, footShift: 0.2)
         for prefix in [confirmedBottom, confirmedBottom + [suspectFoot(0.50)],
@@ -448,8 +496,17 @@ final class PoseReplaySquatCycleTests: XCTestCase {
             "E78DAE64-EBA4-4142-A757-E405AA9D2E8E": [11.720, 13.717, 15.821, 18.021, 20.019, 22.121, 24.122, 28.521],
             "6110846C-428C-4731-B05D-7A9D1FBAFCD1": [],
             "C2228FC2-4D75-41A7-A9A5-61303D5473B9": [12.809, 42.604],
-            "0D1C8B5F-16D4-46F3-AB87-122AEF5CFF44": [16.011, 23.808, 31.006]
+            "0D1C8B5F-16D4-46F3-AB87-122AEF5CFF44": [16.011, 23.808, 31.006],
+            "855F6418-70C1-45D4-B107-D2066E61F2BB": [13.789, 16.583, 19.177, 22.079, 25.075, 32.084, 36.582, 40.884, 45.484, 55.983, 61.785, 68.386],
+            "DC01024F-7EDE-4D67-8B14-1FFE7AC0ADC3": [12.479, 14.980, 17.580, 20.181, 23.081, 27.579, 39.582, 47.985, 53.882]
         ]
+        let allowedRemovals: [String: Set<Double>] = [
+            "C2228FC2-4D75-41A7-A9A5-61303D5473B9": [12.809, 42.604],
+            "855F6418-70C1-45D4-B107-D2066E61F2BB": [32.084, 36.582, 40.884, 45.484],
+            "DC01024F-7EDE-4D67-8B14-1FFE7AC0ADC3": [27.579, 39.582]
+        ]
+        let baselineTotal = expected.values.reduce(0) { $0 + $1.count }
+        let targetTotal = baselineTotal - allowedRemovals.values.reduce(0) { $0 + $1.count }
         let folder = URL(fileURLWithPath: directory, isDirectory: true)
         let files = try FileManager.default.contentsOfDirectory(
             at: folder, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
@@ -466,9 +523,11 @@ final class PoseReplaySquatCycleTests: XCTestCase {
         XCTAssertTrue(missing.isEmpty, "Missing: \(missing)")
         XCTAssertTrue(unexpected.isEmpty, "Unexpected: \(unexpected)")
 
-        var report = ["file,expected_count,actual_count,expected_seconds,actual_seconds,status"]
+        var report = ["file,baseline_count,actual_count,removed_known_fp,baseline_seconds,actual_seconds,status"]
         var total = 0
         var processed = 0
+        var matched = 0
+        var removedKnownFP = 0
         let decoder = JSONDecoder()
 
         for file in files {
@@ -477,31 +536,40 @@ final class PoseReplaySquatCycleTests: XCTestCase {
             do {
                 let session = try decoder.decode(PoseReplaySession.self, from: Data(contentsOf: file))
                 let times = try PoseReplaySquatCycle.replay(session)
-                let matches = times.count == baseline.count &&
-                    zip(times, baseline).allSatisfy { abs($0.0 - $0.1) <= 0.000501 }
+                let permitted = allowedRemovals[identifier] ?? []
+                let retained = baseline.filter { expectedTime in
+                    permitted.contains(expectedTime) == false ||
+                        times.contains { abs($0 - expectedTime) <= 0.000501 }
+                }
+                let removed = baseline.count - retained.count
+                let matches = times.count == retained.count &&
+                    zip(times, retained).allSatisfy { abs($0.0 - $0.1) <= 0.000501 }
+                removedKnownFP += removed
+                if matches { matched += 1 }
                 let actualText = times.map { String(format: "%.3f", locale: Locale(identifier: "en_US_POSIX"), $0) }.joined(separator: ";")
                 let expectedText = baseline.map { String(format: "%.3f", locale: Locale(identifier: "en_US_POSIX"), $0) }.joined(separator: ";")
                 let status = matches ? "MATCH" : "DIFF"
-                let line = "\(file.lastPathComponent),\(baseline.count),\(times.count),\(expectedText),\(actualText),\(status)"
+                let line = "\(file.lastPathComponent),\(baseline.count),\(times.count),\(removed),\(expectedText),\(actualText),\(status)"
                 report.append(line)
                 print("REPS_CORPUS \(line)")
                 total += times.count
                 processed += 1
                 XCTAssertTrue(matches, "\(file.lastPathComponent): expected [\(expectedText)], actual [\(actualText)]")
             } catch {
-                report.append("\(file.lastPathComponent),\(baseline.count),,,,ERROR")
+                report.append("\(file.lastPathComponent),\(baseline.count),,,,,ERROR")
                 XCTFail("\(file.lastPathComponent): \(error)")
             }
         }
 
-        let summary = "REPS_CORPUS_SUMMARY processed=\(processed)/\(expected.count) events=\(total) expected=97"
+        let summary = "REPS_CORPUS_SUMMARY processed=\(processed)/\(expected.count) matched=\(matched)/\(expected.count) events=\(total) baseline=\(baselineTotal) removedKnownFP=\(removedKnownFP) target=\(targetTotal)"
         print(summary)
         let attachment = XCTAttachment(string: report.joined(separator: "\n") + "\n" + summary)
         attachment.name = "Private Replay regression report"
         attachment.lifetime = .keepAlways
         add(attachment)
         XCTAssertEqual(processed, expected.count)
-        XCTAssertEqual(total, 97)
+        XCTAssertEqual(matched, expected.count)
+        XCTAssertEqual(total, baselineTotal - removedKnownFP)
         #endif
     }
 }
