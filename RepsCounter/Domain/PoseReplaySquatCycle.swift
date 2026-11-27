@@ -8,7 +8,7 @@ struct PoseReplaySquatCycle {
 
     enum Reason: String {
         case seekingStance, standing, descent, awaitingDepth, bilateralDepth, unilateralDepth
-        case sustainedDepth, holdingDepth, missingJoints, insufficientDepth, conflictingLegs, movingSupport, changedGeometry
+        case sustainedDepth, corroboratedHipDepth, holdingDepth, missingJoints, insufficientDepth, conflictingLegs, movingSupport, changedGeometry
         case interrupted, expired, repeatedTimestamp, reset, renewedDescent, returning, counted
         case awaitingSupport, supportExpired, reacquiredDuringAscent
     }
@@ -206,6 +206,64 @@ struct PoseReplaySquatCycle {
         }
     }
 
+    private struct WeakHipDepthEvidence {
+        private struct Sample {
+            let side: BodyLeg
+            let time: Double
+        }
+
+        private var previous: Sample?
+
+        mutating func observe(_ pose: PoseReplayPose, left: Leg, right: Leg, at time: Double) -> Bool {
+            let side: BodyLeg
+            if Self.qualifies(pose, side: .left, leg: left, opposite: right) {
+                side = .left
+            } else if Self.qualifies(pose, side: .right, leg: right, opposite: left) {
+                side = .right
+            } else {
+                previous = nil
+                return false
+            }
+            let earlier = previous
+            previous = Sample(side: side, time: time)
+            guard let earlier, earlier.side == side else { return false }
+            let interval = time - earlier.time
+            return interval >= minimumDwell && interval <= Limits.continuity
+        }
+
+        private static func qualifies(_ pose: PoseReplayPose, side: BodyLeg, leg: Leg, opposite: Leg) -> Bool {
+            guard leg.observation == nil, let reference = leg.cycleReference,
+                  let other = opposite.observation, let otherReference = opposite.cycleReference,
+                  let otherDrop = opposite.drop, otherDrop >= Limits.minimumDrop,
+                  other.kneeAngle <= bentAngle,
+                  reference.hipAnkleHeight > 0, otherReference.hipAnkleHeight > 0 else { return false }
+            let hipJoint: PoseReplayJoint = side == .left ? .leftHip : .rightHip
+            let kneeJoint: PoseReplayJoint = side == .left ? .leftKnee : .rightKnee
+            let ankleJoint: PoseReplayJoint = side == .left ? .leftAnkle : .rightAnkle
+            guard let hip = pose.points.first(where: { $0.joint == hipJoint }),
+                  let knee = pose.points.first(where: { $0.joint == kneeJoint }),
+                  let ankle = pose.points.first(where: { $0.joint == ankleJoint }),
+                  hip.confidence >= 0.30, hip.confidence < 0.50,
+                  (0.65...1).contains(knee.confidence), (0.65...1).contains(ankle.confidence),
+                  [hip, knee, ankle].allSatisfy({ $0.horizontalPosition.isFinite && $0.verticalPosition.isFinite }) else { return false }
+            let height = reference.hipAnkleHeight
+            let thighX = (hip.horizontalPosition - knee.horizontalPosition) * pose.aspectRatio
+            let thighY = hip.verticalPosition - knee.verticalPosition
+            let shinX = (ankle.horizontalPosition - knee.horizontalPosition) * pose.aspectRatio
+            let shinY = ankle.verticalPosition - knee.verticalPosition
+            let thighLength = hypot(thighX, thighY)
+            let shinLength = hypot(shinX, shinY)
+            guard thighY < 0, thighLength > 0, shinLength > 0,
+                  (0.65...1.35).contains((thighLength + shinLength) / height),
+                  1 - (hip.verticalPosition - ankle.verticalPosition) / height >= Limits.minimumDrop else { return false }
+            let cosine = (thighX * shinX + thighY * shinY) / (thighLength * shinLength)
+            let angle = acos(max(-1, min(1, cosine))) * 180 / .pi
+            guard angle <= thresholds.loweredThreshold else { return false }
+            let otherHipHeight = Double(other.ankle.y) + other.hipAnkleHeight
+            return abs(hip.verticalPosition - otherHipHeight) <= 0.12 * min(height, otherReference.hipAnkleHeight)
+        }
+    }
+
     private struct Bottom {
         private struct Sample {
             let time: Double
@@ -255,6 +313,7 @@ struct PoseReplaySquatCycle {
         private var rightRun = SustainedDepth()
         private static let maximumSamples = 9
         private var samples: [Sample] = []
+        var weakHip = WeakHipDepthEvidence()
 
         mutating func observe(_ left: Leg, _ right: Leg, at time: Double) -> Reason? {
             let sustainedLeft = leftRun.update(left, opposite: right, at: time)
@@ -290,16 +349,21 @@ struct PoseReplaySquatCycle {
     private var rotationAngle: Double?
 
     static func replay(_ session: PoseReplaySession, onStep: ((Double, Step) -> Void)? = nil) throws -> [Double] {
-        try replay(session, ignoringSupportChecks: false, onStep: onStep)
+        try replay(session, ignoringSupportChecks: false, corroboratedDepth: false, onStep: onStep)
     }
 
     static func replayIgnoringSupportChecks(_ session: PoseReplaySession,
                                             onStep: ((Double, Step) -> Void)? = nil) throws -> [Double] {
-        try replay(session, ignoringSupportChecks: true, onStep: onStep)
+        try replay(session, ignoringSupportChecks: true, corroboratedDepth: false, onStep: onStep)
+    }
+
+    static func replayWithCorroboratedHipDepth(_ session: PoseReplaySession,
+                                               onStep: ((Double, Step) -> Void)? = nil) throws -> [Double] {
+        try replay(session, ignoringSupportChecks: false, corroboratedDepth: true, onStep: onStep)
     }
 
     private static func replay(_ session: PoseReplaySession, ignoringSupportChecks: Bool,
-                               onStep: ((Double, Step) -> Void)?) throws -> [Double] {
+                               corroboratedDepth: Bool, onStep: ((Double, Step) -> Void)?) throws -> [Double] {
         try PoseReplayRunner.validateHeader(session)
         var previousTime = 0.0
         var cycle = Self()
@@ -307,7 +371,7 @@ struct PoseReplaySquatCycle {
         for event in session.events {
             try PoseReplayRunner.validateEvent(event, after: previousTime)
             previousTime = event.seconds
-            let step = cycle.process(event, ignoringSupportChecks: ignoringSupportChecks)
+            let step = cycle.process(event, ignoringSupportChecks: ignoringSupportChecks, corroboratedDepth: corroboratedDepth)
             onStep?(event.seconds, step)
             if step.counted { times.append(event.seconds) }
         }
@@ -315,10 +379,10 @@ struct PoseReplaySquatCycle {
     }
 
     mutating func process(_ event: PoseReplayEvent) -> Step {
-        process(event, ignoringSupportChecks: false)
+        process(event, ignoringSupportChecks: false, corroboratedDepth: false)
     }
 
-    private mutating func process(_ event: PoseReplayEvent, ignoringSupportChecks: Bool) -> Step {
+    private mutating func process(_ event: PoseReplayEvent, ignoringSupportChecks: Bool, corroboratedDepth: Bool) -> Step {
         let time = event.seconds
         if event.kind == .reset {
             self = Self()
@@ -361,6 +425,7 @@ struct PoseReplaySquatCycle {
             ? (left.observation != nil || right.observation != nil)
             : (left.drop != nil || right.drop != nil)
         guard let pose = event.pose, observed else {
+            bottom.weakHip = WeakHipDepthEvidence()
             uprightSince = nil
             return result(.missingJoints)
         }
@@ -438,6 +503,10 @@ struct PoseReplaySquatCycle {
         if let reason = bottom.observe(left, right, at: time) {
             phase = .lowered
             return result(reason)
+        }
+        if corroboratedDepth, bottom.weakHip.observe(pose, left: left, right: right, at: time) {
+            phase = .lowered
+            return result(.corroboratedHipDepth)
         }
         return result(departure == time ? .descent : .awaitingDepth)
     }
