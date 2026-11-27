@@ -5,7 +5,7 @@ import XCTest
 
 final class PoseReplaySquatCycleTests: XCTestCase {
     private enum Posture {
-        case upright, nearStanding, mid, low, perspective, shallow, borderline, supportOnly
+        case upright, nearStanding, mid, low, perspective, shallow, borderline, supportOnly, corroborating
 
         var geometry: (hip: Double, knee: Double, forward: Double) {
             switch self {
@@ -17,6 +17,7 @@ final class PoseReplaySquatCycleTests: XCTestCase {
             case .shallow: return (0.62, 0.49, 0.12)
             case .borderline: return (0.53, 0.52, 0.14)
             case .supportOnly: return (0.525, 0.44, 0.13)
+            case .corroborating: return (0.50, 0.42, 0.14)
             }
         }
     }
@@ -466,6 +467,49 @@ final class PoseReplaySquatCycleTests: XCTestCase {
         XCTAssertEqual(try PoseReplaySquatCycle.replay(replay), [1.06])
     }
 
+    func testCorroboratedWeakHipCanConfirmDepthOnEitherSide() throws {
+        for side in [BodyLeg.left, .right] {
+            let samples = [0.30, 0.40, 0.50, 0.60, 0.70].map { time in
+                frame(time, side == .left ? .low : .corroborating,
+                      side == .left ? .corroborating : .low,
+                      unreliableJoint: side == .left ? .leftHip : .rightHip)
+            }
+            let recorded = session(start + samples + finish)
+            XCTAssertTrue(try PoseReplaySquatCycle.replay(recorded).isEmpty)
+            var confirmations = 0
+            let times = try PoseReplaySquatCycle.replayWithCorroboratedHipDepth(recorded) { _, step in
+                if step.reason == .corroboratedHipDepth { confirmations += 1 }
+            }
+            XCTAssertEqual(confirmations, 1)
+            XCTAssertEqual(times, [1.06])
+        }
+    }
+
+    func testWeakHipCannotCountWithoutRepeatedCorroborationAndNegativeHipKneeHeight() throws {
+        let single = [frame(0.30, .low, .corroborating, unreliableJoint: .leftHip)]
+            + [0.40, 0.50, 0.60, 0.70].map { frame($0, .mid, .mid) }
+        let shallow = [0.30, 0.40, 0.50, 0.60, 0.70].map {
+            frame($0, .borderline, .corroborating, unreliableJoint: .leftHip)
+        }
+        let uncorroborated = [0.30, 0.40, 0.50, 0.60, 0.70].map {
+            frame($0, .low, nil, unreliableJoint: .leftHip)
+        }
+        let unreliableKnee = [0.30, 0.40, 0.50, 0.60, 0.70].map {
+            frame($0, .low, .corroborating, unreliableJoint: .leftKnee)
+        }
+        for samples in [single, shallow, uncorroborated, unreliableKnee] {
+            XCTAssertTrue(try PoseReplaySquatCycle.replayWithCorroboratedHipDepth(session(start + samples + finish)).isEmpty)
+        }
+    }
+
+    func testCorroboratedWeakHipStillRequiresReturnToStanding() throws {
+        let samples = [0.30, 0.40, 0.50, 0.60, 0.70].map {
+            frame($0, .low, .corroborating, unreliableJoint: .leftHip)
+        }
+        let unfinished = [frame(0.85, .mid, .mid), frame(0.95, .mid, .mid), frame(1.06, .mid, .mid)]
+        XCTAssertTrue(try PoseReplaySquatCycle.replayWithCorroboratedHipDepth(session(start + samples + unfinished)).isEmpty)
+    }
+
     func testPrivateReplayCorpus() throws {
         #if os(iOS) && !targetEnvironment(simulator)
         throw XCTSkip("Private Replay corpus is available only on the simulator or Mac.")
@@ -519,10 +563,11 @@ final class PoseReplaySquatCycleTests: XCTestCase {
         XCTAssertTrue(missing.isEmpty, "Missing: \(missing)")
         XCTAssertTrue(unexpected.isEmpty, "Unexpected: \(unexpected)")
 
-        var report = ["file,baseline_count,standard_count,bypass_count,baseline_seconds,standard_seconds,bypass_seconds,status"]
+        var report = ["file,baseline_count,standard_count,bypass_count,depth_count,baseline_seconds,standard_seconds,bypass_seconds,depth_seconds,status"]
         var trace = ["file,variant,seconds,phase,reason,counted"]
         var total = 0
         var bypassTotal = 0
+        var depthTotal = 0
         var processed = 0
         var matched = 0
         let decoder = JSONDecoder()
@@ -538,39 +583,45 @@ final class PoseReplaySquatCycleTests: XCTestCase {
                 let bypassTimes = try PoseReplaySquatCycle.replayIgnoringSupportChecks(session) { seconds, step in
                     trace.append("\(file.lastPathComponent),bypass,\(seconds),\(step.phase.rawValue),\(step.reason.rawValue),\(step.counted)")
                 }
+                let depthTimes = try PoseReplaySquatCycle.replayWithCorroboratedHipDepth(session) { seconds, step in
+                    trace.append("\(file.lastPathComponent),depth,\(seconds),\(step.phase.rawValue),\(step.reason.rawValue),\(step.counted)")
+                }
                 let matches = times.count == baseline.count &&
                     zip(times, baseline).allSatisfy { abs($0.0 - $0.1) <= 0.000501 }
                 if matches { matched += 1 }
                 let actualText = times.map { String(format: "%.3f", locale: Locale(identifier: "en_US_POSIX"), $0) }.joined(separator: ";")
                 let expectedText = baseline.map { String(format: "%.3f", locale: Locale(identifier: "en_US_POSIX"), $0) }.joined(separator: ";")
                 let bypassText = bypassTimes.map { String(format: "%.3f", locale: Locale(identifier: "en_US_POSIX"), $0) }.joined(separator: ";")
+                let depthText = depthTimes.map { String(format: "%.3f", locale: Locale(identifier: "en_US_POSIX"), $0) }.joined(separator: ";")
                 let status = matches ? "MATCH" : "DIFF"
-                let line = "\(file.lastPathComponent),\(baseline.count),\(times.count),\(bypassTimes.count),\(expectedText),\(actualText),\(bypassText),\(status)"
+                let line = "\(file.lastPathComponent),\(baseline.count),\(times.count),\(bypassTimes.count),\(depthTimes.count),\(expectedText),\(actualText),\(bypassText),\(depthText),\(status)"
                 report.append(line)
-                print("REPS_SUPPORT_AUDIT \(line)")
+                print("REPS_DEPTH_AUDIT \(line)")
                 total += times.count
                 bypassTotal += bypassTimes.count
+                depthTotal += depthTimes.count
                 processed += 1
                 XCTAssertTrue(matches, "\(file.lastPathComponent): expected [\(expectedText)], actual [\(actualText)]")
             } catch {
-                report.append("\(file.lastPathComponent),\(baseline.count),,,,,,ERROR")
+                report.append("\(file.lastPathComponent),\(baseline.count),,,,,,,,ERROR")
                 XCTFail("\(file.lastPathComponent): \(error)")
             }
         }
 
-        let summary = "REPS_CORPUS_SUMMARY processed=\(processed)/\(expected.count) matched=\(matched)/\(expected.count) standard=\(total) expected=\(baselineTotal) bypass=\(bypassTotal)"
+        let summary = "REPS_CORPUS_SUMMARY processed=\(processed)/\(expected.count) matched=\(matched)/\(expected.count) standard=\(total) expected=\(baselineTotal) bypass=\(bypassTotal) depth=\(depthTotal)"
         print(summary)
         let attachment = XCTAttachment(string: report.joined(separator: "\n") + "\n" + summary)
-        attachment.name = "Support policy comparison"
+        attachment.name = "Depth evidence comparison"
         attachment.lifetime = .keepAlways
         add(attachment)
         let traceAttachment = XCTAttachment(string: trace.joined(separator: "\n"))
-        traceAttachment.name = "Support policy per-frame trace"
+        traceAttachment.name = "Depth evidence per-frame trace"
         traceAttachment.lifetime = .keepAlways
         add(traceAttachment)
         XCTAssertEqual(processed, expected.count)
         XCTAssertEqual(matched, expected.count)
         XCTAssertEqual(total, baselineTotal)
+        XCTAssertEqual(bypassTotal, 133)
         #endif
     }
 }
