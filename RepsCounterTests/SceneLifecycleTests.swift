@@ -62,7 +62,11 @@ final class SceneLifecycleTests: XCTestCase {
 
         XCTAssertTrue(applicationWindow.windowScene === windowScene)
         XCTAssertFalse(applicationWindow.isHidden)
+        #if DEBUG
+        XCTAssertTrue(applicationWindow.rootViewController is CameraQualityViewController)
+        #else
         XCTAssertTrue(applicationWindow.rootViewController is WorkoutViewController)
+        #endif
         XCTAssertEqual(applicationWindow.overrideUserInterfaceStyle, .dark)
     }
 }

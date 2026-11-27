@@ -64,15 +64,15 @@ struct CameraFrame: Sendable {
 }
 
 extension CameraFrame {
-    func yield(to continuation: AsyncStream<CameraFrame>.Continuation) {
-        switch continuation.yield(self) {
-        case .dropped(let displaced):
-            displaced.trace?.mark(.streamReplaced, since: displaced.enqueuedAt)
-        case .terminated:
-            trace?.mark(.streamTerminated)
-        default: break
-        }
-    }
+	func yield(to continuation: AsyncStream<CameraFrame>.Continuation) {
+		switch continuation.yield(self) {
+		case .dropped(let displaced):
+			displaced.trace?.mark(.streamReplaced, since: displaced.enqueuedAt)
+		case .terminated:
+			trace?.mark(.streamTerminated)
+		default: break
+		}
+	}
 }
 
 enum CameraSessionEvent: Sendable, Equatable {
@@ -176,6 +176,7 @@ private final class CameraFrameProcessor: NSObject,
 		var previousAnalysisTime: ContinuousClock.Instant?
 	}
 
+	private let analysisInterval: Duration
 	private let sessionClock: CMClock?
 	private let generation: UInt64
 	private let position: CameraPosition
@@ -184,12 +185,14 @@ private final class CameraFrameProcessor: NSObject,
 	private let processing = OSAllocatedUnfairLock(uncheckedState: FrameState())
 
 	init(
+		analysisInterval: Duration = .milliseconds(80),
 		sessionClock: CMClock?,
 		generation: UInt64,
 		position: CameraPosition,
 		rotationAngle: CGFloat,
 		continuation: AsyncStream<CameraFrame>.Continuation
 	) {
+		self.analysisInterval = analysisInterval
 		self.sessionClock = sessionClock
 		self.generation = generation
 		self.position = position
@@ -233,7 +236,7 @@ private final class CameraFrameProcessor: NSObject,
 			let frameTrace = trace(sampleBuffer, stage: .cameraInput, delegateTime: entered)
 			guard state.isActive else { frameTrace?.mark(.inactive); return }
 			if let previousTime = state.previousAnalysisTime,
-				previousTime.duration(to: capturedAt) < .milliseconds(80)
+				previousTime.duration(to: capturedAt) < analysisInterval
 			{
 				frameTrace?.mark(.throttled)
 				return
@@ -285,7 +288,11 @@ actor CameraCapture: CameraCapturing {
 	private var latestGeneration: UInt64 = 0
 	private var isShutdown = false
 
-	init() {
+	private let requestedResolution: Int
+	private let analysisInterval: Duration
+	init(resolution: Int = 720, analysisInterval: Duration = .milliseconds(80)) {
+		self.requestedResolution = resolution
+		self.analysisInterval = analysisInterval
 		let session = AVCaptureSession()
 		let frameStream = AsyncStream<CameraFrame>.makeStream(
 			bufferingPolicy: .bufferingNewest(1)
@@ -333,6 +340,7 @@ actor CameraCapture: CameraCapturing {
 			frameQueue.sync {}
 			try Task.checkCancellation()
 			let processor = CameraFrameProcessor(
+				analysisInterval: analysisInterval,
 				sessionClock: PipelineTelemetry.active == nil ? nil : session.synchronizationClock,
 				generation: generation,
 				position: position,
@@ -392,6 +400,7 @@ actor CameraCapture: CameraCapturing {
 		let previousInput = cameraInput
 		let previousPosition = cameraPosition
 		let previousOutput = output
+		let previousPreset = session.sessionPreset
 		try replaceInput(replacementInput, position: position)
 		do {
 			return try configureVideoConnection()
@@ -401,6 +410,7 @@ actor CameraCapture: CameraCapturing {
 			if previousOutput == nil, let output {
 				session.removeOutput(output)
 			}
+			session.sessionPreset = previousPreset
 			output = previousOutput
 			restoreInput(previousInput, position: previousPosition)
 			session.commitConfiguration()
@@ -418,17 +428,33 @@ actor CameraCapture: CameraCapturing {
 		candidateOutput.alwaysDiscardsLateVideoFrames = true
 		session.beginConfiguration()
 		defer { session.commitConfiguration() }
-		session.sessionPreset = .hd1280x720
+		let preset: AVCaptureSession.Preset = requestedResolution == 1080 ? .hd1920x1080 : .hd1280x720
+		guard replacementInput.device.supportsSessionPreset(preset) else {
+			throw CameraService.CameraError.configurationFailed
+		}
+		let previousPreset = session.sessionPreset
 		if let previousInput { session.removeInput(previousInput) }
+		guard session.canSetSessionPreset(preset) else {
+			if let previousInput { session.addInput(previousInput) }
+			throw CameraService.CameraError.configurationFailed
+		}
+		session.sessionPreset = preset
 		cameraInput = nil
 		cameraPosition = nil
 		guard session.canAddInput(replacementInput),
 			output != nil || session.canAddOutput(candidateOutput)
 		else {
+			session.sessionPreset = previousPreset
 			restoreInput(previousInput, position: previousPosition)
 			throw CameraService.CameraError.configurationFailed
 		}
 		session.addInput(replacementInput)
+		guard session.canSetSessionPreset(preset) else {
+			session.removeInput(replacementInput)
+			session.sessionPreset = previousPreset
+			restoreInput(previousInput, position: previousPosition)
+			throw CameraService.CameraError.configurationFailed
+		}
 		if output == nil { session.addOutput(candidateOutput) }
 		cameraInput = replacementInput
 		cameraPosition = position

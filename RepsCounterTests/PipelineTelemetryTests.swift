@@ -3,6 +3,96 @@ import XCTest
 @testable import RepsCounter
 
 final class PipelineTelemetryTests: XCTestCase {
+    func testQualitySelectionUsesValueSnapshotsAndCanRestoreBaseline() {
+        let previous = CameraQualitySelection.current
+        defer { CameraQualitySelection.current = previous }
+        CameraQualitySelection.current = .baseline
+        let baseline = CameraQualitySelection.current
+        CameraQualitySelection.current = CameraQualityConfiguration(resolution: .hd1080, visionRate: .hz30)
+        XCTAssertEqual(baseline, .baseline)
+        XCTAssertEqual(CameraQualitySelection.current.resolution, .hd1080)
+        XCTAssertEqual(CameraQualitySelection.current.visionRate, .hz30)
+        CameraQualitySelection.current = .baseline
+        XCTAssertEqual(CameraQualitySelection.current, baseline)
+    }
+
+    func testQualityConfigurationsKeepBaselineAndBoundCounterCadence() {
+        XCTAssertEqual(CameraQualityConfiguration.baseline.resolution, .hd720)
+        XCTAssertEqual(CameraQualityConfiguration.baseline.visionRate, .hz10)
+        XCTAssertFalse(CameraQualityConfiguration.baseline.limitsCounterCadence)
+        for resolution in CameraQualityConfiguration.Resolution.allCases {
+            for rate in CameraQualityConfiguration.VisionRate.allCases {
+                let value = CameraQualityConfiguration(resolution: resolution, visionRate: rate)
+                XCTAssertTrue(value.supported(by: [720, 1080]))
+                XCTAssertFalse(value.supported(by: []))
+                XCTAssertFalse(value.accepts(elapsed: value.analysisInterval - 0.000001))
+                XCTAssertTrue(value.accepts(elapsed: value.analysisInterval))
+                XCTAssertFalse(value.accepts(elapsed: .nan))
+                XCTAssertFalse(value.accepts(elapsed: -1))
+                XCTAssertGreaterThanOrEqual(CameraQualityConfiguration.counterInterval, .milliseconds(80))
+            }
+        }
+        XCTAssertFalse(CameraQualityConfiguration(resolution: .hd1080).supported(by: [720]))
+    }
+
+    func testQualityAdmissionAtThirtyCameraFramesPerSecond() {
+        for (rate, expected) in [(CameraQualityConfiguration.VisionRate.hz10, 10), (.hz15, 15), (.hz30, 30)] {
+            let value = CameraQualityConfiguration(visionRate: rate)
+            var last: Double? = nil
+            var admitted = 0
+            for index in 0..<30 {
+                let time = Double(index) / 30
+                if last.map({ value.accepts(elapsed: time - $0) }) ?? true {
+                    last = time
+                    admitted += 1
+                }
+            }
+            XCTAssertEqual(admitted, expected)
+        }
+    }
+
+    func testHighRateCounterAdmissionCannotShortenStableConfirmation() {
+        for step in [33, 66] {
+            var counter = SquatCounter()
+            var last: Int?
+            var confirmedAt: Int?
+            for time in stride(from: 0, through: 300, by: step) {
+                if last.map({ CameraQualityConfiguration.acceptsCounter(elapsed: .milliseconds(time - $0)) }) ?? true {
+                    last = time
+                    _ = counter.process(angle: 180)
+                    if confirmedAt == nil && counter.phase == .standing { confirmedAt = time }
+                }
+            }
+            XCTAssertNotNil(confirmedAt)
+            XCTAssertGreaterThanOrEqual(confirmedAt ?? 0, 160)
+        }
+        XCTAssertFalse(CameraQualityConfiguration.acceptsCounter(elapsed: .milliseconds(79)))
+        XCTAssertTrue(CameraQualityConfiguration.acceptsCounter(elapsed: .milliseconds(80)))
+        XCTAssertFalse(CameraQualityConfiguration.acceptsCounter(elapsed: .milliseconds(-1)))
+    }
+
+    func testQualityTraceRoundTripAndLegacyTraceImport() throws {
+        let telemetry = PipelineTelemetry(capacity: 16)
+        let quality = PipelineTelemetry.CameraQuality(width: 1080, height: 1920,
+            requestedResolution: 1080, targetVisionHz: 30, rotationAngle: 90,
+            mirrored: false, orientation: "up", confidences: ["leftHip": 0.7, "rightShoulder": 0.8],
+            buildSHA: "test", sourceState: "dirty", patchSHA: "patch")
+        telemetry.record(.cameraQuality, cameraQuality: quality)
+        let data = try JSONEncoder().encode(telemetry.snapshot())
+        let decoded = try JSONDecoder().decode(PipelineTelemetry.Snapshot.self, from: data)
+        XCTAssertEqual(decoded.events.first?.cameraQuality?.width, 1080)
+        XCTAssertEqual(decoded.events.first?.cameraQuality?.confidences.count, 2)
+        var legacy = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        legacy["traceVersion"] = 1
+        var events = legacy["events"] as! [[String: Any]]
+        events[0].removeValue(forKey: "cameraQuality")
+        events[0]["stage"] = "cameraInput"
+        legacy["events"] = events
+        let old = try JSONDecoder().decode(PipelineTelemetry.Snapshot.self,
+            from: JSONSerialization.data(withJSONObject: legacy))
+        XCTAssertNil(old.events.first?.cameraQuality)
+    }
+
     func testLatencyRateAndPTSUseSeparateClocks() throws {
         let clock = TelemetryTestClock()
         let recorder = PipelineTelemetry(capacity: 512, clock: { clock.now })
@@ -46,7 +136,7 @@ final class PipelineTelemetryTests: XCTestCase {
         XCTAssertTrue(snapshot.ageFromPTS_MS.isEmpty)
         XCTAssertTrue(snapshot.hz.isEmpty)
         let decoded = try JSONDecoder().decode(PipelineTelemetry.Snapshot.self, from: JSONEncoder().encode(snapshot))
-        XCTAssertEqual(decoded.traceVersion, 1)
+        XCTAssertEqual(decoded.traceVersion, 2)
         XCTAssertEqual(decoded.traceID, telemetry.traceID)
         XCTAssertEqual(decoded.events.map(\.stage), [.avDropped, .cameraInput, .noPose])
     }

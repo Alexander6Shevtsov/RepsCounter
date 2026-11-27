@@ -16,6 +16,9 @@ final class WorkoutCameraCoordinator {
     private let camera: CameraService
     private var isForeground = true
     private var hasStarted = false
+    #if DEBUG
+    private var lastCounterFrame: ContinuousClock.Instant?
+    #endif
     private var shouldResumeWhenReady = false
 
     var canSwitchCamera: Bool {
@@ -32,11 +35,23 @@ final class WorkoutCameraCoordinator {
                 frame.trace?.mark(.skipped, reason: "inactiveCoordinator")
                 return
             }
-            if self.viewModel.isPaused {
-                frame.trace?.mark(.skipped, reason: "paused")
-                self.viewModel.observePose(pose, trace: frame.trace)
-            } else {
-                self.viewModel.process(pose, trace: frame.trace)
+            #if DEBUG
+            let restrictCounter = CameraQualitySelection.current.limitsCounterCadence
+            let admitted = !restrictCounter || (self.lastCounterFrame.map {
+                CameraQualityConfiguration.acceptsCounter(elapsed: $0.duration(to: frame.capturedAt))
+            } ?? true)
+            if admitted { self.lastCounterFrame = frame.capturedAt }
+            if !admitted { frame.trace?.mark(.counterSampleSkipped, reason: "baseline80msCounterAdmission") }
+            #else
+            let admitted = true
+            #endif
+            if admitted {
+                if self.viewModel.isPaused {
+                    frame.trace?.mark(.skipped, reason: "paused")
+                    self.viewModel.observePose(pose, trace: frame.trace)
+                } else {
+                    self.viewModel.process(pose, trace: frame.trace)
+                }
             }
             if self.viewModel.finishedSummary != nil { self.camera.finish() }
             else if let onPose = self.onPose {
@@ -119,6 +134,9 @@ final class WorkoutCameraCoordinator {
     }
 
     private func cameraStateChanged(_ state: CameraState) {
+        #if DEBUG
+        lastCounterFrame = nil
+        #endif
         if state == .running, isForeground {
             viewModel.setCameraReady(true)
             if shouldResumeWhenReady { viewModel.resume() }
