@@ -10,7 +10,7 @@ struct PoseReplaySquatCycle {
         case seekingStance, standing, descent, awaitingDepth, bilateralDepth, unilateralDepth
         case sustainedDepth, corroboratedHipDepth, recoveredDepthEvidence, holdingDepth, missingJoints, insufficientDepth, conflictingLegs, movingSupport, changedGeometry
         case interrupted, expired, repeatedTimestamp, reset, renewedDescent, returning, counted
-        case awaitingSupport, supportExpired, reacquiredDuringAscent, toleratedAscentRegression
+        case awaitingSupport, supportExpired, reacquiredDuringAscent, recoveredInterruptedAscent, toleratedAscentRegression
     }
 
     struct Step: Equatable {
@@ -98,6 +98,7 @@ struct PoseReplaySquatCycle {
 
     private struct Leg {
         var observation: Observation?
+        var lastReliable: Observation?
         var ema: Double?
         var lastSeen: Double?
         var reference: Observation?
@@ -132,6 +133,7 @@ struct PoseReplaySquatCycle {
                 ema = value.kneeAngle
                 standingSince = nil
             }
+            lastReliable = value
             lastSeen = time
         }
 
@@ -217,8 +219,10 @@ struct PoseReplaySquatCycle {
         }
 
         private var previous: Sample?
+        private(set) var geometryConsistent = false
 
         mutating func agrees(_ pose: PoseReplayPose?, left: Leg, right: Leg, at time: Double) -> Bool {
+            geometryConsistent = false
             guard let pose, let l = left.observation, let r = right.observation,
                   let ls = left.cycleReference, let rs = right.cycleReference,
                   let ll = Self.length(pose, side: .left), let rl = Self.length(pose, side: .right) else {
@@ -238,6 +242,7 @@ struct PoseReplaySquatCycle {
                     <= Limits.supportTolerance * scale,
                   (0.65...1.35).contains(ll / earlier.leftLength),
                   (0.65...1.35).contains(rl / earlier.rightLength) else { return false }
+            geometryConsistent = true
             let leftTravel = Self.hip(l) - Self.hip(earlier.left)
             let rightTravel = Self.hip(r) - Self.hip(earlier.right)
             let leftBend = l.kneeAngle - earlier.left.kneeAngle
@@ -484,10 +489,18 @@ struct PoseReplaySquatCycle {
                    recoveringDepthEvidence: true, onStep: onStep)
     }
 
+    static func replayWithInterruptedAscentRecovery(_ session: PoseReplaySession,
+                                                     onStep: ((Double, Step) -> Void)? = nil) throws -> [Double] {
+        try replay(session, ignoringSupportChecks: false, corroboratedDepth: true,
+                   toleratingAscentRegression: true, usingProjectionConflictEvidence: true,
+                   recoveringDepthEvidence: true, recoveringInterruptedAscent: true, onStep: onStep)
+    }
+
     private static func replay(_ session: PoseReplaySession, ignoringSupportChecks: Bool,
                                corroboratedDepth: Bool, toleratingAscentRegression: Bool = false,
                                usingProjectionConflictEvidence: Bool = false,
                                recoveringDepthEvidence: Bool = false,
+                               recoveringInterruptedAscent: Bool = false,
                                onStep: ((Double, Step) -> Void)?) throws -> [Double] {
         try PoseReplayRunner.validateHeader(session)
         var previousTime = 0.0
@@ -499,7 +512,8 @@ struct PoseReplaySquatCycle {
             let step = cycle.process(event, ignoringSupportChecks: ignoringSupportChecks, corroboratedDepth: corroboratedDepth,
                                      toleratingAscentRegression: toleratingAscentRegression,
                                      usingProjectionConflictEvidence: usingProjectionConflictEvidence,
-                                     recoveringDepthEvidence: recoveringDepthEvidence)
+                                     recoveringDepthEvidence: recoveringDepthEvidence,
+                                     recoveringInterruptedAscent: recoveringInterruptedAscent)
             onStep?(event.seconds, step)
             if step.counted { times.append(event.seconds) }
         }
@@ -513,7 +527,8 @@ struct PoseReplaySquatCycle {
     private mutating func process(_ event: PoseReplayEvent, ignoringSupportChecks: Bool, corroboratedDepth: Bool,
                                   toleratingAscentRegression: Bool = false,
                                   usingProjectionConflictEvidence: Bool = false,
-                                  recoveringDepthEvidence: Bool = false) -> Step {
+                                  recoveringDepthEvidence: Bool = false,
+                                  recoveringInterruptedAscent: Bool = false) -> Step {
         let time = event.seconds
         projectionConflictAccepted = false
         if event.kind == .reset {
@@ -538,6 +553,10 @@ struct PoseReplaySquatCycle {
             aspectRatio = pose.aspectRatio
             rotationAngle = pose.rotationAngle
         }
+        let previousReliableLeft = left.lastReliable
+        let previousReliableRight = right.lastReliable
+        let previousReliableLeftTime = left.lastSeen
+        let previousReliableRightTime = right.lastSeen
         let previousLeft = left.observation
         let previousRight = right.observation
         left.update(PoseReplayDepthAudit.observe(event.pose, side: .left), at: time)
@@ -627,7 +646,10 @@ struct PoseReplaySquatCycle {
         case .returning:
             return continueReturn(previousLeft: previousLeft, previousRight: previousRight,
                                   unconfirmedReturn: unconfirmedReturn,
-                                  toleratingAscentRegression: toleratingAscentRegression)
+                                  toleratingAscentRegression: toleratingAscentRegression,
+                                  recoveringInterruptedAscent: recoveringInterruptedAscent,
+                                  previousReliableLeft: previousReliableLeft, previousReliableRight: previousReliableRight,
+                                  previousReliableLeftTime: previousReliableLeftTime, previousReliableRightTime: previousReliableRightTime)
         case .lowered, .descending:
             break
         }
@@ -661,7 +683,9 @@ struct PoseReplaySquatCycle {
     }
 
     private mutating func continueReturn(previousLeft: Observation?, previousRight: Observation?,
-                                         unconfirmedReturn: Bool, toleratingAscentRegression: Bool) -> Step {
+                                         unconfirmedReturn: Bool, toleratingAscentRegression: Bool,
+                                         recoveringInterruptedAscent: Bool, previousReliableLeft: Observation?, previousReliableRight: Observation?,
+                                         previousReliableLeftTime: Double?, previousReliableRightTime: Double?) -> Step {
         let leftDeep = (left.drop ?? 0) >= Limits.minimumDrop
         let rightDeep = (right.drop ?? 0) >= Limits.minimumDrop
         if revalidatingAscent {
@@ -684,8 +708,28 @@ struct PoseReplaySquatCycle {
             return discard(.renewedDescent)
         }
         guard !unconfirmedReturn, supportRecovery == .none,
-              let l = left.drop, let r = right.drop, abs(l - r) <= Limits.supportTolerance,
+              let l = left.drop, let r = right.drop,
               !left.upright, !right.upright else { return discard(.interrupted) }
+        if abs(l - r) > Limits.supportTolerance {
+            guard recoveringInterruptedAscent, toleratingAscentRegression,
+                  projectionConflict.geometryConsistent, !ascentToleranceUsed else { return discard(.interrupted) }
+            let returningLeg = leftDeep ? left : right
+            let witness = leftDeep ? right : left
+            let previousWitness = leftDeep ? previousRight : previousLeft
+            guard let current = returningLeg.observation,
+                  let earlier = leftDeep ? previousReliableLeft : previousReliableRight,
+                  let previousTime = leftDeep ? previousReliableLeftTime : previousReliableRightTime,
+                  let timestamp, timestamp > previousTime else { return discard(.interrupted) }
+            guard Self.hipAndHeightRise(witness, from: previousWitness),
+                  witness.isRising(from: previousWitness),
+                  timestamp - previousTime <= Limits.maxOcclusion,
+                  Double(current.ankle.y) + current.hipAnkleHeight
+                    > Double(earlier.ankle.y) + earlier.hipAnkleHeight,
+                  Self.smallKneeRegression(returningLeg, from: earlier) else { return discard(.interrupted) }
+            ascentToleranceUsed = true
+            revalidatingAscent = true
+            return result(.recoveredInterruptedAscent)
+        }
         let witnessIsRising = leftDeep ? right.isRising(from: previousRight) : left.isRising(from: previousLeft)
         guard witnessIsRising else { return discard(.interrupted) }
         revalidatingAscent = true

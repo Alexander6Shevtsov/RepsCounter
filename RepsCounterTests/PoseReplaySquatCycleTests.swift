@@ -832,6 +832,156 @@ final class PoseReplaySquatCycleTests: XCTestCase {
         XCTAssertEqual(added.first ?? 0, 11.274751333, accuracy: 0.000000001)
     }
 
+    private func interruptedAscentFrame(_ time: Double, stage: Int, mirrored: Bool = false,
+                                       largerRegression: Bool = false, lowering: Bool = false,
+                                       footShift: Double = 0) -> PoseReplayEvent {
+        var joints: [BodyJoint: JointPoint] = [:]
+        for side in [BodyLeg.left, .right] {
+            let source = side == .left
+            if source && (stage == 3 || stage == 4) { continue }
+            let hip: Double
+            let ankle = source ? (stage == 5 ? 0.225 : 0.2) : 0.1
+            let forward: Double
+            let knee: Double
+            switch stage {
+            case 0:
+                hip = 0.5
+                forward = 0
+                knee = (hip + ankle) / 2
+            case 1:
+                hip = 0.42
+                forward = 0.04
+                knee = (hip + ankle) / 2
+            case 2:
+                hip = 0.34
+                forward = source ? 0.025 : 0.08
+                knee = source ? 0.34 : 0.35
+            case 3:
+                hip = 0.35
+                forward = 0.08
+                knee = (hip + ankle) / 2
+            case 4:
+                hip = 0.37
+                forward = 0.08
+                knee = (hip + ankle) / 2
+            case 5:
+                hip = source ? (lowering ? 0.33 : 0.35) : 0.38
+                forward = source ? (largerRegression ? 0.06 : 0.026) : 0.06
+                knee = source ? hip : (hip + ankle) / 2
+            default:
+                hip = source ? 0.42 : 0.44
+                forward = 0.04
+                knee = (hip + ankle) / 2
+            }
+            let base = source ? 0.3 : 0.7
+            let isLeft = mirrored ? !source : source
+            let names: [BodyJoint] = isLeft ? [.leftHip, .leftKnee, .leftAnkle] : [.rightHip, .rightKnee, .rightAnkle]
+            let points = [(base, hip), (base + forward, knee), (base + (source ? footShift : 0), ankle)]
+            for (name, point) in zip(names, points) {
+                joints[name] = JointPoint(location: CGPoint(x: mirrored ? 1 - point.0 : point.0, y: point.1),
+                                          confidence: 0.9)
+            }
+        }
+        return .init(seconds: time, kind: .pose,
+                     pose: .init(from: BodyPose(joints: joints, aspectRatio: 1, rotationAngle: 90)))
+    }
+
+    private func interruptedAscentCycle(mirrored: Bool = false) -> PoseReplaySession {
+        session([(0.0, 0), (0.1, 0), (0.2, 1), (0.3, 2), (0.4, 2),
+                 (0.5, 3), (0.6, 4), (0.7, 5), (0.8, 6), (0.9, 0), (1.0, 0)].map {
+            interruptedAscentFrame($0.0, stage: $0.1, mirrored: mirrored)
+        })
+    }
+
+    func testInterruptedAscentRecoveryReusesToleranceAndRequiresBilateralCompletion() throws {
+        for mirrored in [false, true] {
+            let recorded = interruptedAscentCycle(mirrored: mirrored)
+            XCTAssertTrue(try PoseReplaySquatCycle.replayWithDepthEvidenceRecovery(recorded).isEmpty)
+            var recovered = 0
+            let times = try PoseReplaySquatCycle.replayWithInterruptedAscentRecovery(recorded) { _, step in
+                if step.reason == .recoveredInterruptedAscent { recovered += 1 }
+            }
+            XCTAssertEqual(recovered, 1)
+            XCTAssertEqual(times, [1.0])
+        }
+    }
+
+    func testInterruptedAscentRecoveryRejectsRealDescentAndLargeRegression() throws {
+        for mirrored in [false, true] {
+            for larger in [false, true] {
+                var events = interruptedAscentCycle(mirrored: mirrored).events
+                events[7] = interruptedAscentFrame(0.7, stage: 5, mirrored: mirrored,
+                                                  largerRegression: larger, lowering: !larger)
+                XCTAssertTrue(try PoseReplaySquatCycle.replayWithInterruptedAscentRecovery(session(events)).isEmpty)
+            }
+        }
+    }
+
+    func testInterruptedAscentRecoveryCannotReuseConsumedToleranceOrLoseJoints() throws {
+        let base = interruptedAscentCycle().events
+        for replacement in [frame(0.8, nil, nil), frame(0.8, nil, .nearStanding), frame(0.8, .low, .low),
+                            interruptedAscentFrame(0.8, stage: 5, largerRegression: true)] {
+            var events = base
+            events[8] = replacement
+            XCTAssertTrue(try PoseReplaySquatCycle.replayWithInterruptedAscentRecovery(session(events)).isEmpty)
+        }
+    }
+
+    func testInterruptedAscentRecoveryKeepsSupportAndDepthRequirements() throws {
+        var shifted = interruptedAscentCycle().events
+        shifted[7] = interruptedAscentFrame(0.7, stage: 5, footShift: 0.2)
+        XCTAssertTrue(try PoseReplaySquatCycle.replayWithInterruptedAscentRecovery(session(shifted)).isEmpty)
+        let noDepth = interruptedAscentCycle().events.filter { $0.seconds != 0.3 && $0.seconds != 0.4 }
+        XCTAssertTrue(try PoseReplaySquatCycle.replayWithInterruptedAscentRecovery(session(noDepth)).isEmpty)
+    }
+
+    func testInterruptedAscentRecoveryIsCausalAndCannotCountIncompleteOrDuplicateReturn() throws {
+        let recorded = interruptedAscentCycle()
+        let complete = try PoseReplaySquatCycle.replayWithInterruptedAscentRecovery(recorded)
+        for length in 1...recorded.events.count {
+            let events = Array(recorded.events.prefix(length))
+            XCTAssertEqual(try PoseReplaySquatCycle.replayWithInterruptedAscentRecovery(session(events)),
+                           complete.filter { $0 <= events.last!.seconds })
+        }
+        let events = recorded.events + [interruptedAscentFrame(1.1, stage: 0),
+                                         interruptedAscentFrame(1.2, stage: 0)]
+        XCTAssertEqual(try PoseReplaySquatCycle.replayWithInterruptedAscentRecovery(session(events)), [1.0])
+    }
+
+    func testInterruptedAscentRecoveryDoesNotCarryResetOrExpiredHistory() throws {
+        let recorded = interruptedAscentCycle()
+        let reset = Array(recorded.events.prefix(7))
+            + [PoseReplayEvent(seconds: 0.65, kind: .reset, pose: nil)]
+            + Array(recorded.events.dropFirst(7))
+        XCTAssertTrue(try PoseReplaySquatCycle.replayWithInterruptedAscentRecovery(session(reset)).isEmpty)
+        let gap = (6...12).map { interruptedAscentFrame(Double($0) / 10, stage: 4) }
+        let events = Array(recorded.events.prefix(6)) + gap
+            + [interruptedAscentFrame(1.3, stage: 5), interruptedAscentFrame(1.4, stage: 6),
+               interruptedAscentFrame(1.5, stage: 0), interruptedAscentFrame(1.6, stage: 0)]
+        var recovered = 0
+        let times = try PoseReplaySquatCycle.replayWithInterruptedAscentRecovery(session(events)) { _, step in
+            if step.reason == .recoveredInterruptedAscent { recovered += 1 }
+        }
+        XCTAssertEqual(recovered, 0)
+        XCTAssertEqual(times, try PoseReplaySquatCycle.replayWithDepthEvidenceRecovery(session(events)))
+    }
+
+    func testPrivateInterruptedAscentTargetRecording() throws {
+        guard let path = ProcessInfo.processInfo.environment["REPS_DEPTH_RECOVERY_RECORDING"] else {
+            throw XCTSkip("Set REPS_DEPTH_RECOVERY_RECORDING to validate the private target recording.")
+        }
+        let recorded = try JSONDecoder().decode(PoseReplaySession.self,
+                                                from: Data(contentsOf: URL(fileURLWithPath: path)))
+        let baseline = try PoseReplaySquatCycle.replayWithDepthEvidenceRecovery(recorded)
+        let recovered = try PoseReplaySquatCycle.replayWithInterruptedAscentRecovery(recorded)
+        XCTAssertEqual(baseline.count, 9)
+        XCTAssertEqual(recovered.count, 10)
+        XCTAssertTrue(baseline.allSatisfy { recovered.contains($0) })
+        let added = recovered.filter { !baseline.contains($0) }
+        XCTAssertEqual(added.count, 1)
+        XCTAssertEqual(added.first ?? 0, 51.673201917, accuracy: 0.000000001)
+    }
+
     func testPrivateReplayCorpus() throws {
         #if os(iOS) && !targetEnvironment(simulator)
         throw XCTSkip("Private Replay corpus is available only on the simulator or Mac.")
@@ -923,6 +1073,8 @@ final class PoseReplaySquatCycleTests: XCTestCase {
                 }
                 let projectionTimes = try PoseReplaySquatCycle.replayWithProjectionConflictEvidence(session)
                 let recoveryTimes = try PoseReplaySquatCycle.replayWithDepthEvidenceRecovery(session)
+                let ascentRecoveryTimes = try PoseReplaySquatCycle.replayWithInterruptedAscentRecovery(session)
+                XCTAssertEqual(ascentRecoveryTimes, recoveryTimes, "\(file.lastPathComponent): PR50 events changed")
                 XCTAssertEqual(recoveryTimes, projectionTimes, "\(file.lastPathComponent): PR49 events changed")
                 XCTAssertEqual(projectionTimes, ascentTimes, "\(file.lastPathComponent): PR48 events changed")
                 let expectedDepth = (baseline + (depthAdditions[identifier] ?? [])).sorted()
