@@ -553,6 +553,132 @@ final class PoseReplaySquatCycleTests: XCTestCase {
         XCTAssertTrue(try PoseReplaySquatCycle.replayWithAscentTolerance(session(reacquiredAscent + samples)).isEmpty)
     }
 
+    private func projectionFrame(_ time: Double, stage: Int, mirrored: Bool = false,
+                                 partial: Bool = false, opposing: Bool = false,
+                                 footShift: Double = 0, distorted: Bool = false) -> PoseReplayEvent {
+        let low = stage == 2
+        let leftHip = stage == 0 ? 0.50 : (low ? (partial ? 0.38 : 0.32) : 0.39)
+        let rightHip = stage == 0 ? 0.48 : (low ? (partial ? 0.40 : 0.34) : 0.40)
+        var joints: [BodyJoint: JointPoint] = [:]
+        for (side, hip, ankle, base) in [(BodyLeg.left, leftHip, 0.21, 0.3), (.right, rightHip, 0.11, 0.7)] {
+            let isLeft = side == .left
+            let forward = stage == 0 ? 0 : (distorted && isLeft ? 0.6 : (low ? (opposing && !isLeft ? 0.04 : 0.10) : 0.06))
+            let knee = stage == 0 ? (hip + ankle) / 2
+                : (low ? (isLeft ? (partial ? 0.35 : 0.34) : (opposing ? 0.25 : 0.30))
+                   : (isLeft ? 0.35 : 0.34))
+            let targetLeft = mirrored ? !isLeft : isLeft
+            let coordinates = [(base, hip), (base + forward, knee), (base + (isLeft ? footShift : 0), ankle)]
+            let names: [BodyJoint] = targetLeft ? [.leftHip, .leftKnee, .leftAnkle]
+                : [.rightHip, .rightKnee, .rightAnkle]
+            for (name, point) in zip(names, coordinates) {
+                joints[name] = JointPoint(location: CGPoint(x: mirrored ? 1 - point.0 : point.0, y: point.1),
+                                          confidence: 0.9)
+            }
+        }
+        return .init(seconds: time, kind: .pose,
+                     pose: .init(from: BodyPose(joints: joints, aspectRatio: 1, rotationAngle: 90)))
+    }
+
+    private func projectionCycle(mirrored: Bool = false, partial: Bool = false) -> PoseReplaySession {
+        session([
+            projectionFrame(0, stage: 0, mirrored: mirrored),
+            projectionFrame(0.1, stage: 0, mirrored: mirrored),
+            projectionFrame(0.2, stage: 1, mirrored: mirrored),
+            projectionFrame(0.3, stage: 2, mirrored: mirrored, partial: partial),
+            projectionFrame(0.4, stage: 2, mirrored: mirrored, partial: partial),
+            projectionFrame(0.5, stage: 2, mirrored: mirrored, partial: partial),
+            projectionFrame(0.6, stage: 1, mirrored: mirrored),
+            projectionFrame(0.8, stage: 0, mirrored: mirrored),
+            projectionFrame(0.9, stage: 0, mirrored: mirrored)
+        ])
+    }
+
+    func testProjectionEvidenceIsOptInAndSymmetric() throws {
+        for mirrored in [false, true] {
+            let recording = projectionCycle(mirrored: mirrored)
+            XCTAssertTrue(try PoseReplaySquatCycle.replayWithAscentTolerance(recording).isEmpty)
+            var accepted = 0
+            let times = try PoseReplaySquatCycle.replayWithProjectionConflictEvidence(recording) { _, step in
+                if step.projectionConflictAccepted { accepted += 1 }
+            }
+            XCTAssertGreaterThan(accepted, 0)
+            XCTAssertEqual(times, [0.9])
+        }
+    }
+
+    func testProjectionEvidenceCannotConfirmPartialDepth() throws {
+        for mirrored in [false, true] {
+            XCTAssertTrue(try PoseReplaySquatCycle.replayWithProjectionConflictEvidence(
+                projectionCycle(mirrored: mirrored, partial: true)).isEmpty)
+        }
+    }
+
+    func testProjectionEvidenceRejectsOpposingKneeMotionAndChangingSegments() throws {
+        for mirrored in [false, true] {
+            for distorted in [false, true] {
+                let events = [
+                    projectionFrame(0, stage: 0, mirrored: mirrored),
+                    projectionFrame(0.1, stage: 0, mirrored: mirrored),
+                    projectionFrame(0.2, stage: 1, mirrored: mirrored),
+                    projectionFrame(0.3, stage: 2, mirrored: mirrored, opposing: !distorted, distorted: distorted)
+                ]
+                var last: PoseReplaySquatCycle.Step?
+                XCTAssertTrue(try PoseReplaySquatCycle.replayWithProjectionConflictEvidence(session(events)) { _, step in
+                    last = step
+                }.isEmpty)
+                XCTAssertEqual(last?.reason, .conflictingLegs)
+                XCTAssertEqual(last?.projectionConflictAccepted, false)
+            }
+        }
+    }
+
+    func testProjectionEvidencePreservesUprightConflictAndMovingSupport() throws {
+        let bad = [frame(0.3, .low, .upright), frame(0.3, .low, .low, footShift: 0.2)]
+        for event in bad {
+            XCTAssertTrue(try PoseReplaySquatCycle.replayWithProjectionConflictEvidence(
+                session(start + [event] + finish)).isEmpty)
+        }
+        let events = [projectionFrame(0, stage: 0), projectionFrame(0.1, stage: 0),
+                      projectionFrame(0.2, stage: 1), projectionFrame(0.3, stage: 2, footShift: 0.2)]
+        var reason: PoseReplaySquatCycle.Reason?
+        _ = try PoseReplaySquatCycle.replayWithProjectionConflictEvidence(session(events)) { _, step in
+            reason = step.reason
+        }
+        XCTAssertEqual(reason, .movingSupport)
+    }
+
+    func testProjectionEvidenceCannotCountUnfinishedOrRepeatCompletedMovement() throws {
+        let recorded = projectionCycle()
+        XCTAssertTrue(try PoseReplaySquatCycle.replayWithProjectionConflictEvidence(
+            session(Array(recorded.events.prefix(7)))).isEmpty)
+        let events = recorded.events + [projectionFrame(1.0, stage: 0), projectionFrame(1.1, stage: 0)]
+        XCTAssertEqual(try PoseReplaySquatCycle.replayWithProjectionConflictEvidence(session(events)), [0.9])
+    }
+
+    func testProjectionEvidenceIsCausalAndResetDoesNotCarryContext() throws {
+        let recording = projectionCycle()
+        let full = try PoseReplaySquatCycle.replayWithProjectionConflictEvidence(recording)
+        for count in 1...recording.events.count {
+            let prefix = Array(recording.events.prefix(count))
+            XCTAssertEqual(try PoseReplaySquatCycle.replayWithProjectionConflictEvidence(session(prefix)),
+                           full.filter { $0 <= prefix.last!.seconds })
+        }
+        let events = Array(recording.events.prefix(3))
+            + [PoseReplayEvent(seconds: 0.25, kind: .reset, pose: nil)]
+            + Array(recording.events.dropFirst(3))
+        XCTAssertTrue(try PoseReplaySquatCycle.replayWithProjectionConflictEvidence(session(events)).isEmpty)
+    }
+
+    func testProjectionEvidenceRejectsLossOfBothLegsAndStaleHistory() throws {
+        let events = Array(projectionCycle().events.prefix(3))
+            + [PoseReplayEvent(seconds: 0.3, kind: .pose, pose: nil),
+               PoseReplayEvent(seconds: 0.4, kind: .pose, pose: nil),
+               PoseReplayEvent(seconds: 0.5, kind: .pose, pose: nil)]
+            + [projectionFrame(0.6, stage: 2), projectionFrame(0.7, stage: 2),
+               projectionFrame(0.8, stage: 0), projectionFrame(0.9, stage: 0)]
+        XCTAssertTrue(try PoseReplaySquatCycle.replayWithProjectionConflictEvidence(session(events)).isEmpty)
+    }
+
     func testPrivateReplayCorpus() throws {
         #if os(iOS) && !targetEnvironment(simulator)
         throw XCTSkip("Private Replay corpus is available only on the simulator or Mac.")
@@ -642,6 +768,8 @@ final class PoseReplaySquatCycleTests: XCTestCase {
                 let ascentTimes = try PoseReplaySquatCycle.replayWithAscentTolerance(session) { seconds, step in
                     trace.append("\(file.lastPathComponent),ascent,\(seconds),\(step.phase.rawValue),\(step.reason.rawValue),\(step.counted)")
                 }
+                let projectionTimes = try PoseReplaySquatCycle.replayWithProjectionConflictEvidence(session)
+                XCTAssertEqual(projectionTimes, ascentTimes, "\(file.lastPathComponent): PR48 events changed")
                 let expectedDepth = (baseline + (depthAdditions[identifier] ?? [])).sorted()
                 let depthMatches = depthTimes.count == expectedDepth.count &&
                     zip(depthTimes, expectedDepth).allSatisfy { abs($0.0 - $0.1) <= 0.000501 }
@@ -687,6 +815,7 @@ final class PoseReplaySquatCycleTests: XCTestCase {
         XCTAssertEqual(bypassTotal, 133)
         XCTAssertEqual(depthTotal, 123)
         XCTAssertEqual(depthMatched, expected.count)
+        XCTAssertEqual(ascentTotal, 124)
         #endif
     }
 }
