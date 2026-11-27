@@ -679,6 +679,159 @@ final class PoseReplaySquatCycleTests: XCTestCase {
         XCTAssertTrue(try PoseReplaySquatCycle.replayWithProjectionConflictEvidence(session(events)).isEmpty)
     }
 
+    private func recoverySession(_ events: [PoseReplayEvent], side: BodyLeg = .left) -> PoseReplaySession {
+        session(events.map { event in
+            guard let pose = event.pose?.restore() else { return event }
+            var joints = pose.joints
+            let ankle: BodyJoint = side == .left ? .rightAnkle : .leftAnkle
+            if let point = joints[ankle] {
+                joints[ankle] = JointPoint(location: CGPoint(x: point.location.x, y: 0),
+                                           confidence: point.confidence)
+            }
+            return .init(seconds: event.seconds, kind: event.kind,
+                         pose: .init(from: BodyPose(joints: joints, aspectRatio: pose.aspectRatio,
+                                                   rotationAngle: pose.rotationAngle)))
+        })
+    }
+
+    private func recoveryFrame(_ time: Double, _ posture: Posture, side: BodyLeg,
+                               weak: Bool = false) -> PoseReplayEvent {
+        frame(time, side == .left ? posture : .corroborating, side == .left ? .corroborating : posture,
+              unreliableJoint: weak ? (side == .left ? .leftHip : .rightHip) : nil)
+    }
+
+    private func recoveryCycle(side: BodyLeg = .left) -> PoseReplaySession {
+        recoverySession(start + [recoveryFrame(0.3, .low, side: side),
+                         recoveryFrame(0.4, .low, side: side),
+                         recoveryFrame(0.5, .low, side: side, weak: true),
+                         frame(0.6, .mid, .mid), frame(0.7, .upright, .upright),
+                         frame(0.8, .upright, .upright)], side: side)
+    }
+
+    func testDepthRecoveryCombinesTwoStrictFramesWithOneCorroboratedWeakFrameOnEitherSide() throws {
+        for side in [BodyLeg.left, .right] {
+            let recording = recoveryCycle(side: side)
+            XCTAssertTrue(try PoseReplaySquatCycle.replayWithProjectionConflictEvidence(recording).isEmpty)
+            var confirmations = 0
+            let times = try PoseReplaySquatCycle.replayWithDepthEvidenceRecovery(recording) { _, step in
+                if step.reason == .recoveredDepthEvidence { confirmations += 1 }
+            }
+            XCTAssertEqual(confirmations, 1)
+            XCTAssertEqual(times, [0.8])
+        }
+    }
+
+    func testDepthRecoveryRejectsOneStrictFrameAndWeakNoiseWithoutHistory() throws {
+        let recording = recoveryCycle()
+        let insufficient = recording.events.filter { $0.seconds != 0.4 }
+        XCTAssertTrue(try PoseReplaySquatCycle.replayWithDepthEvidenceRecovery(recoverySession(insufficient)).isEmpty)
+        let weakOnly = start + [recoveryFrame(0.3, .low, side: .left, weak: true)]
+            + [frame(0.4, .mid, .mid), frame(0.5, .upright, .upright), frame(0.6, .upright, .upright)]
+        XCTAssertTrue(try PoseReplaySquatCycle.replayWithDepthEvidenceRecovery(recoverySession(weakOnly)).isEmpty)
+    }
+
+    func testDepthRecoveryRejectsShallowAndBrokenDepthSequences() throws {
+        let shallow = start + [recoveryFrame(0.3, .shallow, side: .left),
+                               recoveryFrame(0.4, .shallow, side: .left),
+                               recoveryFrame(0.5, .shallow, side: .left, weak: true)]
+            + [frame(0.6, .mid, .mid), frame(0.7, .upright, .upright), frame(0.8, .upright, .upright)]
+        XCTAssertTrue(try PoseReplaySquatCycle.replayWithDepthEvidenceRecovery(recoverySession(shallow)).isEmpty)
+        let events = start + [recoveryFrame(0.3, .low, side: .left),
+                              recoveryFrame(0.35, .shallow, side: .left),
+                              recoveryFrame(0.4, .low, side: .left),
+                              recoveryFrame(0.5, .low, side: .left, weak: true)]
+            + [frame(0.6, .mid, .mid), frame(0.7, .upright, .upright), frame(0.8, .upright, .upright)]
+        XCTAssertTrue(try PoseReplaySquatCycle.replayWithDepthEvidenceRecovery(recoverySession(events)).isEmpty)
+    }
+
+    func testDepthRecoveryDoesNotUseMissingOrUnreliableKneeAsEvidence() throws {
+        for joint in [BodyJoint.leftKnee, .leftAnkle] {
+            let events = start + [recoveryFrame(0.3, .low, side: .left),
+                                  recoveryFrame(0.4, .low, side: .left),
+                                  frame(0.5, .low, .perspective, unreliableJoint: joint),
+                                  frame(0.6, .mid, .mid), frame(0.7, .upright, .upright),
+                                  frame(0.8, .upright, .upright)]
+            XCTAssertTrue(try PoseReplaySquatCycle.replayWithDepthEvidenceRecovery(recoverySession(events)).isEmpty)
+        }
+        let missing = start + [recoveryFrame(0.3, .low, side: .left),
+                               recoveryFrame(0.4, .low, side: .left),
+                               frame(0.5, nil, .perspective), frame(0.6, .mid, .mid),
+                               frame(0.7, .upright, .upright), frame(0.8, .upright, .upright)]
+        XCTAssertTrue(try PoseReplaySquatCycle.replayWithDepthEvidenceRecovery(recoverySession(missing)).isEmpty)
+    }
+
+    func testDepthRecoveryExpiresEvidenceAndCannotJoinResetOrRepeatedTimestamp() throws {
+        let repeated = start + [recoveryFrame(0.3, .low, side: .left),
+                                recoveryFrame(0.3, .low, side: .left),
+                                recoveryFrame(0.4, .low, side: .left, weak: true),
+                                frame(0.5, .mid, .mid), frame(0.6, .upright, .upright),
+                                frame(0.7, .upright, .upright)]
+        XCTAssertTrue(try PoseReplaySquatCycle.replayWithDepthEvidenceRecovery(recoverySession(repeated)).isEmpty)
+        let expired = start + [recoveryFrame(0.3, .low, side: .left),
+                               recoveryFrame(0.4, .low, side: .left),
+                               frame(0.5, nil, .perspective),
+                               recoveryFrame(0.6, .low, side: .left, weak: true),
+                               frame(0.7, .mid, .mid), frame(0.8, .upright, .upright),
+                               frame(0.9, .upright, .upright)]
+        XCTAssertTrue(try PoseReplaySquatCycle.replayWithDepthEvidenceRecovery(recoverySession(expired)).isEmpty)
+        let interrupted = Array(recoveryCycle().events.prefix(5))
+            + [PoseReplayEvent(seconds: 0.45, kind: .reset, pose: nil)]
+            + Array(recoveryCycle().events.dropFirst(5))
+        XCTAssertTrue(try PoseReplaySquatCycle.replayWithDepthEvidenceRecovery(recoverySession(interrupted)).isEmpty)
+    }
+
+    func testDepthRecoveryStillRejectsContradictoryLegAndFootShift() throws {
+        for last in [frame(0.5, .low, .upright, unreliableJoint: .leftHip),
+                     frame(0.5, .low, .perspective, footShift: 0.2, unreliableJoint: .leftHip)] {
+            let events = start + [recoveryFrame(0.3, .low, side: .left),
+                                  recoveryFrame(0.4, .low, side: .left), last,
+                                  frame(0.6, .mid, .mid), frame(0.7, .upright, .upright),
+                                  frame(0.8, .upright, .upright)]
+            XCTAssertTrue(try PoseReplaySquatCycle.replayWithDepthEvidenceRecovery(recoverySession(events)).isEmpty)
+        }
+    }
+
+    func testDepthRecoveryIsCausalNeedsCompletionAndCannotDoubleCount() throws {
+        let recording = recoveryCycle()
+        let complete = try PoseReplaySquatCycle.replayWithDepthEvidenceRecovery(recording)
+        for count in 1...recording.events.count {
+            let events = Array(recording.events.prefix(count))
+            XCTAssertEqual(try PoseReplaySquatCycle.replayWithDepthEvidenceRecovery(recoverySession(events)),
+                           complete.filter { $0 <= events.last!.seconds })
+        }
+        let lingering = recording.events + [frame(0.9, .upright, .upright), frame(1.0, .upright, .upright)]
+        XCTAssertEqual(try PoseReplaySquatCycle.replayWithDepthEvidenceRecovery(recoverySession(lingering)), [0.8])
+    }
+
+    func testDepthRecoveryKeepsWeakHipConfidenceFloor() throws {
+        var events = recoveryCycle().events
+        let index = events.firstIndex { $0.seconds == 0.5 }!
+        let pose = events[index].pose!.restore()
+        var joints = pose.joints
+        let hip = joints[.leftHip]!
+        joints[.leftHip] = JointPoint(location: hip.location, confidence: 0.29)
+        events[index] = .init(seconds: 0.5, kind: .pose,
+                              pose: .init(from: BodyPose(joints: joints, aspectRatio: pose.aspectRatio,
+                                                        rotationAngle: pose.rotationAngle)))
+        XCTAssertTrue(try PoseReplaySquatCycle.replayWithDepthEvidenceRecovery(session(events)).isEmpty)
+    }
+
+    func testPrivateDepthRecoveryTargetRecording() throws {
+        guard let path = ProcessInfo.processInfo.environment["REPS_DEPTH_RECOVERY_RECORDING"] else {
+            throw XCTSkip("Set REPS_DEPTH_RECOVERY_RECORDING to validate the private target recording.")
+        }
+        let recording = try JSONDecoder().decode(PoseReplaySession.self,
+                                                 from: Data(contentsOf: URL(fileURLWithPath: path)))
+        let baseline = try PoseReplaySquatCycle.replayWithProjectionConflictEvidence(recording)
+        let recovered = try PoseReplaySquatCycle.replayWithDepthEvidenceRecovery(recording)
+        XCTAssertEqual(baseline.count, 8)
+        XCTAssertEqual(recovered.count, 9)
+        XCTAssertTrue(baseline.allSatisfy { recovered.contains($0) })
+        let added = recovered.filter { !baseline.contains($0) }
+        XCTAssertEqual(added.count, 1)
+        XCTAssertEqual(added.first ?? 0, 11.274751333, accuracy: 0.000000001)
+    }
+
     func testPrivateReplayCorpus() throws {
         #if os(iOS) && !targetEnvironment(simulator)
         throw XCTSkip("Private Replay corpus is available only on the simulator or Mac.")
@@ -769,6 +922,8 @@ final class PoseReplaySquatCycleTests: XCTestCase {
                     trace.append("\(file.lastPathComponent),ascent,\(seconds),\(step.phase.rawValue),\(step.reason.rawValue),\(step.counted)")
                 }
                 let projectionTimes = try PoseReplaySquatCycle.replayWithProjectionConflictEvidence(session)
+                let recoveryTimes = try PoseReplaySquatCycle.replayWithDepthEvidenceRecovery(session)
+                XCTAssertEqual(recoveryTimes, projectionTimes, "\(file.lastPathComponent): PR49 events changed")
                 XCTAssertEqual(projectionTimes, ascentTimes, "\(file.lastPathComponent): PR48 events changed")
                 let expectedDepth = (baseline + (depthAdditions[identifier] ?? [])).sorted()
                 let depthMatches = depthTimes.count == expectedDepth.count &&

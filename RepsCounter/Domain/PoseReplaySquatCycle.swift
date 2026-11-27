@@ -8,7 +8,7 @@ struct PoseReplaySquatCycle {
 
     enum Reason: String {
         case seekingStance, standing, descent, awaitingDepth, bilateralDepth, unilateralDepth
-        case sustainedDepth, corroboratedHipDepth, holdingDepth, missingJoints, insufficientDepth, conflictingLegs, movingSupport, changedGeometry
+        case sustainedDepth, corroboratedHipDepth, recoveredDepthEvidence, holdingDepth, missingJoints, insufficientDepth, conflictingLegs, movingSupport, changedGeometry
         case interrupted, expired, repeatedTimestamp, reset, renewedDescent, returning, counted
         case awaitingSupport, supportExpired, reacquiredDuringAscent, toleratedAscentRegression
     }
@@ -291,7 +291,7 @@ struct PoseReplaySquatCycle {
             return interval >= minimumDwell && interval <= Limits.continuity
         }
 
-        private static func qualifies(_ pose: PoseReplayPose, side: BodyLeg, leg: Leg, opposite: Leg) -> Bool {
+        static func qualifies(_ pose: PoseReplayPose, side: BodyLeg, leg: Leg, opposite: Leg) -> Bool {
             guard leg.observation == nil, let reference = leg.cycleReference,
                   let other = opposite.observation, let otherReference = opposite.cycleReference,
                   let otherDrop = opposite.drop, otherDrop >= Limits.minimumDrop,
@@ -321,6 +321,45 @@ struct PoseReplaySquatCycle {
             guard angle <= thresholds.loweredThreshold else { return false }
             let otherHipHeight = Double(other.ankle.y) + other.hipAnkleHeight
             return abs(hip.verticalPosition - otherHipHeight) <= 0.12 * min(height, otherReference.hipAnkleHeight)
+        }
+    }
+
+    private struct DepthEvidenceRecovery {
+        private struct Run {
+            var first: Double?
+            var last: Double?
+            var strictCount = 0
+            var strong = false
+
+            mutating func observe(_ leg: Leg, weak: Bool, at time: Double) -> Bool {
+                if let first, time - first > Limits.continuity { self = Self() }
+                if leg.observation != nil {
+                    guard leg.strict else {
+                        self = Self()
+                        return false
+                    }
+                    if first == nil { first = time }
+                    last = time
+                    strictCount = min(2, strictCount + 1)
+                    strong = strong || (leg.drop ?? 0) >= Limits.strongDrop
+                    return false
+                }
+                guard weak, strictCount == 2, strong, let first, let last,
+                      time > last, time - first >= minimumDwell,
+                      time - first <= Limits.continuity else { return false }
+                return true
+            }
+        }
+
+        private var left = Run()
+        private var right = Run()
+
+        mutating func observe(_ pose: PoseReplayPose, left l: Leg, right r: Leg, at time: Double) -> Bool {
+            let leftConfirmed = left.observe(l, weak: WeakHipDepthEvidence.qualifies(
+                pose, side: .left, leg: l, opposite: r), at: time)
+            let rightConfirmed = right.observe(r, weak: WeakHipDepthEvidence.qualifies(
+                pose, side: .right, leg: r, opposite: l), at: time)
+            return leftConfirmed || rightConfirmed
         }
     }
 
@@ -374,6 +413,7 @@ struct PoseReplaySquatCycle {
         private static let maximumSamples = 9
         private var samples: [Sample] = []
         var weakHip = WeakHipDepthEvidence()
+        var recovery = DepthEvidenceRecovery()
 
         mutating func observe(_ left: Leg, _ right: Leg, at time: Double) -> Reason? {
             let sustainedLeft = leftRun.update(left, opposite: right, at: time)
@@ -437,9 +477,17 @@ struct PoseReplaySquatCycle {
                    toleratingAscentRegression: true, usingProjectionConflictEvidence: true, onStep: onStep)
     }
 
+    static func replayWithDepthEvidenceRecovery(_ session: PoseReplaySession,
+                                                 onStep: ((Double, Step) -> Void)? = nil) throws -> [Double] {
+        try replay(session, ignoringSupportChecks: false, corroboratedDepth: true,
+                   toleratingAscentRegression: true, usingProjectionConflictEvidence: true,
+                   recoveringDepthEvidence: true, onStep: onStep)
+    }
+
     private static func replay(_ session: PoseReplaySession, ignoringSupportChecks: Bool,
                                corroboratedDepth: Bool, toleratingAscentRegression: Bool = false,
                                usingProjectionConflictEvidence: Bool = false,
+                               recoveringDepthEvidence: Bool = false,
                                onStep: ((Double, Step) -> Void)?) throws -> [Double] {
         try PoseReplayRunner.validateHeader(session)
         var previousTime = 0.0
@@ -450,7 +498,8 @@ struct PoseReplaySquatCycle {
             previousTime = event.seconds
             let step = cycle.process(event, ignoringSupportChecks: ignoringSupportChecks, corroboratedDepth: corroboratedDepth,
                                      toleratingAscentRegression: toleratingAscentRegression,
-                                     usingProjectionConflictEvidence: usingProjectionConflictEvidence)
+                                     usingProjectionConflictEvidence: usingProjectionConflictEvidence,
+                                     recoveringDepthEvidence: recoveringDepthEvidence)
             onStep?(event.seconds, step)
             if step.counted { times.append(event.seconds) }
         }
@@ -463,7 +512,8 @@ struct PoseReplaySquatCycle {
 
     private mutating func process(_ event: PoseReplayEvent, ignoringSupportChecks: Bool, corroboratedDepth: Bool,
                                   toleratingAscentRegression: Bool = false,
-                                  usingProjectionConflictEvidence: Bool = false) -> Step {
+                                  usingProjectionConflictEvidence: Bool = false,
+                                  recoveringDepthEvidence: Bool = false) -> Step {
         let time = event.seconds
         projectionConflictAccepted = false
         if event.kind == .reset {
@@ -593,6 +643,8 @@ struct PoseReplaySquatCycle {
             return result(phase == .returning ? .returning : .holdingDepth)
         }
         if deepest < Limits.minimumDrop { bottom = Bottom() }
+        let recoveredDepth = recoveringDepthEvidence
+            && bottom.recovery.observe(pose, left: left, right: right, at: time)
         if let reason = bottom.observe(left, right, at: time) {
             phase = .lowered
             return result(reason)
@@ -600,6 +652,10 @@ struct PoseReplaySquatCycle {
         if corroboratedDepth, bottom.weakHip.observe(pose, left: left, right: right, at: time) {
             phase = .lowered
             return result(.corroboratedHipDepth)
+        }
+        if recoveredDepth {
+            phase = .lowered
+            return result(.recoveredDepthEvidence)
         }
         return result(departure == time ? .descent : .awaitingDepth)
     }
