@@ -46,6 +46,7 @@ final class PipelineTelemetry: @unchecked Sendable {
     #endif
 
     enum Stage: String, Codable, Sendable {
+        case cameraQuality, counterSampleSkipped, visionRequestStart, visionRequestEnd
         case cameraInput, avDropped, inactive, throttled, missingBuffer
         case visionStart, visionEnd, visionError, noPose, visionPose
         case streamEnqueue, streamReplaced, streamTerminated, serviceReceive
@@ -121,6 +122,7 @@ final class PipelineTelemetry: @unchecked Sendable {
         let reason: String?
         let decision: Decision?
         let replayControlSeconds: Double?
+        var cameraQuality: CameraQuality? = nil
 
         var metricName: String {
             frame?.replaySeconds != nil || replayControlSeconds != nil ? "replay." + stage.rawValue : stage.rawValue
@@ -232,23 +234,24 @@ final class PipelineTelemetry: @unchecked Sendable {
     }
 
     @discardableResult
-    func record(_ stage: Stage, frame: Identity? = nil, since: Double? = nil,
+    func record(_ stage: Stage, frame: Identity? = nil, since: Double? = nil, cameraQuality: CameraQuality? = nil,
                 reason: String? = nil, replayControlSeconds: Double? = nil, decision: @autoclosure () -> Decision? = nil) -> Double {
         lock.lock()
         defer { lock.unlock() }
-        return append(stage, frame: frame, since: since, reason: reason, replayControlSeconds: replayControlSeconds, decision: decision)
+        return append(stage, frame: frame, since: since, reason: reason, replayControlSeconds: replayControlSeconds, cameraQuality: cameraQuality, decision: decision)
     }
 
     // Capture sequence and clock under the same lock on both queues.
-    private func append(_ stage: Stage, frame: Identity?, since: Double?, reason: String?, replayControlSeconds: Double?, decision: () -> Decision?) -> Double {
+    private func append(_ stage: Stage, frame: Identity?, since: Double?, reason: String?, replayControlSeconds: Double?, cameraQuality: CameraQuality? = nil, decision: () -> Decision?) -> Double {
         let now = clock()
         func duration(_ start: Double?) -> Double? {
             guard let start, start.isFinite, start <= now else { return nil }
             return (now - start) * 1000
         }
-        let event = Event(sequence: sequence, hostSeconds: now, stage: stage, frame: frame,
+        var event = Event(sequence: sequence, hostSeconds: now, stage: stage, frame: frame,
                       elapsedMS: duration(since), ageFromPTS_MS: duration(frame?.captureHostSeconds),
                       reason: reason, decision: decision(), replayControlSeconds: replayControlSeconds)
+        event.cameraQuality = cameraQuality
         if ring.count < capacity {
             ring.append(event)
         } else {
@@ -304,7 +307,72 @@ final class PipelineTelemetry: @unchecked Sendable {
             guard let first = rows.first, let last = rows.last, last.hostSeconds > first.hostSeconds else { return nil }
             return Double(rows.count - 1) / (last.hostSeconds - first.hostSeconds)
         }
-        return Snapshot(traceVersion: 1, traceID: traceID, capacity: capacity, overwritten: overwritten,
+        return Snapshot(traceVersion: 2, traceID: traceID, capacity: capacity, overwritten: overwritten,
                         totals: counts, elapsedMS: elapsed, ageFromPTS_MS: ages, hz: rates, events: events)
     }
 }
+
+
+extension PipelineTelemetry {
+    struct CameraQuality: Codable, Sendable {
+        let width, height: Int
+        let requestedResolution: Int
+        let targetVisionHz: Int
+        let rotationAngle: Double
+        let mirrored: Bool
+        let orientation: String
+        let confidences: [String: Float]
+        let buildSHA, sourceState: String
+        var patchSHA: String? = nil
+        var previewMirrored: Bool? = nil
+        var regionOfInterest: String? = nil
+    }
+}
+
+#if DEBUG
+struct CameraQualityConfiguration: Equatable, Sendable {
+    enum Resolution: Int, CaseIterable { case hd720 = 720, hd1080 = 1080 }
+    enum VisionRate: Int, CaseIterable { case hz10 = 10, hz15 = 15, hz30 = 30 }
+    var resolution = Resolution.hd720
+    var visionRate = VisionRate.hz10
+    static let baseline = Self()
+    var analysisInterval: Double {
+        visionRate == .hz10 ? 0.08 : (visionRate == .hz15 ? 0.066 : 0.033)
+    }
+    var analysisDuration: Duration {
+        .milliseconds(visionRate == .hz10 ? 80 : (visionRate == .hz15 ? 66 : 33))
+    }
+    static let counterInterval = Duration.milliseconds(80)
+    static func acceptsCounter(elapsed: Duration) -> Bool { elapsed >= counterInterval }
+    var limitsCounterCadence: Bool { visionRate != .hz10 }
+    func accepts(elapsed: Double) -> Bool { elapsed.isFinite && elapsed >= analysisInterval }
+    func supported(by resolutions: Set<Int>) -> Bool { resolutions.contains(resolution.rawValue) }
+}
+#endif
+
+#if DEBUG
+final class CameraQualitySelection: @unchecked Sendable {
+    private static let shared = CameraQualitySelection()
+    private let lock = NSLock()
+    private var value = CameraQualityConfiguration.baseline
+    static var current: CameraQualityConfiguration {
+        get {
+            shared.lock.lock()
+            defer { shared.lock.unlock() }
+            return shared.value
+        }
+        set {
+            shared.lock.lock()
+            shared.value = newValue
+            shared.lock.unlock()
+        }
+    }
+    static let build: (sha: String, state: String, patch: String) = {
+        guard let url = Bundle.main.url(forResource: "CameraQualityBuild", withExtension: "txt"),
+              let text = try? String(contentsOf: url, encoding: .utf8) else { return ("unknown", "unknown", "unknown") }
+        let lines = text.split(separator: "\n").map(String.init)
+        return (lines.first ?? "unknown", lines.dropFirst().first ?? "unknown", lines.dropFirst(2).first ?? "unknown")
+    }()
+}
+
+#endif

@@ -270,6 +270,7 @@
 				B10AE85C2BE731B98F629ADE /* Sources */,
 				F068F8406EE9572E80CDDD46 /* Frameworks */,
 				EA0799CD6FB8985E3A9B6E32 /* Resources */,
+				A05300000000000000000001,
 			);
 			buildRules = (
 			);
@@ -352,6 +353,21 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+        A05300000000000000000001 = {
+            isa = PBXShellScriptBuildPhase;
+            buildActionMask = 2147483647;
+            files = ();
+            inputPaths = ();
+            name = "Debug camera quality build identity";
+            outputPaths = ("$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/CameraQualityBuild.txt");
+            runOnlyForDeploymentPostprocessing = 0;
+            shellPath = /bin/sh;
+            shellScript = "if [ \"$CONFIGURATION\" != Debug ]; then exit 0; fi\nmkdir -p \"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH\"\nbuild_file=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/CameraQualityBuild.txt\"\ngit -C \"$SRCROOT\" rev-parse HEAD > \"$build_file\" || exit 1\nif [ -n \"$(git -C \"$SRCROOT\" status --porcelain)\" ]; then printf 'dirty\\n'; else printf 'clean\\n'; fi >> \"$build_file\"\ngit -C \"$SRCROOT\" diff HEAD --binary | shasum -a 256 >> \"$build_file\"\n";
+            alwaysOutOfDate = 1;
+        };
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		B10AE85C2BE731B98F629ADE /* Sources */ = {
