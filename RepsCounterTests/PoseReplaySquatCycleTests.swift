@@ -6,6 +6,7 @@ import XCTest
 final class PoseReplaySquatCycleTests: XCTestCase {
     private enum Posture {
         case upright, nearStanding, mid, low, perspective, shallow, borderline, supportOnly, corroborating
+        case ascentJitter, largerRegression, repeatedRegression
 
         var geometry: (hip: Double, knee: Double, forward: Double) {
             switch self {
@@ -18,6 +19,9 @@ final class PoseReplaySquatCycleTests: XCTestCase {
             case .borderline: return (0.53, 0.52, 0.14)
             case .supportOnly: return (0.525, 0.44, 0.13)
             case .corroborating: return (0.50, 0.42, 0.14)
+            case .ascentJitter: return (0.60, 0.50, 0.17)
+            case .largerRegression: return (0.60, 0.50, 0.20)
+            case .repeatedRegression: return (0.63, 0.50, 0.21)
             }
         }
     }
@@ -510,6 +514,45 @@ final class PoseReplaySquatCycleTests: XCTestCase {
         XCTAssertTrue(try PoseReplaySquatCycle.replayWithCorroboratedHipDepth(session(start + samples + unfinished)).isEmpty)
     }
 
+    func testAscentToleranceAllowsOneSmallRegressionWithBilateralRise() throws {
+        for side in [BodyLeg.left, .right] {
+            let recorded = session(confirmedBottom + [
+                frame(0.50, side == .left ? nil : .shallow, side == .left ? .shallow : nil),
+                frame(0.60, side == .left ? .perspective : .mid, side == .left ? .mid : .perspective),
+                frame(0.70, side == .left ? .ascentJitter : .nearStanding, side == .left ? .nearStanding : .ascentJitter),
+                frame(0.80, side == .left ? .nearStanding : .upright, side == .left ? .upright : .nearStanding),
+                frame(0.90, .upright, .upright), frame(1.00, .upright, .upright)
+            ])
+            XCTAssertTrue(try PoseReplaySquatCycle.replayWithCorroboratedHipDepth(recorded).isEmpty)
+            var tolerated = 0
+            let times = try PoseReplaySquatCycle.replayWithAscentTolerance(recorded) { _, step in
+                if step.reason == .toleratedAscentRegression { tolerated += 1 }
+            }
+            XCTAssertEqual(tolerated, 1)
+            XCTAssertEqual(times, [1.00])
+        }
+    }
+
+    func testAscentToleranceRejectsLargerRepeatedOrUnobservedRegression() throws {
+        let suffix = [frame(0.90, .upright, .upright), frame(1.00, .upright, .upright)]
+        let cases = [
+            [frame(0.70, .nearStanding, .largerRegression), frame(0.80, .upright, .nearStanding)],
+            [frame(0.70, .nearStanding, .ascentJitter), frame(0.80, .upright, .repeatedRegression)],
+            [frame(0.70, .nearStanding, nil), frame(0.80, .upright, .nearStanding)],
+            [frame(0.70, .nearStanding, .low), frame(0.80, .upright, .nearStanding)]
+        ]
+        for samples in cases {
+            XCTAssertTrue(try PoseReplaySquatCycle.replayWithAscentTolerance(session(reacquiredAscent + samples + suffix)).isEmpty)
+        }
+    }
+
+    func testAscentToleranceRequiresBilateralStandingAfterRegression() throws {
+        let samples = [frame(0.70, .nearStanding, .ascentJitter),
+                       frame(0.80, .upright, .nearStanding),
+                       frame(0.90, .upright, .nearStanding), frame(1.00, .upright, .nearStanding)]
+        XCTAssertTrue(try PoseReplaySquatCycle.replayWithAscentTolerance(session(reacquiredAscent + samples)).isEmpty)
+    }
+
     func testPrivateReplayCorpus() throws {
         #if os(iOS) && !targetEnvironment(simulator)
         throw XCTSkip("Private Replay corpus is available only on the simulator or Mac.")
@@ -545,6 +588,14 @@ final class PoseReplaySquatCycleTests: XCTestCase {
             "DC01024F-7EDE-4D67-8B14-1FFE7AC0ADC3": [12.479, 14.980, 17.580, 20.181, 23.081, 47.985, 53.882],
             "3D1059FB-E0F5-467C-9F49-2CDB3E1994E0": [12.207, 16.507]
         ]
+        let depthAdditions: [String: [Double]] = [
+            "178F6024-50D1-4448-80A9-890C3DF5FF19": [20.800],
+            "3D1059FB-E0F5-467C-9F49-2CDB3E1994E0": [14.307, 18.808, 21.205, 41.407],
+            "7AD884A5-D159-439A-98A1-B9A0326F9C09": [62.963, 68.064],
+            "B8C8293A-F918-4C4B-82FE-4DD61C27B3D1": [21.676],
+            "E78DAE64-EBA4-4142-A757-E405AA9D2E8E": [26.323, 30.716],
+            "F511B9C7-51D4-4944-B84B-28396481F48B": [27.620]
+        ]
         let baselineTotal = expected.values.reduce(0) { $0 + $1.count }
         XCTAssertEqual(baselineTotal, 112)
         let folder = URL(fileURLWithPath: directory, isDirectory: true)
@@ -563,11 +614,13 @@ final class PoseReplaySquatCycleTests: XCTestCase {
         XCTAssertTrue(missing.isEmpty, "Missing: \(missing)")
         XCTAssertTrue(unexpected.isEmpty, "Unexpected: \(unexpected)")
 
-        var report = ["file,baseline_count,standard_count,bypass_count,depth_count,baseline_seconds,standard_seconds,bypass_seconds,depth_seconds,status"]
+        var report = ["file,baseline_count,standard_count,bypass_count,depth_count,ascent_count,baseline_seconds,standard_seconds,bypass_seconds,depth_seconds,ascent_seconds,status"]
         var trace = ["file,variant,seconds,phase,reason,counted"]
         var total = 0
         var bypassTotal = 0
         var depthTotal = 0
+        var ascentTotal = 0
+        var depthMatched = 0
         var processed = 0
         var matched = 0
         let decoder = JSONDecoder()
@@ -586,6 +639,14 @@ final class PoseReplaySquatCycleTests: XCTestCase {
                 let depthTimes = try PoseReplaySquatCycle.replayWithCorroboratedHipDepth(session) { seconds, step in
                     trace.append("\(file.lastPathComponent),depth,\(seconds),\(step.phase.rawValue),\(step.reason.rawValue),\(step.counted)")
                 }
+                let ascentTimes = try PoseReplaySquatCycle.replayWithAscentTolerance(session) { seconds, step in
+                    trace.append("\(file.lastPathComponent),ascent,\(seconds),\(step.phase.rawValue),\(step.reason.rawValue),\(step.counted)")
+                }
+                let expectedDepth = (baseline + (depthAdditions[identifier] ?? [])).sorted()
+                let depthMatches = depthTimes.count == expectedDepth.count &&
+                    zip(depthTimes, expectedDepth).allSatisfy { abs($0.0 - $0.1) <= 0.000501 }
+                if depthMatches { depthMatched += 1 }
+                XCTAssertTrue(depthMatches, "\(file.lastPathComponent): PR47 depth baseline changed")
                 let matches = times.count == baseline.count &&
                     zip(times, baseline).allSatisfy { abs($0.0 - $0.1) <= 0.000501 }
                 if matches { matched += 1 }
@@ -594,34 +655,38 @@ final class PoseReplaySquatCycleTests: XCTestCase {
                 let bypassText = bypassTimes.map { String(format: "%.3f", locale: Locale(identifier: "en_US_POSIX"), $0) }.joined(separator: ";")
                 let depthText = depthTimes.map { String(format: "%.3f", locale: Locale(identifier: "en_US_POSIX"), $0) }.joined(separator: ";")
                 let status = matches ? "MATCH" : "DIFF"
-                let line = "\(file.lastPathComponent),\(baseline.count),\(times.count),\(bypassTimes.count),\(depthTimes.count),\(expectedText),\(actualText),\(bypassText),\(depthText),\(status)"
+                let ascentText = ascentTimes.map { String(format: "%.3f", locale: Locale(identifier: "en_US_POSIX"), $0) }.joined(separator: ";")
+                let line = "\(file.lastPathComponent),\(baseline.count),\(times.count),\(bypassTimes.count),\(depthTimes.count),\(ascentTimes.count),\(expectedText),\(actualText),\(bypassText),\(depthText),\(ascentText),\(status)"
                 report.append(line)
-                print("REPS_DEPTH_AUDIT \(line)")
+                print("REPS_ASCENT_AUDIT \(line)")
                 total += times.count
                 bypassTotal += bypassTimes.count
                 depthTotal += depthTimes.count
+                ascentTotal += ascentTimes.count
                 processed += 1
                 XCTAssertTrue(matches, "\(file.lastPathComponent): expected [\(expectedText)], actual [\(actualText)]")
             } catch {
-                report.append("\(file.lastPathComponent),\(baseline.count),,,,,,,,ERROR")
+                report.append("\(file.lastPathComponent),\(baseline.count),,,,,,,,,,ERROR")
                 XCTFail("\(file.lastPathComponent): \(error)")
             }
         }
 
-        let summary = "REPS_CORPUS_SUMMARY processed=\(processed)/\(expected.count) matched=\(matched)/\(expected.count) standard=\(total) expected=\(baselineTotal) bypass=\(bypassTotal) depth=\(depthTotal)"
+        let summary = "REPS_CORPUS_SUMMARY processed=\(processed)/\(expected.count) matched=\(matched)/\(expected.count) standard=\(total) expected=\(baselineTotal) bypass=\(bypassTotal) depth=\(depthTotal) depthMatched=\(depthMatched)/\(expected.count) ascent=\(ascentTotal)"
         print(summary)
         let attachment = XCTAttachment(string: report.joined(separator: "\n") + "\n" + summary)
-        attachment.name = "Depth evidence comparison"
+        attachment.name = "Ascent tolerance comparison"
         attachment.lifetime = .keepAlways
         add(attachment)
         let traceAttachment = XCTAttachment(string: trace.joined(separator: "\n"))
-        traceAttachment.name = "Depth evidence per-frame trace"
+        traceAttachment.name = "Ascent tolerance per-frame trace"
         traceAttachment.lifetime = .keepAlways
         add(traceAttachment)
         XCTAssertEqual(processed, expected.count)
         XCTAssertEqual(matched, expected.count)
         XCTAssertEqual(total, baselineTotal)
         XCTAssertEqual(bypassTotal, 133)
+        XCTAssertEqual(depthTotal, 123)
+        XCTAssertEqual(depthMatched, expected.count)
         #endif
     }
 }
