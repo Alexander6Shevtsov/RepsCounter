@@ -30,7 +30,8 @@ final class PoseDetector {
                         (String(describing: $0.key), $0.value.confidence.isFinite ? $0.value.confidence : 0)
                     }), buildSHA: build.sha, sourceState: build.state, patchSHA: build.patch,
                     previewMirrored: trace.identity.camera == "front", regionOfInterest: "0,0,1,1")
-                trace.recorder.record(.cameraQuality, frame: trace.identity, cameraQuality: quality)
+                trace.recorder.record(.cameraQuality, frame: trace.identity, cameraQuality: quality,
+                    visionPose: qualityJoints.isEmpty ? nil : .init(BodyPose(joints: qualityJoints, aspectRatio: PoseGeometry.aspectRatio(pixelBuffer: pixelBuffer), rotationAngle: rotationAngle)))
             }
 
         }
