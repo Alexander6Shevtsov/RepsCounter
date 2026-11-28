@@ -274,9 +274,13 @@ final class WorkoutViewModel {
         timeSource: (any WorkoutTimeSource)? = nil,
         cameraReady: Bool = true,
         startsAutomatically: Bool = true,
-        telemetry: PipelineTelemetry? = PipelineTelemetry.active
+        telemetry: PipelineTelemetry? = PipelineTelemetry.active,
+        diagnosticRecording: Bool = false
     ) {
         self.telemetry = telemetry
+        #if DEBUG
+        poseReplayRecorder = PoseReplayRecorder(diagnosticTelemetry: diagnosticRecording ? telemetry : nil)
+        #endif
         let source = timeSource ?? SystemWorkoutTimeSource()
         self.persistence = persistence
         self.timeSource = source
@@ -305,7 +309,17 @@ final class WorkoutViewModel {
             selectedLeg: latestAnalysis?.selectedLeg,
             smoothedAngle: latestAnalysis?.smoothedAngle
         )
-        return poseReplayRecorder.start(at: timeSource.currentTime, initialState: initialState)
+        let before = PipelineTelemetry.hostNow()
+        let timestamp = timeSource.currentTime
+        let after = PipelineTelemetry.hostNow()
+        return poseReplayRecorder.start(at: timestamp, initialState: initialState, hostBracket: (before, after))
+    }
+
+    func stopDiagnosticRecording() -> DiagnosticRecordingArchive? {
+        guard poseReplayRecorder.isRecording, poseReplayRecorder.session.recording != nil,
+              let archive = telemetry?.lastRecordingArchive else { return nil }
+        poseReplayRecorder.stop()
+        return archive
     }
 
     func stopPoseReplayRecording() throws -> Data? {
@@ -320,7 +334,13 @@ final class WorkoutViewModel {
             trace?.mark(.skipped, reason: isPaused ? "paused" : "finished")
             return
         }
+        #if DEBUG
+        let recHostBefore = PipelineTelemetry.hostNow()
+        #endif
         let currentTime = timeSource.currentTime
+        #if DEBUG
+        let recHostAfter = PipelineTelemetry.hostNow()
+        #endif
         let activeTime = activeDuration(at: currentTime)
         advanceRest(at: activeTime)
         guard restDeadline == nil else { trace?.mark(.skipped, reason: "rest"); return }
@@ -330,7 +350,7 @@ final class WorkoutViewModel {
         #endif
         expireTracking(at: currentTime, trace: trace)
         #if DEBUG
-        poseReplayRecorder.append(pose, at: currentTime, trace: trace)
+        poseReplayRecorder.append(pose, at: currentTime, trace: trace, hostBracket: (recHostBefore, recHostAfter))
         #endif
         let previousLeg = analyzer.selectedLeg
         let previousPhase = counter.phase

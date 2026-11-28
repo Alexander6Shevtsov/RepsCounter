@@ -229,6 +229,24 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
 
     @objc private func togglePoseReplayCapture() {
         if viewModel.isPoseReplayRecording {
+            if let archive = viewModel.stopDiagnosticRecording() {
+                updatePoseReplayCaptureButton()
+                Task { @MainActor [weak self] in
+                    do {
+                        let saved = try await archive.finished()
+                        guard let self else { return }
+                        guard saved.status.complete else {
+                            self.showPoseReplayMessage("Запись неполная: \(saved.status.error ?? "ошибка записи"). Отклонено событий: \(saved.status.rejectedEvents). Файлы сохранены в контейнере приложения.")
+                            return
+                        }
+                        let controller = UIActivityViewController(activityItems: [saved.pipelineURL, saved.replayURL], applicationActivities: nil)
+                        controller.popoverPresentationController?.sourceView = self.poseReplayButton
+                        controller.popoverPresentationController?.sourceRect = self.poseReplayButton.bounds
+                        self.present(controller, animated: true)
+                    } catch { self?.showPoseReplayMessage("Ошибка завершения диагностики: \(error.localizedDescription)") }
+                }
+                return
+            }
             do {
                 guard let data = try viewModel.stopPoseReplayRecording() else { return }
                 updatePoseReplayCaptureButton()
@@ -239,9 +257,17 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
             }
             return
         }
+        guard PipelineTelemetry.active != nil else {
+            showPoseReplayMessage("Для полной записи включите REPS_PIPELINE_TRACE=1 в схеме Xcode и перезапустите приложение.")
+            return
+        }
+        guard PipelineTelemetry.active?.lastRecordingArchive?.isClosed ?? true else {
+            showPoseReplayMessage("Предыдущая запись ещё завершается. Дождитесь экспорта и повторите REC.")
+            return
+        }
         let consent = UIAlertController(
             title: "Запись данных позы",
-            message: "Будут записаны координаты суставов ног и время кадров. Это данные о движениях тела. Видео не сохраняется, JSON экспортируется только вручную. Записывайте после нажатия «Старт».",
+            message: "Будут записаны координаты всех суставов, время камеры, диагностика обработки и вход счётчика. Это данные о движениях тела. Видео не сохраняется, JSON экспортируется только вручную. Записывайте после нажатия «Старт».",
             preferredStyle: .alert
         )
         consent.addAction(UIAlertAction(title: "Отмена", style: .cancel))
@@ -295,7 +321,9 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
                     return
                 }
                 let compared = try TimeBasedPoseProcessor.compare(trace.fullPoseSession())
-                showPoseReplayMessage("Один полный поток: Legacy \(compared.legacy.count), Time-based \(compared.timed.count). Без ручной разметки это числа событий, не точность.")
+                let scope = trace.archiveStatus?.complete == true
+                    ? "Полный журнал REC. " : "Снимок кольца, вытеснено событий: \(trace.overwritten). "
+                showPoseReplayMessage(scope + "Один сохранённый поток: Legacy \(compared.legacy.count), Time-based \(compared.timed.count). Без ручной разметки это числа событий, не точность.")
                 return
             }
             let session = try JSONDecoder().decode(PoseReplaySession.self, from: data)

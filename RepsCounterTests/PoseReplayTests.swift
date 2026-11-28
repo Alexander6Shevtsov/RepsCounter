@@ -1014,7 +1014,7 @@ final class PoseReplayTests: XCTestCase {
         recorder.stop()
         recorder.append(standingPose, at: 100)
         XCTAssertEqual(recorder.eventCount, 1200)
-        XCTAssertLessThan(try recorder.encodedSession().count, 2_000_000)
+        XCTAssertThrowsError(try recorder.encodedSession())
     }
 }
 #endif

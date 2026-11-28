@@ -46,6 +46,7 @@ final class PipelineTelemetry: @unchecked Sendable {
     #endif
 
     enum Stage: String, Codable, Sendable {
+        case recordingStart, recordingStop, replayRecorded
         case fullPoseInput, timeBasedReset, timeBasedDecision
         case cameraQuality, counterSampleSkipped, visionRequestStart, visionRequestEnd
         case cameraInput, avDropped, inactive, throttled, missingBuffer
@@ -115,6 +116,7 @@ final class PipelineTelemetry: @unchecked Sendable {
     }
 
     struct Event: Codable, Sendable {
+        var recordingID: UUID? = nil
         let sequence: UInt64
         let hostSeconds: Double
         let stage: Stage
@@ -155,6 +157,8 @@ final class PipelineTelemetry: @unchecked Sendable {
         let elapsedMS, ageFromPTS_MS: [String: Distribution]
         let hz: [String: Double]
         let events: [Event]
+        var recording: DiagnosticRecordingMetadata? = nil
+        var archiveStatus: DiagnosticArchiveStatus? = nil
     }
 
     struct Span {
@@ -204,6 +208,10 @@ final class PipelineTelemetry: @unchecked Sendable {
     private var sequence: UInt64 = 0
     private var lastFrameID: UInt64 = 0
     private var totals: [String: UInt64] = [:]
+    #if DEBUG
+    private var recordingArchive: DiagnosticRecordingArchive?
+    private(set) var lastRecordingArchive: DiagnosticRecordingArchive?
+    #endif
     #if canImport(os)
     private let signposter = OSSignposter(subsystem: "RepsCounter", category: "PosePipeline")
     #endif
@@ -255,6 +263,12 @@ final class PipelineTelemetry: @unchecked Sendable {
                       reason: reason, decision: decision(), replayControlSeconds: replayControlSeconds)
         event.cameraQuality = cameraQuality
         event.visionPose = visionPose
+        #if DEBUG
+        if let archive = recordingArchive {
+            event.recordingID = archive.metadata.recordingID
+            archive.append(event)
+        }
+        #endif
         if ring.count < capacity {
             ring.append(event)
         } else {
@@ -271,7 +285,18 @@ final class PipelineTelemetry: @unchecked Sendable {
     }
 
     func export() async throws -> URL {
-        try await Task.detached(priority: .utility) {
+        #if DEBUG
+        let (active, archive) = archiveForExport()
+        if active { throw NSError(domain: "DiagnosticRecording", code: 2,
+            userInfo: [NSLocalizedDescriptionKey: "Остановите REC перед экспортом полного журнала."]) }
+        if let archive {
+            let saved = try await archive.finished()
+            guard saved.status.complete else { throw NSError(domain: "DiagnosticRecording", code: 3,
+                userInfo: [NSLocalizedDescriptionKey: saved.status.error ?? "Неполная диагностическая запись"]) }
+            return saved.pipelineURL
+        }
+        #endif
+        return try await Task.detached(priority: .utility) {
             let url = FileManager.default.temporaryDirectory
                 .appendingPathComponent("RepsCounter-Pipeline-\(UUID().uuidString).json")
             let data = try JSONEncoder().encode(self.snapshot())
@@ -370,6 +395,10 @@ final class CameraQualitySelection: @unchecked Sendable {
             shared.lock.unlock()
         }
     }
+    static let buildAudit: String? = {
+        guard let url = Bundle.main.url(forResource: "CameraQualityBuildAudit", withExtension: "txt") else { return nil }
+        return try? String(contentsOf: url, encoding: .utf8)
+    }()
     static let build: (sha: String, state: String, patch: String) = {
         guard let url = Bundle.main.url(forResource: "CameraQualityBuild", withExtension: "txt"),
               let text = try? String(contentsOf: url, encoding: .utf8) else { return ("unknown", "unknown", "unknown") }
@@ -404,6 +433,14 @@ extension PipelineTelemetry {
 #if DEBUG
 extension PipelineTelemetry.Snapshot {
     func fullPoseSession() throws -> PoseReplaySession {
+        if let status = archiveStatus {
+            guard status.complete, status.writtenPipelineEvents == events.count,
+                  let recording, recording.traceID == traceID,
+                  events.first?.stage == .recordingStart, events.last?.stage == .recordingStop,
+                  events.allSatisfy({ $0.recordingID == recording.recordingID }),
+                  zip(events, events.dropFirst()).allSatisfy({ $1.sequence == $0.sequence + 1 })
+            else { throw PoseReplayError.invalidTimeline }
+        }
         let input = events.filter { $0.stage == .fullPoseInput || $0.stage == .timeBasedReset }
         guard let first = input.first(where: { $0.stage == .fullPoseInput }) else { throw PoseReplayError.invalidGeometry }
         guard input.count <= 1200 else { throw PoseReplayError.tooManyEvents }
@@ -432,6 +469,248 @@ extension PipelineTelemetry.Snapshot {
             rows.append(PoseReplayEvent(seconds: seconds, kind: entry.stage == .timeBasedReset ? .reset : .pose, pose: pose))
         }
         return PoseReplaySession(schemaVersion: 1, events: rows, annotations: [])
+    }
+}
+#endif
+
+struct DiagnosticRecordingMetadata: Codable, Sendable {
+    let recordingID, traceID: UUID
+    let recClockStartSeconds, hostStartSeconds: Double
+    let recClock: String
+    let buildSHA, sourceState, patchSHA: String
+    var recClockHostBeforeSeconds: Double? = nil
+    var recClockHostAfterSeconds: Double? = nil
+    var provenanceVersion: Int? = nil
+    var buildAudit: String? = nil
+}
+
+struct DiagnosticArchiveStatus: Codable, Sendable {
+    let complete: Bool
+    let writtenPipelineEvents, writtenReplayEvents: Int
+    let rejectedEvents: Int
+    let error: String?
+    let stoppedHostSeconds: Double
+}
+
+#if DEBUG
+extension PipelineTelemetry {
+    private func archiveForExport() -> (Bool, DiagnosticRecordingArchive?) {
+        lock.lock()
+        defer { lock.unlock() }
+        return (recordingArchive != nil, lastRecordingArchive)
+    }
+
+    func beginRecording(at recClock: Double, initialState: PoseReplayInitialState?, hostBracket: (Double, Double)? = nil) -> DiagnosticRecordingMetadata? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard recordingArchive == nil, lastRecordingArchive?.isClosed ?? true else { return nil }
+        let build = CameraQualitySelection.build
+        let metadata = DiagnosticRecordingMetadata(recordingID: UUID(), traceID: traceID,
+            recClockStartSeconds: recClock, hostStartSeconds: Self.hostNow(),
+            recClock: "WorkoutTimeSource.currentTime; delivery-time, not camera capture",
+            buildSHA: build.sha, sourceState: build.state,
+            patchSHA: build.patch.split(separator: " ").first.map(String.init) ?? "unknown",
+            recClockHostBeforeSeconds: hostBracket?.0, recClockHostAfterSeconds: hostBracket?.1,
+            provenanceVersion: 2, buildAudit: CameraQualitySelection.buildAudit)
+        let archive = DiagnosticRecordingArchive(metadata: metadata, initialState: initialState)
+        recordingArchive = archive
+        lastRecordingArchive = archive
+        _ = append(.recordingStart, frame: nil, since: nil, reason: nil,
+                   replayControlSeconds: 0, decision: { nil })
+        return metadata
+    }
+
+    func recordReplay(_ event: PoseReplayEvent, frame: Frame?) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let archive = recordingArchive else { return }
+        if let frame, frame.recorder !== self {
+            archive.invalidate("frame belongs to a different pipeline trace")
+            return
+        }
+        _ = append(.replayRecorded, frame: frame?.identity, since: nil, reason: nil,
+                   replayControlSeconds: event.seconds, decision: { nil })
+        archive.appendReplay(event)
+    }
+
+    func endRecording() {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let archive = recordingArchive else { return }
+        _ = append(.recordingStop, frame: nil, since: nil, reason: nil,
+                   replayControlSeconds: nil, decision: { nil })
+        recordingArchive = nil
+        archive.close(at: Self.hostNow())
+    }
+}
+
+final class DiagnosticRecordingArchive: @unchecked Sendable {
+    struct Result: Sendable {
+        let pipelineURL, replayURL: URL
+        let status: DiagnosticArchiveStatus
+    }
+    private struct ReplayItem: @unchecked Sendable { let event: PoseReplayEvent }
+    private struct InitialStateItem: @unchecked Sendable { let value: PoseReplayInitialState? }
+    let metadata: DiagnosticRecordingMetadata
+    let pipelineURL, replayURL: URL
+    private let queue: DispatchQueue
+    private let slots: DispatchSemaphore
+    private let stateLock = NSLock()
+    private let maximumBytes: Int
+    private var failure: String?
+    private var rejected = 0
+    private var closing = false
+    private var closeCompleted = false
+    private var result: Result?
+    private var pipeline, replay: FileHandle?
+    private var pipelineCount = 0
+    private var replayCount = 0
+    private var bytes = 0
+    private var totals: [String: Int] = [:]
+
+    init(metadata: DiagnosticRecordingMetadata, initialState: PoseReplayInitialState?,
+         pendingLimit: Int = 256, maximumBytes: Int = Int.max,
+         directory: URL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first ?? FileManager.default.temporaryDirectory,
+         queue: DispatchQueue = DispatchQueue(label: "repscounter.diagnostic.archive", qos: .utility)) {
+        precondition(pendingLimit > 0 && maximumBytes > 0)
+        self.metadata = metadata
+        self.queue = queue
+        self.slots = DispatchSemaphore(value: pendingLimit)
+        self.maximumBytes = maximumBytes
+        pipelineURL = directory.appendingPathComponent("RepsCounter-Pipeline-\(metadata.recordingID).json")
+        replayURL = directory.appendingPathComponent("RepsCounter-PoseReplay-\(metadata.recordingID).json")
+        let initial = InitialStateItem(value: initialState)
+        queue.async { [self] in
+            do {
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                let encoder = JSONEncoder()
+                let stateData = try initial.value.map { try encoder.encode($0) }
+                let meta = String(decoding: try encoder.encode(metadata), as: UTF8.self)
+                let header = "{\"traceVersion\":4,\"traceID\":\"\(metadata.traceID)\",\"recording\":\(meta),\"capacity\":0,\"overwritten\":0,\"events\":["
+                try Data(header.utf8).write(to: pipelineURL, options: .withoutOverwriting)
+                pipeline = try FileHandle(forWritingTo: pipelineURL)
+                try pipeline?.seekToEnd()
+                let state = stateData.map { String(decoding: $0, as: UTF8.self) } ?? "null"
+                let replayHeader = "{\"schemaVersion\":\(initial.value == nil ? 1 : 2),\"pipelineTraceID\":\"\(metadata.traceID)\",\"recording\":\(meta),\"annotations\":[],\"initialState\":\(state),\"events\":["
+                try Data(replayHeader.utf8).write(to: replayURL, options: .withoutOverwriting)
+                replay = try FileHandle(forWritingTo: replayURL)
+                try replay?.seekToEnd()
+            } catch { fail("open: \(error)") }
+        }
+    }
+
+    func invalidate(_ message: String) { fail(message) }
+
+    private func fail(_ message: String) {
+        stateLock.lock()
+        if failure == nil { failure = message }
+        stateLock.unlock()
+    }
+
+    private func enqueue(_ operation: @escaping @Sendable () throws -> Void) {
+        stateLock.lock()
+        guard !closing, failure == nil else { rejected += 1; stateLock.unlock(); return }
+        guard slots.wait(timeout: .now()) == .success else {
+            rejected += 1
+            failure = "pending queue capacity exceeded"
+            stateLock.unlock()
+            return
+        }
+        stateLock.unlock()
+        queue.async { [self] in
+            defer { slots.signal() }
+            do { try operation() } catch { fail("write: \(error)") }
+        }
+    }
+
+    private func write(_ data: Data, to handle: FileHandle?, hasPrevious: Bool) throws {
+        guard let handle else { throw CocoaError(.fileWriteUnknown) }
+        guard bytes + data.count <= maximumBytes else { throw CocoaError(.fileWriteOutOfSpace) }
+        if hasPrevious { try handle.write(contentsOf: Data(",".utf8)) }
+        try handle.write(contentsOf: data)
+        bytes += data.count + 1
+    }
+
+    func append(_ event: PipelineTelemetry.Event) {
+        guard event.recordingID == nil || event.recordingID == metadata.recordingID else {
+            fail("mismatched pipeline recording identity")
+            return
+        }
+        var event = event
+        event.recordingID = metadata.recordingID
+        let stored = event
+        enqueue { [self] in
+            try write(JSONEncoder().encode(stored), to: pipeline, hasPrevious: pipelineCount > 0)
+            pipelineCount += 1
+            totals[stored.metricName, default: 0] += 1
+        }
+    }
+
+    func appendReplay(_ event: PoseReplayEvent) {
+        guard event.recordingID == nil || event.recordingID == metadata.recordingID else {
+            fail("mismatched Replay recording identity")
+            return
+        }
+        var event = event
+        event.recordingID = metadata.recordingID
+        let item = ReplayItem(event: event)
+        enqueue { [self] in
+            try write(JSONEncoder().encode(item.event), to: replay, hasPrevious: replayCount > 0)
+            replayCount += 1
+        }
+    }
+
+    var isClosed: Bool {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return closeCompleted
+    }
+
+    func close(at host: Double) {
+        stateLock.lock()
+        guard !closing else { stateLock.unlock(); return }
+        closing = true
+        stateLock.unlock()
+        queue.async { [self] in
+            defer {
+                stateLock.lock()
+                closeCompleted = true
+                stateLock.unlock()
+            }
+            stateLock.lock()
+            let status = DiagnosticArchiveStatus(complete: failure == nil && rejected == 0,
+                writtenPipelineEvents: pipelineCount, writtenReplayEvents: replayCount,
+                rejectedEvents: rejected, error: failure, stoppedHostSeconds: host)
+            stateLock.unlock()
+            do {
+                let encoder = JSONEncoder()
+                let tail = String(decoding: try encoder.encode(status), as: UTF8.self)
+                let counts = String(decoding: try encoder.encode(totals), as: UTF8.self)
+                try pipeline?.write(contentsOf: Data("],\"totals\":\(counts),\"elapsedMS\":{},\"ageFromPTS_MS\":{},\"hz\":{},\"archiveStatus\":\(tail)}".utf8))
+                try replay?.write(contentsOf: Data("],\"diagnosticStatus\":\(tail)}".utf8))
+                try pipeline?.synchronize()
+                try replay?.synchronize()
+                try pipeline?.close()
+                try replay?.close()
+                stateLock.lock()
+                result = Result(pipelineURL: pipelineURL, replayURL: replayURL, status: status)
+                stateLock.unlock()
+            } catch { fail("close: \(error)") }
+        }
+    }
+
+    func finished() async throws -> Result {
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async { [self] in
+                stateLock.lock()
+                let saved = result
+                let error = failure
+                stateLock.unlock()
+                if let saved { continuation.resume(returning: saved) }
+                else { continuation.resume(throwing: NSError(domain: "DiagnosticRecording", code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: error ?? "Recording has not been closed"])) }
+            }
+        }
     }
 }
 #endif

@@ -84,6 +84,12 @@ enum PoseReplayEventKind: String, Codable {
 
 struct PoseReplayEvent: Codable {
     var pipelineFrameID: UInt64? = nil
+    var cameraPTS: PipelineTelemetry.PTS? = nil
+    var captureHostSeconds: Double? = nil
+    var recordedHostSeconds: Double? = nil
+    var recClockHostBeforeSeconds: Double? = nil
+    var recClockHostAfterSeconds: Double? = nil
+    var recordingID: UUID? = nil
     let seconds: TimeInterval
     let kind: PoseReplayEventKind
     let pose: PoseReplayPose?
@@ -104,6 +110,8 @@ struct PoseReplayInitialState: Codable {
 
 struct PoseReplaySession: Codable {
     var pipelineTraceID: UUID? = nil
+    var recording: DiagnosticRecordingMetadata? = nil
+    var diagnosticStatus: DiagnosticArchiveStatus? = nil
     let schemaVersion: Int
     var events: [PoseReplayEvent]
     var annotations: [PoseReplayAnnotation]
@@ -147,25 +155,36 @@ struct PoseReplayRecorder {
     private(set) var isRecording = false
     private(set) var session = PoseReplaySession(schemaVersion: 1, events: [], annotations: [])
     private var startedAt: TimeInterval?
+    private var previewTruncated = false
+    private let diagnosticTelemetry: PipelineTelemetry?
+
+    init(diagnosticTelemetry: PipelineTelemetry? = nil) {
+        self.diagnosticTelemetry = diagnosticTelemetry
+    }
     let maximumEvents = 1200
 
     var eventCount: Int { session.events.count }
 
-    mutating func start(at timestamp: TimeInterval, initialState: PoseReplayInitialState? = nil) -> Bool {
-        guard timestamp.isFinite else { return false }
+    mutating func start(at timestamp: TimeInterval, initialState: PoseReplayInitialState? = nil, hostBracket: (Double, Double)? = nil) -> Bool {
+        guard timestamp.isFinite, !isRecording else { return false }
+        let metadata = diagnosticTelemetry?.beginRecording(at: timestamp, initialState: initialState, hostBracket: hostBracket)
+        if diagnosticTelemetry != nil && metadata == nil { return false }
         session = PoseReplaySession(
             schemaVersion: initialState == nil ? 1 : 2,
             events: [],
             annotations: [],
             initialState: initialState
         )
+        previewTruncated = false
+        session.recording = metadata
+        session.pipelineTraceID = session.recording?.traceID
         startedAt = timestamp
         isRecording = true
         return true
     }
 
-    mutating func append(_ pose: BodyPose?, at timestamp: TimeInterval, trace: PipelineTelemetry.Frame? = nil) {
-        append(kind: .pose, pose: pose, at: timestamp, trace: trace)
+    mutating func append(_ pose: BodyPose?, at timestamp: TimeInterval, trace: PipelineTelemetry.Frame? = nil, hostBracket: (Double, Double)? = nil) {
+        append(kind: .pose, pose: pose, at: timestamp, trace: trace, hostBracket: hostBracket)
     }
 
     mutating func markReset(at timestamp: TimeInterval, trace: PipelineTelemetry.Frame? = nil) {
@@ -174,9 +193,12 @@ struct PoseReplayRecorder {
 
     mutating func stop() {
         isRecording = false
+        if session.recording != nil { diagnosticTelemetry?.endRecording() }
     }
 
     func encodedSession() throws -> Data {
+        guard !previewTruncated else { throw PoseReplayError.tooManyEvents }
+        guard session.recording == nil else { throw PoseReplayError.invalidTimeline }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         return try encoder.encode(session)
@@ -186,19 +208,21 @@ struct PoseReplayRecorder {
         kind: PoseReplayEventKind,
         pose: BodyPose?,
         at timestamp: TimeInterval,
-        trace: PipelineTelemetry.Frame? = nil
+        trace: PipelineTelemetry.Frame? = nil,
+        hostBracket: (Double, Double)? = nil
     ) {
         guard isRecording, let startedAt, timestamp.isFinite,
-              timestamp >= startedAt, session.events.count < maximumEvents else { return }
-        if let trace { session.pipelineTraceID = trace.recorder.traceID }
-        session.events.append(
-            PoseReplayEvent(
-                pipelineFrameID: trace?.identity.id,
-                seconds: timestamp - startedAt,
-                kind: kind,
-                pose: pose.map(PoseReplayPose.init(from:))
-            )
-        )
+              timestamp >= startedAt else { return }
+        if let trace, session.recording == nil { session.pipelineTraceID = trace.recorder.traceID }
+        let event = PoseReplayEvent(pipelineFrameID: trace?.identity.id,
+            cameraPTS: trace?.identity.pts, captureHostSeconds: trace?.identity.captureHostSeconds,
+            recordedHostSeconds: PipelineTelemetry.hostNow(),
+            recClockHostBeforeSeconds: hostBracket?.0, recClockHostAfterSeconds: hostBracket?.1,
+            recordingID: session.recording?.recordingID,
+            seconds: timestamp - startedAt, kind: kind, pose: pose.map(PoseReplayPose.init(from:)))
+        if session.recording != nil { diagnosticTelemetry?.recordReplay(event, frame: trace) }
+        if session.events.count < maximumEvents { session.events.append(event) }
+        else { previewTruncated = true }
     }
 }
 
@@ -349,6 +373,12 @@ enum PoseReplayRunner {
     }
 
     static func validateHeader(_ session: PoseReplaySession) throws {
+        if let status = session.diagnosticStatus {
+            guard status.complete, status.writtenReplayEvents == session.events.count,
+                  let recording = session.recording, recording.traceID == session.pipelineTraceID,
+                  session.events.allSatisfy({ $0.recordingID == recording.recordingID })
+            else { throw PoseReplayError.invalidTimeline }
+        }
         guard (1...2).contains(session.schemaVersion) else { throw PoseReplayError.invalidVersion }
         guard (session.schemaVersion == 2) == (session.initialState != nil) else {
             throw PoseReplayError.invalidInitialState

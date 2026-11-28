@@ -129,6 +129,9 @@ final class WorkoutCameraCoordinator {
         shouldResumeWhenReady = false
         viewModel.setCameraReady(false)
         let shutdownTask = camera.finish()
+        #if DEBUG
+        _ = viewModel.stopDiagnosticRecording()
+        #endif
         onPose = nil
         onCameraStateChange = nil
         return shutdownTask

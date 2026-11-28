@@ -4,6 +4,160 @@ import XCTest
 
 final class PipelineTelemetryTests: XCTestCase {
 
+
+    private func archiveMetadata() -> DiagnosticRecordingMetadata {
+        DiagnosticRecordingMetadata(recordingID: UUID(), traceID: UUID(), recClockStartSeconds: 10,
+            hostStartSeconds: 100, recClock: "test", buildSHA: "test", sourceState: "clean", patchSHA: "test")
+    }
+
+    func testArchiveSurvivesRingOverwriteAndKeepsReplayJoin() async throws {
+        let recorder = PipelineTelemetry(capacity: 4)
+        let metadata = try XCTUnwrap(recorder.beginRecording(at: 10, initialState: nil))
+        for index in 0..<50 {
+            let frame = recorder.frame(generation: 1, camera: "front",
+                pts: .init(value: Int64(index), timescale: 30, epoch: 0, flags: 1),
+                captureHostSeconds: 100 + Double(index) / 30)
+            recorder.recordReplay(.init(pipelineFrameID: frame.identity.id,
+                cameraPTS: frame.identity.pts, captureHostSeconds: frame.identity.captureHostSeconds,
+                recordedHostSeconds: 100.1 + Double(index) / 30, recordingID: metadata.recordingID,
+                seconds: Double(index) / 30, kind: .pose, pose: nil), frame: frame)
+        }
+        recorder.endRecording()
+        let saved = try await XCTUnwrap(recorder.lastRecordingArchive).finished()
+        XCTAssertTrue(saved.status.complete)
+        XCTAssertEqual(saved.status.writtenReplayEvents, 50)
+        XCTAssertGreaterThan(recorder.snapshot().overwritten, 0)
+        let trace = try JSONDecoder().decode(PipelineTelemetry.Snapshot.self, from: Data(contentsOf: saved.pipelineURL))
+        let replay = try JSONDecoder().decode(PoseReplaySession.self, from: Data(contentsOf: saved.replayURL))
+        XCTAssertEqual(trace.events.count, 102)
+        XCTAssertEqual(trace.overwritten, 0)
+        XCTAssertEqual(trace.recording?.recordingID, replay.recording?.recordingID)
+        XCTAssertEqual(replay.events.last?.cameraPTS?.value, 49)
+        XCTAssertEqual(replay.events.last?.seconds, 49.0 / 30)
+        XCTAssertEqual(try PoseReplayRunner.replay(replay).countedAtSeconds.count, 0)
+        XCTAssertTrue(trace.events.allSatisfy { $0.recordingID == metadata.recordingID })
+        XCTAssertTrue(zip(trace.events, trace.events.dropFirst()).allSatisfy { $0.sequence < $1.sequence })
+    }
+
+    func testArchiveQueueOverflowIsExplicitAndCannotBeReplayedAsComplete() async throws {
+        let queue = DispatchQueue(label: "test.blocked.archive")
+        queue.suspend()
+        let archive = DiagnosticRecordingArchive(metadata: archiveMetadata(), initialState: nil,
+            pendingLimit: 1, directory: FileManager.default.temporaryDirectory, queue: queue)
+        archive.appendReplay(.init(seconds: 0, kind: .pose, pose: nil))
+        archive.appendReplay(.init(seconds: 0.1, kind: .pose, pose: nil))
+        archive.close(at: 101)
+        queue.resume()
+        let saved = try await archive.finished()
+        XCTAssertFalse(saved.status.complete)
+        XCTAssertEqual(saved.status.rejectedEvents, 1)
+        let replay = try JSONDecoder().decode(PoseReplaySession.self, from: Data(contentsOf: saved.replayURL))
+        XCTAssertThrowsError(try PoseReplayRunner.replay(replay))
+        let trace = try JSONDecoder().decode(PipelineTelemetry.Snapshot.self, from: Data(contentsOf: saved.pipelineURL))
+        XCTAssertThrowsError(try trace.fullPoseSession())
+    }
+
+    func testArchiveWritesBeyondLegacyPreviewLimit() async throws {
+        let archive = DiagnosticRecordingArchive(metadata: archiveMetadata(), initialState: nil,
+            pendingLimit: 2048, directory: FileManager.default.temporaryDirectory)
+        for index in 0..<1230 { archive.appendReplay(.init(seconds: Double(index) / 10, kind: .pose, pose: nil)) }
+        archive.close(at: 230)
+        let saved = try await archive.finished()
+        XCTAssertTrue(saved.status.complete)
+        XCTAssertEqual(saved.status.writtenReplayEvents, 1230)
+        let replay = try JSONDecoder().decode(PoseReplaySession.self, from: Data(contentsOf: saved.replayURL))
+        XCTAssertEqual(replay.events.count, 1230)
+    }
+
+    func testArchiveDiskBudgetFailureIsNotReportedAsComplete() async throws {
+        let archive = DiagnosticRecordingArchive(metadata: archiveMetadata(), initialState: nil,
+            maximumBytes: 1, directory: FileManager.default.temporaryDirectory)
+        archive.appendReplay(.init(seconds: 0, kind: .pose, pose: nil))
+        archive.close(at: 101)
+        let saved = try await archive.finished()
+        XCTAssertFalse(saved.status.complete)
+        XCTAssertNotNil(saved.status.error)
+        XCTAssertEqual(saved.status.writtenReplayEvents, 0)
+    }
+
+    func testArchiveConcurrentTelemetryOrderingAndSeparateRecordings() async throws {
+        let recorder = PipelineTelemetry(capacity: 2)
+        let first = try XCTUnwrap(recorder.beginRecording(at: 1, initialState: nil))
+        XCTAssertNil(recorder.beginRecording(at: 2, initialState: nil))
+        DispatchQueue.concurrentPerform(iterations: 50) { index in
+            _ = recorder.frame(generation: UInt64(index % 2), camera: "front", pts: nil, captureHostSeconds: nil)
+        }
+        recorder.endRecording()
+        let saved = try await XCTUnwrap(recorder.lastRecordingArchive).finished()
+        XCTAssertTrue(saved.status.complete)
+        let trace = try JSONDecoder().decode(PipelineTelemetry.Snapshot.self, from: Data(contentsOf: saved.pipelineURL))
+        XCTAssertEqual(trace.events.count, 52)
+        XCTAssertTrue(zip(trace.events, trace.events.dropFirst()).allSatisfy { $0.sequence < $1.sequence })
+        let second = try XCTUnwrap(recorder.beginRecording(at: 3, initialState: nil))
+        XCTAssertNotEqual(first.recordingID, second.recordingID)
+        recorder.endRecording()
+        let next = try await XCTUnwrap(recorder.lastRecordingArchive).finished()
+        XCTAssertTrue(next.status.complete)
+    }
+
+
+    func testArchiveRefusesUnclosedExportAndCrossRecordingInputs() async throws {
+        let archive = DiagnosticRecordingArchive(metadata: archiveMetadata(), initialState: nil,
+            directory: FileManager.default.temporaryDirectory)
+        do { _ = try await archive.finished(); XCTFail("Unclosed recording must not be complete") }
+        catch { }
+        archive.appendReplay(.init(recordingID: UUID(), seconds: 0, kind: .pose, pose: nil))
+        archive.close(at: 101)
+        let result = try await archive.finished()
+        XCTAssertFalse(result.status.complete)
+        XCTAssertEqual(result.status.writtenReplayEvents, 0)
+    }
+
+
+    func testRecordingClockMetadataDoesNotReplaceRECSeconds() throws {
+        var recorder = PoseReplayRecorder()
+        XCTAssertTrue(recorder.start(at: 10, hostBracket: (100, 100.001)))
+        recorder.append(nil, at: 10.2, hostBracket: (100.2, 100.201))
+        recorder.stop()
+        let decoded = try JSONDecoder().decode(PoseReplaySession.self, from: recorder.encodedSession())
+        XCTAssertEqual(decoded.events.first?.seconds ?? 0, 0.2, accuracy: 0.000000001)
+        XCTAssertEqual(decoded.events.first?.recClockHostBeforeSeconds, 100.2)
+        XCTAssertEqual(decoded.events.first?.recClockHostAfterSeconds, 100.201)
+        XCTAssertNil(decoded.events.first?.cameraPTS)
+    }
+
+
+    func testDiagnosticExportPrefersFullArchiveAndRejectsForeignFrames() async throws {
+        let recorder = PipelineTelemetry(capacity: 2)
+        _ = try XCTUnwrap(recorder.beginRecording(at: 0, initialState: nil))
+        do { _ = try await recorder.export(); XCTFail("Active REC must not export an unrelated ring snapshot") }
+        catch { }
+        recorder.endRecording()
+        let archive = try XCTUnwrap(recorder.lastRecordingArchive)
+        let finished = try await archive.finished()
+        let exported = try await recorder.export()
+        XCTAssertEqual(exported, finished.pipelineURL)
+        _ = try XCTUnwrap(recorder.beginRecording(at: 1, initialState: nil))
+        let foreign = PipelineTelemetry(capacity: 2).frame(generation: 1, camera: "front", pts: nil, captureHostSeconds: nil)
+        recorder.recordReplay(.init(seconds: 0, kind: .pose, pose: nil), frame: foreign)
+        recorder.endRecording()
+        let rejected = try await XCTUnwrap(recorder.lastRecordingArchive).finished()
+        XCTAssertFalse(rejected.status.complete)
+        XCTAssertEqual(rejected.status.writtenReplayEvents, 0)
+    }
+
+
+    func testInvalidInitialStateCannotSilentlyBecomeSchemaOne() async throws {
+        let state = PoseReplayInitialState(phase: .standing, pendingFrames: 0,
+            selectedLeg: .left, smoothedAngle: .nan)
+        let archive = DiagnosticRecordingArchive(metadata: archiveMetadata(), initialState: state,
+            directory: FileManager.default.temporaryDirectory)
+        archive.close(at: 101)
+        let result = try await archive.finished()
+        XCTAssertFalse(result.status.complete)
+        XCTAssertNotNil(result.status.error)
+    }
+
     func testPTSCadenceAdmitsThirtyDespiteDelegateJitterAndRejectsDuplicates() {
         var cadence = VisionPTSCadence()
         var accepted = 0
