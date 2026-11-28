@@ -37,6 +37,12 @@ struct PoseReplayPose: Codable {
     let rotationAngle: Double
     let points: [PoseReplayPoint]
 
+    init(aspectRatio: Double, rotationAngle: Double, points: [PoseReplayPoint]) {
+        self.aspectRatio = aspectRatio
+        self.rotationAngle = rotationAngle
+        self.points = points
+    }
+
     init(from pose: BodyPose) {
         aspectRatio = Double(pose.aspectRatio)
         rotationAngle = Double(pose.rotationAngle)
@@ -1133,4 +1139,102 @@ enum PoseReplayAsymmetricDepthAudit {
     }
 }
 
+#endif
+
+#if DEBUG
+struct TimeBasedPoseProcessor {
+    private let analyzer = PoseAnalyzer()
+    private(set) var phase = SquatPhase.seekingStanding
+    private(set) var ema: Double?
+    private var last: Double?
+    private var since: Double?
+    private var samples = 0
+
+    mutating func reset() {
+        analyzer.reset()
+        phase = .seekingStanding
+        ema = nil
+        last = nil
+        since = nil
+        samples = 0
+    }
+
+    mutating func process(_ pose: BodyPose?, at time: Double) -> Bool {
+        guard time.isFinite, time >= 0 else { reset(); return false }
+        if let last, time <= last { return false }
+        if let last, time - last > 0.25 { reset() }
+        let previous = last
+        let value = analyzer.analyze(pose)
+        if value.requiresMovementReset {
+            phase = .seekingStanding
+            ema = nil
+            since = nil
+            samples = 0
+        }
+        last = time
+        guard let raw = value.measuredAngle, let height = value.hipKneeHeightRatio else {
+            reset()
+            last = time
+            return false
+        }
+        if let prior = ema, let previous {
+            let retention = pow(0.65, (time - previous) / 0.1)
+            ema = retention * prior + (1 - retention) * raw
+        } else { ema = raw }
+        let measured = phase == .standing ? raw <= 105 && height <= 0.35 : raw >= 160
+        let smoothed = phase == .standing ? (ema ?? 180) <= 105 : (ema ?? 0) >= 160
+        guard measured else { since = nil; samples = 0; return false }
+        if since == nil { since = time }
+        samples = min(3, samples + 1)
+        guard samples >= 3, time - (since ?? time) >= 0.2 - 0.000000001, smoothed else { return false }
+        since = nil
+        samples = 0
+        switch phase {
+        case .seekingStanding: phase = .standing
+        case .standing: phase = .lowered
+        case .lowered: phase = .standing; return true
+        }
+        return false
+    }
+
+    static func compare(_ session: PoseReplaySession) throws -> (legacy: [Double], timed: [Double]) {
+        try PoseReplayRunner.validateHeader(session)
+        var timed = Self()
+        let analyzer = PoseAnalyzer()
+        var counter = SquatCounter(maximumHipKneeHeightRatio: 0.35)
+        var legacyEvents: [Double] = []
+        var timedEvents: [Double] = []
+        var previous = 0.0
+        var last: Double?
+        for event in session.events {
+            try PoseReplayRunner.validateEvent(event, after: previous)
+            previous = event.seconds
+            if event.kind == .reset {
+                timed.reset(); analyzer.reset(); counter.resetMovement(); last = nil
+                continue
+            }
+            if let last, event.seconds - last > 0.25 { analyzer.reset(); counter.resetMovement() }
+            last = event.seconds
+            let pose = event.pose?.restore()
+            let value = analyzer.analyze(pose)
+            if value.requiresMovementReset { counter.resetMovement() }
+            if counter.process(measuredAngle: value.measuredAngle, smoothedAngle: value.smoothedAngle,
+                               hipKneeHeightRatio: value.hipKneeHeightRatio) { legacyEvents.append(event.seconds) }
+            if timed.process(pose, at: event.seconds) { timedEvents.append(event.seconds) }
+        }
+        return (legacyEvents, timedEvents)
+    }
+}
+
+struct VisionPTSCadence {
+    private var next: Double?
+    mutating func accepts(_ pts: Double, rate: Int) -> Bool {
+        guard pts.isFinite, [15, 30].contains(rate) else { return false }
+        let interval = 1 / Double(rate)
+        guard let deadline = next else { next = pts + interval; return true }
+        guard pts + 0.001 >= deadline else { return false }
+        next = max(deadline + interval, pts + interval * 0.5)
+        return true
+    }
+}
 #endif

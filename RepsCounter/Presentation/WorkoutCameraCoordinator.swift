@@ -18,6 +18,8 @@ final class WorkoutCameraCoordinator {
     private var hasStarted = false
     #if DEBUG
     private var lastCounterFrame: ContinuousClock.Instant?
+    private var timedProcessor = TimeBasedPoseProcessor()
+    private let timedOrigin = ContinuousClock.now
     #endif
     private var shouldResumeWhenReady = false
 
@@ -36,6 +38,17 @@ final class WorkoutCameraCoordinator {
                 return
             }
             #if DEBUG
+            if self.viewModel.isPaused {
+                self.timedProcessor.reset()
+                frame.trace?.mark(.timeBasedReset, reason: "paused")
+            } else {
+                frame.trace?.recorder.record(.fullPoseInput, frame: frame.trace?.identity,
+                    visionPose: pose.map(PipelineTelemetry.VisionPose.init))
+                let duration = self.timedOrigin.duration(to: frame.capturedAt).components
+                let seconds = frame.measurementSeconds ?? (Double(duration.seconds) + Double(duration.attoseconds) / 1e18)
+                let counted = self.timedProcessor.process(pose, at: seconds)
+                frame.trace?.mark(.timeBasedDecision, reason: "phase=\(self.timedProcessor.phase.rawValue) counted=\(counted) ema=\(self.timedProcessor.ema ?? -1)")
+            }
             let restrictCounter = CameraQualitySelection.current.limitsCounterCadence
             let admitted = !restrictCounter || (self.lastCounterFrame.map {
                 CameraQualityConfiguration.acceptsCounter(elapsed: $0.duration(to: frame.capturedAt))
@@ -136,6 +149,8 @@ final class WorkoutCameraCoordinator {
     private func cameraStateChanged(_ state: CameraState) {
         #if DEBUG
         lastCounterFrame = nil
+        timedProcessor.reset()
+        PipelineTelemetry.active?.record(.timeBasedReset, reason: "cameraLifecycle")
         #endif
         if state == .running, isForeground {
             viewModel.setCameraReady(true)

@@ -46,6 +46,7 @@ final class PipelineTelemetry: @unchecked Sendable {
     #endif
 
     enum Stage: String, Codable, Sendable {
+        case fullPoseInput, timeBasedReset, timeBasedDecision
         case cameraQuality, counterSampleSkipped, visionRequestStart, visionRequestEnd
         case cameraInput, avDropped, inactive, throttled, missingBuffer
         case visionStart, visionEnd, visionError, noPose, visionPose
@@ -123,6 +124,7 @@ final class PipelineTelemetry: @unchecked Sendable {
         let decision: Decision?
         let replayControlSeconds: Double?
         var cameraQuality: CameraQuality? = nil
+        var visionPose: VisionPose? = nil
 
         var metricName: String {
             frame?.replaySeconds != nil || replayControlSeconds != nil ? "replay." + stage.rawValue : stage.rawValue
@@ -234,15 +236,15 @@ final class PipelineTelemetry: @unchecked Sendable {
     }
 
     @discardableResult
-    func record(_ stage: Stage, frame: Identity? = nil, since: Double? = nil, cameraQuality: CameraQuality? = nil,
+    func record(_ stage: Stage, frame: Identity? = nil, since: Double? = nil, cameraQuality: CameraQuality? = nil, visionPose: VisionPose? = nil,
                 reason: String? = nil, replayControlSeconds: Double? = nil, decision: @autoclosure () -> Decision? = nil) -> Double {
         lock.lock()
         defer { lock.unlock() }
-        return append(stage, frame: frame, since: since, reason: reason, replayControlSeconds: replayControlSeconds, cameraQuality: cameraQuality, decision: decision)
+        return append(stage, frame: frame, since: since, reason: reason, replayControlSeconds: replayControlSeconds, cameraQuality: cameraQuality, visionPose: visionPose, decision: decision)
     }
 
     // Capture sequence and clock under the same lock on both queues.
-    private func append(_ stage: Stage, frame: Identity?, since: Double?, reason: String?, replayControlSeconds: Double?, cameraQuality: CameraQuality? = nil, decision: () -> Decision?) -> Double {
+    private func append(_ stage: Stage, frame: Identity?, since: Double?, reason: String?, replayControlSeconds: Double?, cameraQuality: CameraQuality? = nil, visionPose: VisionPose? = nil, decision: () -> Decision?) -> Double {
         let now = clock()
         func duration(_ start: Double?) -> Double? {
             guard let start, start.isFinite, start <= now else { return nil }
@@ -252,6 +254,7 @@ final class PipelineTelemetry: @unchecked Sendable {
                       elapsedMS: duration(since), ageFromPTS_MS: duration(frame?.captureHostSeconds),
                       reason: reason, decision: decision(), replayControlSeconds: replayControlSeconds)
         event.cameraQuality = cameraQuality
+        event.visionPose = visionPose
         if ring.count < capacity {
             ring.append(event)
         } else {
@@ -307,7 +310,7 @@ final class PipelineTelemetry: @unchecked Sendable {
             guard let first = rows.first, let last = rows.last, last.hostSeconds > first.hostSeconds else { return nil }
             return Double(rows.count - 1) / (last.hostSeconds - first.hostSeconds)
         }
-        return Snapshot(traceVersion: 2, traceID: traceID, capacity: capacity, overwritten: overwritten,
+        return Snapshot(traceVersion: 3, traceID: traceID, capacity: capacity, overwritten: overwritten,
                         totals: counts, elapsedMS: elapsed, ageFromPTS_MS: ages, hz: rates, events: events)
     }
 }
@@ -375,4 +378,60 @@ final class CameraQualitySelection: @unchecked Sendable {
     }()
 }
 
+#endif
+
+extension PipelineTelemetry {
+    struct VisionPose: Codable, Sendable {
+        struct Point: Codable, Sendable {
+            let joint: String
+            let x, y: Double
+            let confidence: Float
+        }
+        let aspectRatio, rotationAngle: Double
+        let points: [Point]
+        init(_ pose: BodyPose) {
+            aspectRatio = Double(pose.aspectRatio)
+            rotationAngle = Double(pose.rotationAngle)
+            points = pose.joints.compactMap { key, point in
+                guard point.location.x.isFinite, point.location.y.isFinite, point.confidence.isFinite else { return nil }
+                return Point(joint: String(describing: key), x: Double(point.location.x),
+                             y: Double(point.location.y), confidence: point.confidence)
+            }.sorted { $0.joint < $1.joint }
+        }
+    }
+}
+
+#if DEBUG
+extension PipelineTelemetry.Snapshot {
+    func fullPoseSession() throws -> PoseReplaySession {
+        let input = events.filter { $0.stage == .fullPoseInput || $0.stage == .timeBasedReset }
+        guard let first = input.first(where: { $0.stage == .fullPoseInput }) else { throw PoseReplayError.invalidGeometry }
+        guard input.count <= 1200 else { throw PoseReplayError.tooManyEvents }
+        func measuredTime(_ entry: PipelineTelemetry.Event) -> Double {
+            if let pts = entry.frame?.pts, pts.timescale > 0 {
+                return Double(pts.value) / Double(pts.timescale)
+            }
+            return entry.frame?.captureHostSeconds ?? entry.hostSeconds
+        }
+        let origin = measuredTime(first)
+        var previous = 0.0
+        var rows: [PoseReplayEvent] = []
+        for entry in input {
+            let seconds = entry.stage == .timeBasedReset ? previous
+                : measuredTime(entry) - origin
+            guard seconds >= previous else { throw PoseReplayError.invalidTimeline }
+            previous = seconds
+            let pose = entry.visionPose.map { value in
+                PoseReplayPose(aspectRatio: value.aspectRatio, rotationAngle: value.rotationAngle,
+                    points: value.points.compactMap { point in
+                        guard let joint = PoseReplayJoint(rawValue: point.joint) else { return nil }
+                        return PoseReplayPoint(joint: joint, horizontalPosition: point.x,
+                            verticalPosition: point.y, confidence: Double(point.confidence))
+                    })
+            }
+            rows.append(PoseReplayEvent(seconds: seconds, kind: entry.stage == .timeBasedReset ? .reset : .pose, pose: pose))
+        }
+        return PoseReplaySession(schemaVersion: 1, events: rows, annotations: [])
+    }
+}
 #endif

@@ -41,6 +41,7 @@ struct CameraFrame: Sendable {
 	let capturedAt: ContinuousClock.Instant
 	let trace: PipelineTelemetry.Frame?
 	let enqueuedAt: Double?
+	let measurementSeconds: Double?
 	let position: CameraPosition
 	let rotationAngle: CGFloat
 
@@ -51,13 +52,15 @@ struct CameraFrame: Sendable {
 		position: CameraPosition = .front,
 		rotationAngle: CGFloat = 90,
 		trace: PipelineTelemetry.Frame? = nil,
-		enqueuedAt: Double? = nil
+		enqueuedAt: Double? = nil,
+		measurementSeconds: Double? = nil
 	) {
 		self.generation = generation
 		self.pose = pose
 		self.capturedAt = capturedAt
 		self.trace = trace
 		self.enqueuedAt = enqueuedAt
+		self.measurementSeconds = measurementSeconds
 		self.position = position
 		self.rotationAngle = rotationAngle
 	}
@@ -174,6 +177,9 @@ private final class CameraFrameProcessor: NSObject,
 		let detector = PoseDetector()
 		var isActive = true
 		var previousAnalysisTime: ContinuousClock.Instant?
+        #if DEBUG
+        var cadence = VisionPTSCadence()
+        #endif
 	}
 
 	private let analysisInterval: Duration
@@ -235,12 +241,27 @@ private final class CameraFrameProcessor: NSObject,
 			let capturedAt = ContinuousClock.now
 			let frameTrace = trace(sampleBuffer, stage: .cameraInput, delegateTime: entered)
 			guard state.isActive else { frameTrace?.mark(.inactive); return }
+            #if DEBUG
+            let target = CameraQualitySelection.current.visionRate.rawValue
+            if target != 10 {
+                let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer).seconds
+                guard state.cadence.accepts(pts, rate: target) else { frameTrace?.mark(.throttled); return }
+            } else {
 			if let previousTime = state.previousAnalysisTime,
 				previousTime.duration(to: capturedAt) < analysisInterval
 			{
 				frameTrace?.mark(.throttled)
 				return
 			}
+            }
+            #else
+			if let previousTime = state.previousAnalysisTime,
+				previousTime.duration(to: capturedAt) < analysisInterval
+			{
+				frameTrace?.mark(.throttled)
+				return
+			}
+            #endif
 			state.previousAnalysisTime = capturedAt
 			guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer)
 			else { frameTrace?.mark(.missingBuffer); return }
@@ -258,7 +279,8 @@ private final class CameraFrameProcessor: NSObject,
 				position: position,
 				rotationAngle: rotationAngle,
 				trace: frameTrace,
-				enqueuedAt: enqueue
+				enqueuedAt: enqueue,
+                measurementSeconds: CMSampleBufferGetPresentationTimeStamp(sampleBuffer).seconds
 			)
 			frame.yield(to: continuation)
 		}

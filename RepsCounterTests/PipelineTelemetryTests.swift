@@ -3,6 +3,133 @@ import XCTest
 @testable import RepsCounter
 
 final class PipelineTelemetryTests: XCTestCase {
+
+    func testPTSCadenceAdmitsThirtyDespiteDelegateJitterAndRejectsDuplicates() {
+        var cadence = VisionPTSCadence()
+        var accepted = 0
+        for index in 0..<300 {
+            let pts = Double(index) / 30
+            if cadence.accepts(pts, rate: 30) { accepted += 1 }
+            XCTAssertFalse(cadence.accepts(pts, rate: 30))
+        }
+        XCTAssertEqual(accepted, 300)
+        XCTAssertFalse(cadence.accepts(.nan, rate: 30))
+        XCTAssertFalse(cadence.accepts(0, rate: 30))
+        var slower = VisionPTSCadence()
+        XCTAssertEqual((0..<300).filter { slower.accepts(Double($0) / 30, rate: 15) }.count, 150)
+    }
+
+    func testTimeBasedConfirmationRequiresDwellAndRealObservations() {
+        var state = TimeBasedPoseProcessor()
+        let pose = timingPose(angle: 180)
+        for t in [0.0, 0.033, 0.066, 0.099, 0.132, 0.165, 0.198] {
+            XCTAssertFalse(state.process(pose, at: t))
+            XCTAssertEqual(state.phase, .seekingStanding)
+        }
+        XCTAssertFalse(state.process(pose, at: 0.231))
+        XCTAssertEqual(state.phase, .standing)
+        _ = state.process(nil, at: 0.24)
+        XCTAssertEqual(state.phase, .seekingStanding)
+        _ = state.process(pose, at: 0.25)
+        _ = state.process(pose, at: 0.26)
+        _ = state.process(pose, at: 0.27)
+        XCTAssertEqual(state.phase, .seekingStanding)
+        _ = state.process(pose, at: 1.0)
+        XCTAssertEqual(state.phase, .seekingStanding)
+    }
+
+    private func timingPose(angle: Double, mirror: Bool = false) -> BodyPose {
+        let radians = angle * .pi / 180
+        let hip = angle <= 105 ? CGPoint(x: 0.2, y: 0.5) : CGPoint(x: 0.5, y: 0.8)
+        let ankle = angle <= 105
+            ? CGPoint(x: 0.5 - 0.3 * cos(radians), y: 0.5 - 0.3 * sin(radians))
+            : CGPoint(x: 0.5 + 0.3 * sin(radians), y: 0.5 + 0.3 * cos(radians))
+        let joints: [BodyJoint: JointPoint] = [
+            mirror ? .rightHip : .leftHip: .init(location: hip, confidence: 0.9),
+            mirror ? .rightKnee : .leftKnee: .init(location: CGPoint(x: 0.5, y: 0.5), confidence: 0.9),
+            mirror ? .rightAnkle : .leftAnkle: .init(location: ankle, confidence: 0.9)]
+        return BodyPose(joints: joints, aspectRatio: 1)
+    }
+
+    func testTimedPathRejectsShallowNoiseDuplicatesAndIsCausal() {
+        for mirror in [false, true] {
+            var state = TimeBasedPoseProcessor()
+            var counts = 0
+            for index in 0..<150 {
+                let time = Double(index) / 30
+                let angle = index < 30 || index >= 90 ? 180.0 : 120.0
+                let pose = timingPose(angle: angle, mirror: mirror)
+                if state.process(pose, at: time) { counts += 1 }
+                XCTAssertFalse(state.process(pose, at: time))
+            }
+            XCTAssertEqual(counts, 0)
+        }
+    }
+
+    func testTimedPathCountsFullCycleOnceWithIrregularIntervals() {
+        for mirror in [false, true] {
+            var state = TimeBasedPoseProcessor()
+            var times: [Double] = []
+            for index in 0..<120 {
+                let t = Double(index) / 30 + (index % 2 == 0 ? 0 : 0.002)
+                let pose = timingPose(angle: index >= 30 && index < 70 ? 60 : 180, mirror: mirror)
+                if state.process(pose, at: t) { times.append(t) }
+            }
+            XCTAssertEqual(times.count, 1)
+            XCTAssertGreaterThan(times.first ?? 0, 2.33)
+        }
+    }
+
+    func testFullVisionTraceRoundTripsCoordinatesBeforeLiveAdmission() throws {
+        let recorder = PipelineTelemetry(capacity: 32)
+        let pose = timingPose(angle: 180)
+        recorder.record(.timeBasedReset, reason: "lifecycleBeforeCapture")
+        for index in 0..<9 {
+            let frame = recorder.frame(generation: 1, camera: "front", pts: nil,
+                captureHostSeconds: Double(index) / 30)
+            recorder.record(.fullPoseInput, frame: frame.identity, visionPose: .init(pose))
+        }
+        let snapshot = try JSONDecoder().decode(PipelineTelemetry.Snapshot.self,
+            from: JSONEncoder().encode(recorder.snapshot()))
+        let session = try snapshot.fullPoseSession()
+        XCTAssertEqual(session.events.count, 10)
+        XCTAssertEqual(session.events[0].kind, .reset)
+        XCTAssertEqual(session.events[1].pose?.points.count, 3)
+        let result = try TimeBasedPoseProcessor.compare(session)
+        XCTAssertTrue(result.legacy.isEmpty)
+        XCTAssertTrue(result.timed.isEmpty)
+    }
+
+
+    func testTimedReplayPrefixesCannotUseFutureFramesAndLossCancelsDepth() throws {
+        let events = (0..<120).map { index in
+            PoseReplayEvent(seconds: Double(index) / 30, kind: .pose,
+                pose: .init(from: timingPose(angle: index >= 30 && index < 70 ? 60 : 180)))
+        }
+        let session = PoseReplaySession(schemaVersion: 1, events: events, annotations: [])
+        let full = try TimeBasedPoseProcessor.compare(session)
+        XCTAssertEqual(full.timed.count, 1)
+        for end in stride(from: 1, through: events.count, by: 7) {
+            let prefix = PoseReplaySession(schemaVersion: 1, events: Array(events.prefix(end)), annotations: [])
+            XCTAssertEqual(try TimeBasedPoseProcessor.compare(prefix).timed,
+                full.timed.filter { $0 <= events[end - 1].seconds })
+        }
+        var lost = events
+        lost[69] = PoseReplayEvent(seconds: events[69].seconds, kind: .pose, pose: nil)
+        XCTAssertTrue(try TimeBasedPoseProcessor.compare(
+            PoseReplaySession(schemaVersion: 1, events: lost, annotations: [])).timed.isEmpty)
+        var weak = events
+        for index in 30..<70 {
+            var pose = timingPose(angle: 60)
+            var joints = pose.joints
+            joints[.leftHip] = JointPoint(location: joints[.leftHip]!.location, confidence: 0.49)
+            pose = BodyPose(joints: joints, aspectRatio: 1)
+            weak[index] = PoseReplayEvent(seconds: events[index].seconds, kind: .pose, pose: .init(from: pose))
+        }
+        XCTAssertTrue(try TimeBasedPoseProcessor.compare(
+            PoseReplaySession(schemaVersion: 1, events: weak, annotations: [])).timed.isEmpty)
+    }
+
     func testQualitySelectionUsesValueSnapshotsAndCanRestoreBaseline() {
         let previous = CameraQualitySelection.current
         defer { CameraQualitySelection.current = previous }
@@ -136,7 +263,7 @@ final class PipelineTelemetryTests: XCTestCase {
         XCTAssertTrue(snapshot.ageFromPTS_MS.isEmpty)
         XCTAssertTrue(snapshot.hz.isEmpty)
         let decoded = try JSONDecoder().decode(PipelineTelemetry.Snapshot.self, from: JSONEncoder().encode(snapshot))
-        XCTAssertEqual(decoded.traceVersion, 2)
+        XCTAssertEqual(decoded.traceVersion, 3)
         XCTAssertEqual(decoded.traceID, telemetry.traceID)
         XCTAssertEqual(decoded.events.map(\.stage), [.avDropped, .cameraInput, .noPose])
     }

@@ -289,7 +289,17 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
                 showPoseReplayMessage("JSON превышает максимальный размер 10 МБ.")
                 return
             }
+            if let trace = try? JSONDecoder().decode(PipelineTelemetry.Snapshot.self, from: data) {
+                guard trace.events.contains(where: { $0.stage == .fullPoseInput }) else {
+                    showPoseReplayMessage("В этой трассе нет полного потока координат до Live. Нужна новая запись эксперимента 54.")
+                    return
+                }
+                let compared = try TimeBasedPoseProcessor.compare(trace.fullPoseSession())
+                showPoseReplayMessage("Один полный поток: Legacy \(compared.legacy.count), Time-based \(compared.timed.count). Без ручной разметки это числа событий, не точность.")
+                return
+            }
             let session = try JSONDecoder().decode(PoseReplaySession.self, from: data)
+            let compared = try TimeBasedPoseProcessor.compare(session)
             let result = try PoseReplayBilateralRunner.replay(session, telemetry: PipelineTelemetry.active)
             let adaptive = try PoseReplayAdaptiveDepthAudit.replay(session)
             let graceful = try PoseReplayAdaptiveDepthAudit.replayWithGrace(session)
@@ -297,6 +307,7 @@ final class WorkoutViewController: UIViewController, UIAdaptivePresentationContr
             let recovery = try PoseReplayOcclusionRecovery.replay(session)
             let recoveredTimes = recovery.supplementalAtSeconds.map { String(format: "%.2f", $0) }
             var summary = """
+            Time-based (с первой стойки): \(compared.timed.count)
             Обычный 2D: \(result.baselineCountedAtSeconds.count)
             Левая нога: \(result.leftCountedAtSeconds.count)
             Правая нога: \(result.rightCountedAtSeconds.count)
