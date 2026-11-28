@@ -64,7 +64,12 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         #else
         let camera = CameraService()
         #endif
+        #if DEBUG
+        let viewModel = WorkoutViewModel(persistence: persistence, cameraReady: false, startsAutomatically: false,
+            diagnosticRecording: true)
+        #else
         let viewModel = WorkoutViewModel(persistence: persistence, cameraReady: false, startsAutomatically: false)
+        #endif
         let controller = WorkoutViewController(viewModel: viewModel, camera: camera, persistence: persistence)
         controller.onNewWorkout = { [weak self, weak controller] in
             guard let self, let controller, self.window?.rootViewController === controller else { return }

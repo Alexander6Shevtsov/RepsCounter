@@ -361,10 +361,10 @@
             files = ();
             inputPaths = ();
             name = "Debug camera quality build identity";
-            outputPaths = ("$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/CameraQualityBuild.txt");
+            outputPaths = ("$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/CameraQualityBuild.txt", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/CameraQualityBuildAudit.txt");
             runOnlyForDeploymentPostprocessing = 0;
             shellPath = /bin/sh;
-            shellScript = "if [ \"$CONFIGURATION\" != Debug ]; then exit 0; fi\nmkdir -p \"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH\"\nbuild_file=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/CameraQualityBuild.txt\"\ngit -C \"$SRCROOT\" rev-parse HEAD > \"$build_file\" || exit 1\nif [ -n \"$(git -C \"$SRCROOT\" status --porcelain)\" ]; then printf 'dirty\\n'; else printf 'clean\\n'; fi >> \"$build_file\"\ngit -C \"$SRCROOT\" diff HEAD --binary | shasum -a 256 >> \"$build_file\"\n";
+            shellScript = "if [ \"$CONFIGURATION\" != Debug ]; then exit 0; fi\nmkdir -p \"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH\"\nbuild_file=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/CameraQualityBuild.txt\"\ngit -C \"$SRCROOT\" rev-parse HEAD > \"$build_file\" || exit 1\nif [ -n \"$(git -C \"$SRCROOT\" status --porcelain)\" ]; then printf 'dirty\\n'; else printf 'clean\\n'; fi >> \"$build_file\"\ngit -C \"$SRCROOT\" diff HEAD --binary | shasum -a 256 | awk '{print $1}' >> \"$build_file\"\naudit_file=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/CameraQualityBuildAudit.txt\"\nprintf 'provenanceVersion=2\\nbuildUTC=' > \"$audit_file\"\ndate -u '+%Y-%m-%dT%H:%M:%SZ' >> \"$audit_file\"\nprintf 'tracked changes (staged + unstaged):\\n' >> \"$audit_file\"\ngit -C \"$SRCROOT\" diff --name-status HEAD >> \"$audit_file\"\nprintf 'untracked file count: ' >> \"$audit_file\"\ngit -C \"$SRCROOT\" ls-files --others --exclude-standard | wc -l >> \"$audit_file\"\nprintf 'patchSHA excludes untracked files; HEAD is not a binary hash\\n' >> \"$audit_file\"\nprintf 'sourceFingerprintSHA (tracked + untracked files in app/tests/project): ' >> \"$audit_file\"\ngit -C \"$SRCROOT\" ls-files -z --cached --others --exclude-standard -- RepsCounter RepsCounterTests RepsCounter.xcodeproj | (cd \"$SRCROOT\" && xargs -0 shasum -a 256) | shasum -a 256 | awk '{print $1}' >> \"$audit_file\"\n";
             alwaysOutOfDate = 1;
         };
 /* End PBXShellScriptBuildPhase section */
